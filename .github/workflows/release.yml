@@ -1,0 +1,118 @@
+# Builds the ololo CLI from the private ololo-dev/app source tree and
+# publishes binaries as a GitHub release in THIS public repo.
+#
+# Triggered by repository_dispatch (sent by ololo-dev/app on pushes to master
+# that touch the CLI or its workspace deps) or manually via workflow_dispatch.
+#
+# Secret required: APP_REPO_TOKEN — fine-grained PAT with contents:read on
+# ololo-dev/app (used only to check out the private source).
+name: release
+
+on:
+  repository_dispatch:
+    types: [release-ololo]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "ololo-dev/app ref to build"
+        required: false
+        default: "master"
+
+env:
+  APP_REF: ${{ github.event.client_payload.sha || inputs.ref || 'master' }}
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      app_sha: ${{ steps.v.outputs.app_sha }}
+    steps:
+      - name: Checkout app source
+        uses: actions/checkout@v4
+        with:
+          repository: ololo-dev/app
+          token: ${{ secrets.APP_REPO_TOKEN }}
+          ref: ${{ env.APP_REF }}
+      - id: v
+        run: |
+          echo "version=$(grep -m1 '^version' ololo/Cargo.toml | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
+          echo "app_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: ololo-linux-x86_64.tar.gz
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            artifact: ololo-linux-aarch64.tar.gz
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: ololo-macos-aarch64.tar.gz
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact: ololo-macos-x86_64.tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: ololo-windows-x86_64.zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout app source
+        uses: actions/checkout@v4
+        with:
+          repository: ololo-dev/app
+          token: ${{ secrets.APP_REPO_TOKEN }}
+          ref: ${{ env.APP_REF }}
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal && rustup default stable && rustup target add ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release -p ololo --target ${{ matrix.target }}
+
+      - name: Package (unix)
+        if: runner.os != 'Windows'
+        run: tar -C target/${{ matrix.target }}/release -czf ${{ matrix.artifact }} ololo
+
+      - name: Package (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path target/${{ matrix.target }}/release/ololo.exe -DestinationPath ${{ matrix.artifact }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+          if-no-files-found: error
+
+  release:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.version.outputs.version }}
+          name: ololo v${{ needs.version.outputs.version }}
+          body: |
+            Automated build of the ololo CLI.
+
+            Source: ololo-dev/app@${{ needs.version.outputs.app_sha }}
+          files: dist/*
+          make_latest: true

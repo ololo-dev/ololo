@@ -50,4 +50,5 @@ ololo --help         # everything else
 
 Binaries are built and published automatically from the ololo.dev source tree
 on every change to the CLI. The release for the current version is refreshed
-in place; `releases/latest` always points at the newest build.
+in place; `releases/latest` always points at the newest build. See
+[CHANGELOG.md](CHANGELOG.md) for what changed in each build.

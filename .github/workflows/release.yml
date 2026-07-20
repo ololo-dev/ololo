@@ -27,6 +27,7 @@ jobs:
     outputs:
       version: ${{ steps.v.outputs.version }}
       app_sha: ${{ steps.v.outputs.app_sha }}
+      changes: ${{ steps.log.outputs.changes }}
     steps:
       - name: Checkout app source
         uses: actions/checkout@v4
@@ -34,10 +35,32 @@ jobs:
           repository: ololo-dev/app
           token: ${{ secrets.APP_REPO_TOKEN }}
           ref: ${{ env.APP_REF }}
+          fetch-depth: 0
       - id: v
         run: |
           echo "version=$(grep -m1 '^version' ololo/Cargo.toml | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
           echo "app_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Collect CLI changes since previous release
+        id: log
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The previous release body records the app commit it was built from;
+          # list CLI-relevant commit subjects since then.
+          prev=$(gh release view --repo "$GITHUB_REPOSITORY" --json body --jq .body 2>/dev/null \
+                 | grep -oE 'ololo-dev/app@[0-9a-f]{40}' | head -1 | cut -d@ -f2 || true)
+          if [ -n "$prev" ] && git cat-file -e "$prev" 2>/dev/null; then
+            range="$prev..HEAD"
+          else
+            range="HEAD~20..HEAD"
+          fi
+          log=$(git log --no-merges --pretty='- %s (%h)' "$range" -- ololo agent-tokens arena-core Cargo.toml Cargo.lock | head -40)
+          [ -z "$log" ] && log="- Maintenance rebuild (no CLI-facing commits detected)"
+          {
+            echo "changes<<CHANGES_EOF"
+            echo "$log"
+            echo "CHANGES_EOF"
+          } >> "$GITHUB_OUTPUT"
 
   build:
     needs: version
@@ -113,6 +136,51 @@ jobs:
           body: |
             Automated build of the ololo CLI.
 
+            ### Changes
+            ${{ needs.version.outputs.changes }}
+
             Source: ololo-dev/app@${{ needs.version.outputs.app_sha }}
           files: dist/*
           make_latest: true
+
+  changelog:
+    needs: [version, release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Prepend changelog entry
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          APP_SHA: ${{ needs.version.outputs.app_sha }}
+          CHANGES: ${{ needs.version.outputs.changes }}
+        run: |
+          today=$(date -u +%Y-%m-%d)
+          {
+            echo "## [${VERSION}] — ${today} (\`app@${APP_SHA:0:7}\`)"
+            echo
+            printf '%s\n' "$CHANGES"
+            echo
+          } > /tmp/entry.md
+          if [ ! -f CHANGELOG.md ]; then
+            printf '# Changelog\n\nAll notable changes to the ololo CLI. Entries are generated\nautomatically from the source tree on every release build.\n\n' > CHANGELOG.md
+          fi
+          # Insert the new entry before the first existing "## " heading.
+          awk '
+            !inserted && /^## / { while ((getline line < "/tmp/entry.md") > 0) print line; inserted=1 }
+            { print }
+            END { if (!inserted) while ((getline line < "/tmp/entry.md") > 0) print line }
+          ' CHANGELOG.md > CHANGELOG.new && mv CHANGELOG.new CHANGELOG.md
+
+      - name: Commit changelog
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          git diff --cached --quiet && exit 0
+          git commit -m "changelog: v${{ needs.version.outputs.version }} build from app@${{ needs.version.outputs.app_sha }}"
+          git push origin main

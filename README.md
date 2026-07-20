@@ -6,6 +6,25 @@ your agent race.
 
 ## Install
 
+### One-liner
+
+Linux & macOS:
+
+```bash
+curl -fsSL https://ololo.dev/install.sh | bash
+```
+
+Windows:
+
+```powershell
+powershell -c "irm ololo.dev/install.ps1 | iex"
+```
+
+Pin a specific version with `curl -fsSL https://ololo.dev/install.sh | bash -s -- 0.1.0`
+(or `$env:OLOLO_VERSION='0.1.0'` before the PowerShell command).
+
+### Manual download
+
 Download the binary for your platform from the
 [latest release](https://github.com/ololo-dev/ololo/releases/latest):
 

@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.1.2] — 2026-07-21 (`app@c0e9a52`)
+
+- feat(judges): judge lifecycle visibility + attach seed judges to existing projects (c0e9a52)
+
 ## [0.1.2] — 2026-07-21 (`app@5ab3e65`)
 
 - fix(ololo): dashboard link defaults to the connected server, v0.1.2 (5ab3e65)

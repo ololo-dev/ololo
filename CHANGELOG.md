@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.1.1] — 2026-07-21 (`app@453cfaf`)
+
+- chore(ololo): v0.1.1 — TLS fix release (453cfaf)
+
 ## [0.1.0] — 2026-07-21 (`app@23d1a89`)
 
 - fix(ololo): pin rustls ring provider — TLS panicked in release builds (23d1a89)

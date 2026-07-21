@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.1.3] — 2026-07-21 (`app@124d9d0`)
+
+- chore(ololo): v0.1.3 (124d9d0)
+
 ## [0.1.2] — 2026-07-21 (`app@6dbbe8c`)
 
 - feat(agent-tokens): gemini workspace attribution + logs.json fallback (6dbbe8c)

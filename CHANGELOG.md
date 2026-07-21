@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.1.3] — 2026-07-21 (`app@32944f3`)
+
+- feat(llm): registry-driven multi-provider support, custom provider slot (32944f3)
+
 ## [0.1.3] — 2026-07-21 (`app@164e864`)
 
 - fix(judges): stop leaking OLLAMA_URL into hosted LLM providers (164e864)

@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.1.3] — 2026-07-22 (`app@712af53`)
+
+- feat(leaderboard): global seasonal ladder with Arena Points + Weng-Lin rating (712af53)
+
 ## [0.1.3] — 2026-07-21 (`app@dde572b`)
 
 - fix(leaderboard): dedupe players by carrying player_id in participants (dde572b)

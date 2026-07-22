@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.1.3] — 2026-07-22 (`app@671f185`)
+
+- feat(leaderboard): solo AP pays once per project; score + place in profile sessions (671f185)
+
 ## [0.1.3] — 2026-07-22 (`app@712af53`)
 
 - feat(leaderboard): global seasonal ladder with Arena Points + Weng-Lin rating (712af53)

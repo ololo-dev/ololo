@@ -2,6 +2,11 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.2.0] — 2026-07-23 (`app@cf6cc10`)
+
+- feat(judges): full run observability + admin-only error detail (e3a3e8f)
+- fix(stats): keep per-model token usage when a session switches models (a56d9ab)
+
 ## [0.2.0] — 2026-07-23 (`app@9421056`)
 
 - chore(ololo): bump CLI version to 0.2.0 (9421056)

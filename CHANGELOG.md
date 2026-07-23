@@ -2,6 +2,11 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.2.0] — 2026-07-23 (`app@9421056`)
+
+- chore(ololo): bump CLI version to 0.2.0 (9421056)
+- feat(tui): probes panel rework, agent picker flow, per-session stats panel (8800502)
+
 ## [0.1.3] — 2026-07-23 (`app@8800502`)
 
 - feat(tui): probes panel rework, agent picker flow, per-session stats panel (8800502)

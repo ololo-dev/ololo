@@ -2,6 +2,11 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.3.0] — 2026-07-24 (`app@3543c7c`)
+
+- chore(ololo): bump CLI version to 0.3.0 (3543c7c)
+- feat(tui): help popup and global hotkeys (2c3210f)
+
 ## [0.2.0] — 2026-07-24 (`app@0482208`)
 
 - feat(judges): full run telemetry, on-disk log store, per-player token cost (0482208)

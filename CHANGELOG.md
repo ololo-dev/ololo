@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.3.0] — 2026-07-24 (`app@69984d8`)
+
+- feat(sessions): run judges for interrupted tasks on expiry, defer AP until judges settle (eaad4cc)
+
 ## [0.3.0] — 2026-07-24 (`app@9c09a8e`)
 
 - chore: clippy auto-fix pass (workspace lint drift, wip) (e25ef7d)

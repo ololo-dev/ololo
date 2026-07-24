@@ -2,6 +2,13 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.3.0] — 2026-07-24 (`app@9c09a8e`)
+
+- chore: clippy auto-fix pass (workspace lint drift, wip) (e25ef7d)
+- feat(sessions): project-sourced duration, judge-aware player status, CLI waiting state (be37d60)
+- feat(sessions): all-players-done completion + per-player ack + duration column (9b00eb9)
+- wip(sessions): snapshot of in-flight session-completion work (3b25b81)
+
 ## [0.3.0] — 2026-07-24 (`app@3543c7c`)
 
 - chore(ololo): bump CLI version to 0.3.0 (3543c7c)

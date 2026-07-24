@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.3.1] — 2026-07-24 (`app@095f2e0`)
+
+- fix(sessions): agent WS drives the identified player, not an arbitrary first row (095f2e0)
+
 ## [0.3.0] — 2026-07-24 (`app@69984d8`)
 
 - feat(sessions): run judges for interrupted tasks on expiry, defer AP until judges settle (eaad4cc)

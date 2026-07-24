@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.3.1] — 2026-07-24 (`app@a258dde`)
+
+- feat(awards): configurable AP formula with 1v1 bonus, solo/negative dampers, record chase (97f284e)
+
 ## [0.3.1] — 2026-07-24 (`app@095f2e0`)
 
 - fix(sessions): agent WS drives the identified player, not an arbitrary first row (095f2e0)

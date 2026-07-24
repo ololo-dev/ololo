@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.2.0] — 2026-07-24 (`app@0482208`)
+
+- feat(judges): full run telemetry, on-disk log store, per-player token cost (0482208)
+
 ## [0.2.0] — 2026-07-23 (`app@cf6cc10`)
 
 - feat(judges): full run observability + admin-only error detail (e3a3e8f)

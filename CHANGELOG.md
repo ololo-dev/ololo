@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.3.1] — 2026-07-26 (`app@3c71dfe`)
+
+- feat(judging): execution judges — run committed code server-side for code golf (3c71dfe)
+
 ## [0.3.1] — 2026-07-24 (`app@a258dde`)
 
 - feat(awards): configurable AP formula with 1v1 bonus, solo/negative dampers, record chase (97f284e)

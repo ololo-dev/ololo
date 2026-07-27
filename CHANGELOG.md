@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.3.1] — 2026-07-27 (`app@e6493f5`)
+
+- feat(sessions): agent presence, idle auto-cancel, and session-end notices (e6493f5)
+
 ## [0.3.1] — 2026-07-27 (`app@bbf6fc7`)
 
 - fix(judging): never charge a player for a judge that could not run (0ac5b78)

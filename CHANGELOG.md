@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.3.1] — 2026-07-28 (`app@f6b2c41`)
+
+- fix(game-server): require PAT auth and player ownership on the agent WS (f6b2c41)
+
 ## [0.3.1] — 2026-07-27 (`app@24d6cd8`)
 
 - feat(sessions): name the cancel reason, and hold a "judges working" dialog (24d6cd8)

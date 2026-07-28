@@ -2,6 +2,11 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.3.1] — 2026-07-28 (`app@a121add`)
+
+- fix(security): authenticate game-server /internal/* routes (SEC-H3) (b6f2bee)
+- fix(security): sanitize session description, harden judge git tools, stop logging admin token (6f2808e)
+
 ## [0.3.1] — 2026-07-28 (`app@f6b2c41`)
 
 - fix(game-server): require PAT auth and player ownership on the agent WS (f6b2c41)

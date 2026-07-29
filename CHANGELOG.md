@@ -2,6 +2,14 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.3.1] — 2026-07-29 (`app@cda17dc`)
+
+- perf(scoring): coalesce score-history samples by second (PERF-M1) (cda17dc)
+- fix(scoring): enforce one completion bonus per player+task (DB-M1) (f326655)
+- fix(awards): make session awards + rating updates atomic (DB-H3) (7e59635)
+- perf(scoring): aggregate scores in SQL instead of folding in Rust (PERF-H3) (df63bb1)
+- perf(probe): bound untrusted boa JS eval with runtime limits (PERF-H2) (344d31c)
+
 ## [0.3.1] — 2026-07-28 (`app@a121add`)
 
 - fix(security): authenticate game-server /internal/* routes (SEC-H3) (b6f2bee)

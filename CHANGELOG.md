@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.3.1] — 2026-07-29 (`app@6c5914e`)
+
+- chore: format the workspace and clear clippy -D warnings (Wave 5 prep) (aba7a03)
+
 ## [0.3.1] — 2026-07-29 (`app@cda17dc`)
 
 - perf(scoring): coalesce score-history samples by second (PERF-M1) (cda17dc)

@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.4.0] — 2026-07-30 (`app@de050c5`)
+
+- feat(llm): per-turn trace timeline in the telemetry drawer (de050c5)
+
 ## [0.4.0] — 2026-07-30 (`app@aa93a30`)
 
 - fix(llm): let an Ollama provider carry an API key; flag the fallback misroute (aa93a30)

@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.3.2] — 2026-07-30 (`app@5091ddd`)
+
+- feat(llm): unified request telemetry with settings page and drawer (5091ddd)
+
 ## [0.3.2] — 2026-07-30 (`app@8e84765`)
 
 - refactor(llm)!: remove the legacy ai_provider/ai_model path; record per-run judge models (8e84765)

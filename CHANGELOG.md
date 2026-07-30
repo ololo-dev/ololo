@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.4.0] — 2026-07-30 (`app@89378b0`)
+
+- release(ololo): v0.4.0 — cursor, cursor-cli, antigravity, antigravity-cli token tracking (89378b0)
+
 ## [0.3.2] — 2026-07-30 (`app@5091ddd`)
 
 - feat(llm): unified request telemetry with settings page and drawer (5091ddd)

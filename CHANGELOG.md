@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.3.2] — 2026-07-30 (`app@fd3d75f`)
+
+- fix(ololo): build CLI auth URL from resolved server URL, not server env (fd3d75f)
+
 ## [0.3.1] — 2026-07-29 (`app@6c5914e`)
 
 - chore: format the workspace and clear clippy -D warnings (Wave 5 prep) (aba7a03)

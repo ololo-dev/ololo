@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.3.2] — 2026-07-30 (`app@6f45ce6`)
+
+- style: rustfmt the session-memory and llm-provider additions (6f45ce6)
+
 ## [0.3.2] — 2026-07-30 (`app@35e57ed`)
 
 - feat: per-player session memory + multi-provider LLM configuration (7fedd97)

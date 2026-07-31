@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.6.0] — 2026-07-31 (`app@7a5cdf2`)
+
+- fix(telemetry): name the provider that ran, and the session, player and task (7a5cdf2)
+
 ## [0.6.0] — 2026-07-31 (`app@5bc9361`)
 
 - release(ololo): v0.6.0 — Zed usage, archived Codex sessions (5bc9361)

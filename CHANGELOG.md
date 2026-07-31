@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.5.0] — 2026-07-31 (`app@1aae76d`)
+
+- feat(llm): model pools with tiered failover, and judge pool overrides (1aae76d)
+
 ## [0.5.0] — 2026-07-31 (`app@721cec7`)
 
 - release(ololo): v0.5.0 — Cursor, Antigravity, Zed and droid agents (721cec7)

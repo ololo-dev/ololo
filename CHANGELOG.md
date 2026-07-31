@@ -2,6 +2,13 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.5.0] — 2026-07-31 (`app@721cec7`)
+
+- release(ololo): v0.5.0 — Cursor, Antigravity, Zed and droid agents (721cec7)
+- feat(ololo): explain the session when the agent runs in its own window (b671fe5)
+- fix(ololo): detect Factory's droid at session start (b1988be)
+- fix(ololo): offer the Cursor, Antigravity and Zed agents at session start (8df0576)
+
 ## [0.4.0] — 2026-07-31 (`app@cdb5313`)
 
 - feat(projects): live sessions above the tabs, richer session rows (cdb5313)

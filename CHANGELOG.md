@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.4.0] — 2026-07-31 (`app@4aacd64`)
+
+- perf(judges): one-shot the task anti-cheat judge from a server-built dossier (4aacd64)
+
 ## [0.4.0] — 2026-07-30 (`app@de050c5`)
 
 - feat(llm): per-turn trace timeline in the telemetry drawer (de050c5)

@@ -2,6 +2,12 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.6.0] — 2026-07-31 (`app@5bc9361`)
+
+- release(ololo): v0.6.0 — Zed usage, archived Codex sessions (5bc9361)
+- fix(agent-tokens): count archived Codex sessions and both cache spellings (4bdc552)
+- feat(agent-tokens): report Zed agent usage (490c840)
+
 ## [0.5.0] — 2026-07-31 (`app@1aae76d`)
 
 - feat(llm): model pools with tiered failover, and judge pool overrides (1aae76d)

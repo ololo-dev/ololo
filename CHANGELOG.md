@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.6.0] — 2026-08-01 (`app@e932fde`)
+
+- feat(arena): past seasons on the ladder, both boards on a project (e932fde)
+
 ## [0.6.0] — 2026-08-01 (`app@041e2de`)
 
 - feat(ololo): publish memory sources as they change, not once per task (b8e251a)

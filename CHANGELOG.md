@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.6.0] — 2026-08-01 (`app@041e2de`)
+
+- feat(ololo): publish memory sources as they change, not once per task (b8e251a)
+
 ## [0.6.0] — 2026-07-31 (`app@7a5cdf2`)
 
 - fix(telemetry): name the provider that ran, and the session, player and task (7a5cdf2)

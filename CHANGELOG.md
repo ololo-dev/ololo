@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.6.0] — 2026-08-01 (`app@f247f43`)
+
+- feat(gamification): badges for what a player proved, and what they raced with (f247f43)
+
 ## [0.6.0] — 2026-08-01 (`app@e932fde`)
 
 - feat(arena): past seasons on the ladder, both boards on a project (e932fde)

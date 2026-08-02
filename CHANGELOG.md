@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.6.0] — 2026-08-02 (`app@72037e5`)
+
+- feat(badges): seed a badge for every agent ololo can attribute (488a825)
+
 ## [0.6.0] — 2026-08-01 (`app@f247f43`)
 
 - feat(gamification): badges for what a player proved, and what they raced with (f247f43)

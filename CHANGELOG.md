@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.6.0] — 2026-08-03 (`app@20b414e`)
+
+- fix(badges): breadth counts solo play, like the medals it is made of (20b414e)
+
 ## [0.6.0] — 2026-08-03 (`app@80927ee`)
 
 - feat(judging): a judge declares what it needs to see, and pays for that much (80927ee)

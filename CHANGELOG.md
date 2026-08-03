@@ -2,6 +2,11 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.6.0] — 2026-08-03 (`app@035a9bd`)
+
+- feat(judging): one snapshot of what a judge is allowed to know (035a9bd)
+- fix(judging): a judge cannot take more than the task paid (1411580)
+
 ## [0.6.0] — 2026-08-02 (`app@72037e5`)
 
 - feat(badges): seed a badge for every agent ololo can attribute (488a825)

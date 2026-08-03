@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.6.0] — 2026-08-03 (`app@2b4f5ec`)
+
+- feat(judging): a judge can carry its own program, not just a prompt (2b4f5ec)
+
 ## [0.6.0] — 2026-08-03 (`app@035a9bd`)
 
 - feat(judging): one snapshot of what a judge is allowed to know (035a9bd)

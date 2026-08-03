@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.6.0] — 2026-08-03 (`app@80927ee`)
+
+- feat(judging): a judge declares what it needs to see, and pays for that much (80927ee)
+
 ## [0.6.0] — 2026-08-03 (`app@a374108`)
 
 - feat(judging): a second cut point, after the model has answered (a374108)

@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.6.0] — 2026-08-04 (`app@30deb4d`)
+
+- feat(newsletter): hear about bounces and complaints (30deb4d)
+
 ## [0.6.0] — 2026-08-04 (`app@52c9bae`)
 
 - feat(newsletter): a list that only holds people who asked (52c9bae)

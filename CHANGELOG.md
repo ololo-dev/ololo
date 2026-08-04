@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.6.0] — 2026-08-04 (`app@52c9bae`)
+
+- feat(newsletter): a list that only holds people who asked (52c9bae)
+
 ## [0.6.0] — 2026-08-03 (`app@20b414e`)
 
 - fix(badges): breadth counts solo play, like the medals it is made of (20b414e)

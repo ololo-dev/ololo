@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.6.0] — 2026-08-05 (`app@bc4a511`)
+
+- feat(tasks): open-ended tasks — the probe measures, the judges convert it to score (bc4a511)
+
 ## [0.6.0] — 2026-08-04 (`app@30deb4d`)
 
 - feat(newsletter): hear about bounces and complaints (30deb4d)

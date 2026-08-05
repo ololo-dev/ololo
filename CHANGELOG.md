@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.7.0] — 2026-08-05 (`app@14842b9`)
+
+- feat(judging): a judge that sees what the player shipped (14842b9)
+
 ## [0.7.0] — 2026-08-05 (`app@fb0ec49`)
 
 - feat(activity): a verdict shows its criteria, not only its number (fb0ec49)

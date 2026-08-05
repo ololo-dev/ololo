@@ -2,6 +2,11 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.7.0] — 2026-08-05 (`app@7032d39`)
+
+- chore(ololo): 0.7.0 — the agent answers snapshot and artifact requests (7032d39)
+- style: rustfmt over the open-ended landing (0988ea1)
+
 ## [0.6.0] — 2026-08-05 (`app@0988ea1`)
 
 - style: rustfmt over the open-ended landing (0988ea1)

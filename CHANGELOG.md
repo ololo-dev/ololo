@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.7.6] — 2026-08-06 (`app@d93064c`)
+
+- feat(ololo): the artifact request nests under its task (d93064c)
+
 ## [0.7.5] — 2026-08-06 (`app@f59e461`)
 
 - feat(judging): judge probes ride the regular probe discipline (f59e461)

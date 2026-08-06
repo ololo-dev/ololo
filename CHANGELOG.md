@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.7.4] — 2026-08-06 (`app@c94c814`)
+
+- feat(ololo): the judge's request reaches the one who can answer it (c94c814)
+
 ## [0.7.3] — 2026-08-06 (`app@ba851b7`)
 
 - feat(judges-tab): a judge's captures live in its own bubble (ba851b7)

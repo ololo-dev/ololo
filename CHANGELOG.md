@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.7.3] — 2026-08-06 (`app@3b91719`)
+
+- feat(ololo): the judge phase is visible in the TUI, and requests tick (3b91719)
+
 ## [0.7.2] — 2026-08-06 (`app@4963189`)
 
 - feat(gallery): committed screenshots count too (4963189)

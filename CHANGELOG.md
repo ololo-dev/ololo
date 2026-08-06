@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.7.1] — 2026-08-06 (`app@2aaa1b6`)
+
+- feat(open-ended): the judging phase says its name (2aaa1b6)
+
 ## [0.7.1] — 2026-08-05 (`app@054fe2e`)
 
 - feat(judging): the artifact request is a probe, everywhere (054fe2e)

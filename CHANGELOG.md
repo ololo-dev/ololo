@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.7.3] — 2026-08-06 (`app@ba851b7`)
+
+- feat(judges-tab): a judge's captures live in its own bubble (ba851b7)
+
 ## [0.7.3] — 2026-08-06 (`app@3b91719`)
 
 - feat(ololo): the judge phase is visible in the TUI, and requests tick (3b91719)

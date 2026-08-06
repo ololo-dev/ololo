@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.8.0] — 2026-08-06 (`app@c49388d`)
+
+- fix(judging): a judge's probe explains itself, everywhere it shows (c49388d)
+
 ## [0.8.0] — 2026-08-06 (`app@e6cdfdc`)
 
 - feat!: ArtifactRequest is gone — a judge's request IS a probe (e6cdfdc)

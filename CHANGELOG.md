@@ -2,6 +2,11 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.7.4] — 2026-08-06 (`app@3a16ec3`)
+
+- chore: drop an accidentally committed empty file (3a16ec3)
+- feat(ololo): the judge's request reaches the one who can answer it (c94c814)
+
 ## [0.7.4] — 2026-08-06 (`app@c94c814`)
 
 - feat(ololo): the judge's request reaches the one who can answer it (c94c814)

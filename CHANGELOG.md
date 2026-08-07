@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.8.0] — 2026-08-07 (`app@b3c8f64`)
+
+- feat(badges): code golfers get their medal (b3c8f64)
+
 ## [0.8.0] — 2026-08-07 (`app@4c06658`)
 
 - fix(judging): an evidence vacuum is the cheating signature, not an alibi (877fd9b)

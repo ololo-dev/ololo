@@ -2,6 +2,11 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.8.0] — 2026-08-07 (`app@4c06658`)
+
+- fix(judging): an evidence vacuum is the cheating signature, not an alibi (877fd9b)
+- fix(judging): vision attachments carry an image detail level (9e0c833)
+
 ## [0.8.0] — 2026-08-06 (`app@c49388d`)
 
 - fix(judging): a judge's probe explains itself, everywhere it shows (c49388d)

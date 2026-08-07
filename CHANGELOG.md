@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.8.0] — 2026-08-07 (`app@1d5ca67`)
+
+- feat(newsletter): who got it, what they got, and a list that fits a phone (1d5ca67)
+
 ## [0.8.0] — 2026-08-07 (`app@99c1e62`)
 
 - fix(judging): a replay is decided by what the session wrote, not by a coin (99c1e62)

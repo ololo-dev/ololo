@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.8.0] — 2026-08-07 (`app@99c1e62`)
+
+- fix(judging): a replay is decided by what the session wrote, not by a coin (99c1e62)
+
 ## [0.8.0] — 2026-08-07 (`app@0ae1eca`)
 
 - fix(llm): an Ollama provider without a base URL finds the daemon via OLLAMA_URL (68b37d3)

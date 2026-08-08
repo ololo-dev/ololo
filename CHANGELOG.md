@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.9.0] — 2026-08-08 (`app@60659e7`)
+
+- chore(ololo): v0.9.0 — headless play mode and the no-browser login (60659e7)
+
 ## [0.8.0] — 2026-08-08 (`app@a63500d`)
 
 - feat(session): screencasts play everywhere; images reach only vision judges (6ba73d5)

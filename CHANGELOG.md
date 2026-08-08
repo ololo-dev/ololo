@@ -2,6 +2,16 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.8.0] — 2026-08-08 (`app@a63500d`)
+
+- feat(session): screencasts play everywhere; images reach only vision judges (6ba73d5)
+- feat(session): an artifact request delivers up to five files (d1b6bac)
+- feat(session): delivered artifacts land on the activity feed — screenshots and screencasts inline (5ade76f)
+- feat(dev): play a session locally end to end — headless CLI mode + dev-play stack (96d9b22)
+- feat(judging): the contract's constraints ride with the task into every judge prompt (f045e6d)
+- feat(weather-widget): the brief is a product spec; the platform never dials the widget (599fe24)
+- feat(done-flag): the flag file is noticed the moment it lands and judged at once (ee3bb51)
+
 ## [0.8.0] — 2026-08-07 (`app@1d5ca67`)
 
 - feat(newsletter): who got it, what they got, and a list that fits a phone (1d5ca67)

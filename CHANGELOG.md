@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.9.0] — 2026-08-09 (`app@b7e837e`)
+
+- fix(artifacts): media type follows the delivered file, not the request (5036177)
+
 ## [0.9.0] — 2026-08-09 (`app@60659e7`)
 
 - Maintenance rebuild (no CLI-facing commits detected)

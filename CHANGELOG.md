@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.9.0] — 2026-08-09 (`app@015552a`)
+
+- style: cargo fmt --all — the garden runner finally reached the fmt gate (015552a)
+
 ## [0.9.0] — 2026-08-09 (`app@7f58c33`)
 
 - fix(session): gallery dedupes re-requested captures; avg rating reads the verdict sheet (7f58c33)

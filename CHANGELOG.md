@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.9.0] — 2026-08-09 (`app@60659e7`)
+
+- Maintenance rebuild (no CLI-facing commits detected)
+
 ## [0.9.0] — 2026-08-08 (`app@60659e7`)
 
 - chore(ololo): v0.9.0 — headless play mode and the no-browser login (60659e7)

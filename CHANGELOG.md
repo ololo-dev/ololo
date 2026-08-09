@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.9.0] — 2026-08-09 (`app@63bb59d`)
+
+- fix(judging): judge-registered validations can actually check exit codes (63bb59d)
+
 ## [0.9.0] — 2026-08-09 (`app@015552a`)
 
 - style: cargo fmt --all — the garden runner finally reached the fmt gate (015552a)

@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.9.0] — 2026-08-09 (`app@8a56ae7`)
+
+- feat(ololo): auxiliary commits address the current task (e24cb32)
+
 ## [0.9.0] — 2026-08-09 (`app@b7e837e`)
 
 - fix(artifacts): media type follows the delivered file, not the request (5036177)

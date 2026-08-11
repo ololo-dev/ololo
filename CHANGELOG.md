@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.9.0] — 2026-08-11 (`app@1788d11`)
+
+- feat(frontend): artifact requests read as clear deliverables (1788d11)
+
 ## [0.9.0] — 2026-08-11 (`app@70c35bd`)
 
 - feat(protocol): carry the test's human label to the UI — no more shell parsing (70c35bd)

@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.9.0] — 2026-08-11 (`app@70c35bd`)
+
+- feat(protocol): carry the test's human label to the UI — no more shell parsing (70c35bd)
+
 ## [0.9.0] — 2026-08-09 (`app@17e724b`)
 
 - fix(judging): session judges stop re-billing — terminal rows for every pair, dedup, in-flight guard (17e724b)

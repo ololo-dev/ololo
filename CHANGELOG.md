@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.9.0] — 2026-08-12 (`app@aec0573`)
+
+- fix(sessions): tasks seeded after a session finished are not expected of it (aec0573)
+
 ## [0.9.0] — 2026-08-11 (`app@1788d11`)
 
 - feat(frontend): artifact requests read as clear deliverables (1788d11)

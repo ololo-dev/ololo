@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.9.0] — 2026-08-12 (`app@502de1c`)
+
+- feat(accounts): free/premium plans meter judge runs per calendar month (502de1c)
+
 ## [0.9.0] — 2026-08-12 (`app@f6d6db6`)
 
 - fix(judging): judge runs lost for good settle instead of pending forever (f6d6db6)

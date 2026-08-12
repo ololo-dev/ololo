@@ -2,6 +2,11 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.9.0] — 2026-08-12 (`app@caf5286`)
+
+- style: rustfmt and oxfmt the tree so ci's format gates pass again (caf5286)
+- feat(accounts): free/premium plans meter judge runs per calendar month (502de1c)
+
 ## [0.9.0] — 2026-08-12 (`app@502de1c`)
 
 - feat(accounts): free/premium plans meter judge runs per calendar month (502de1c)

@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.9.0] — 2026-08-12 (`app@724d687`)
+
+- feat(probes)!: remove mode:llm rubric probes — judges are the only LLM evaluation (724d687)
+
 ## [0.9.0] — 2026-08-12 (`app@b647c1e`)
 
 - feat(accounts): landing shows a pricing block while tiers are enforced (b647c1e)

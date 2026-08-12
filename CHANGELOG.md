@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.9.0] — 2026-08-12 (`app@f44d7c8`)
+
+- feat(accounts): master tiers switch, profile usage meter, tighter users table (f44d7c8)
+
 ## [0.9.0] — 2026-08-12 (`app@caf5286`)
 
 - style: rustfmt and oxfmt the tree so ci's format gates pass again (caf5286)

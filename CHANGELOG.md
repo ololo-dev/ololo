@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.9.0] — 2026-08-13 (`app@4127cf1`)
+
+- fix(judges): artifact requests reuse what exists and stop wasting the player (4127cf1)
+
 ## [0.9.0] — 2026-08-12 (`app@724d687`)
 
 - feat(probes)!: remove mode:llm rubric probes — judges are the only LLM evaluation (724d687)

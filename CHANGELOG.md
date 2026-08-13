@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.9.0] — 2026-08-13 (`app@f651654`)
+
+- feat(similarity)!: persisted reports with named sources; proportional penalty (f651654)
+
 ## [0.9.0] — 2026-08-13 (`app@d3c6a69`)
 
 - feat(similarity): the score drop explains itself, source named (d3c6a69)

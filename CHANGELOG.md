@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.9.0] — 2026-08-13 (`app@d3c6a69`)
+
+- feat(similarity): the score drop explains itself, source named (d3c6a69)
+
 ## [0.9.0] — 2026-08-13 (`app@3437bad`)
 
 - feat(accounts): sellable review packs — credits spent after the monthly limit (3437bad)

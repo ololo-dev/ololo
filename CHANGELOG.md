@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.9.0] — 2026-08-13 (`app@3437bad`)
+
+- feat(accounts): sellable review packs — credits spent after the monthly limit (3437bad)
+
 ## [0.9.0] — 2026-08-13 (`app@5497f5f`)
 
 - fix(cli): buffered pushes only — streamed bodies die in the proxy chain (5497f5f)

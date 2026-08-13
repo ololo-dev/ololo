@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.9.1] — 2026-08-13 (`app@794dc5e`)
+
+- chore(ololo): v0.9.1 — buffered pushes survive the proxy chain (794dc5e)
+
 ## [0.9.0] — 2026-08-13 (`app@f651654`)
 
 - feat(similarity)!: persisted reports with named sources; proportional penalty (f651654)

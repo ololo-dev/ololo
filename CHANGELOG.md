@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.9.1] — 2026-08-14 (`app@27584a9`)
+
+- feat(judging): out-of-range ratings clamp to the nearest bound, never re-run (7bc734f)
+
 ## [0.9.1] — 2026-08-13 (`app@82f1af9`)
 
 - feat(judging): artifact request registry — equivalent asks attach, not duplicate (086b722)

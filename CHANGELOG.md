@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.9.1] — 2026-08-14 (`app@f89f99c`)
+
+- feat(billing): admin Payments tab fed by webhook-recorded transactions (f89f99c)
+
 ## [0.9.1] — 2026-08-14 (`app@4855e60`)
 
 - feat(billing): paddle checkout and webhook fulfillment (4855e60)

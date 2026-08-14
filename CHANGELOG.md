@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.9.1] — 2026-08-14 (`app@0fb550d`)
+
+- feat(billing): re-grid review packs so they stop undercutting Premium (0fb550d)
+
 ## [0.9.1] — 2026-08-14 (`app@997d1b4`)
 
 - fix(ololo): one env lock for every HOME-mutating test (997d1b4)

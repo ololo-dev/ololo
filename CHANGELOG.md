@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.11.0] — 2026-08-15 (`app@de0d47a`)
+
+- fix(player-chat): honest judge/completion states, live-parity, CLI verdicts (de0d47a)
+
 ## [0.11.0] — 2026-08-15 (`app@c081991`)
 
 - chore(ololo): v0.11.0 — probe-command permission gate (c081991)

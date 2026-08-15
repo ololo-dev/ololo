@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.12.0] — 2026-08-15 (`app@d947fc2`)
+
+- style: rustfmt sweep — green the fmt gate before v0.18.0 (d947fc2)
+
 ## [0.12.0] — 2026-08-15 (`app@580ccda`)
 
 - feat(ololo): v0.12.0 — custom agent commands, ololo update (580ccda)

@@ -2,6 +2,12 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.10.0] — 2026-08-15 (`app@2b38c2a`)
+
+- style: rustfmt sweep — unblock the fmt gate on CI (2b38c2a)
+- chore(ololo): v0.10.0 — built-in Antigravity usage sync (3b0ad01)
+- feat(cli): built-in Antigravity IDE usage sync — tokscale no longer needed (32436dc)
+
 ## [0.10.0] — 2026-08-15 (`app@3b0ad01`)
 
 - chore(ololo): v0.10.0 — built-in Antigravity usage sync (3b0ad01)

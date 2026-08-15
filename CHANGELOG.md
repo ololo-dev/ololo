@@ -2,6 +2,11 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.11.0] — 2026-08-15 (`app@c081991`)
+
+- chore(ololo): v0.11.0 — probe-command permission gate (c081991)
+- feat(cli): permission gate before probe commands (d150d77)
+
 ## [0.10.0] — 2026-08-15 (`app@2b38c2a`)
 
 - style: rustfmt sweep — unblock the fmt gate on CI (2b38c2a)

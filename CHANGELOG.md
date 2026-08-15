@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.11.1] — 2026-08-15 (`app@6dacc8f`)
+
+- feat(player-chat): check bubbles carry the probe's title and description (6dacc8f)
+
 ## [0.11.1] — 2026-08-15 (`app@cb0867a`)
 
 - chore(ololo): v0.11.1 — picker event fix, permission popup arrows (cb0867a)

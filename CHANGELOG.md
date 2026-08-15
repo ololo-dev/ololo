@@ -2,6 +2,11 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.11.1] — 2026-08-15 (`app@cb0867a`)
+
+- chore(ololo): v0.11.1 — picker event fix, permission popup arrows (cb0867a)
+- fix(cli): picker survives stray terminal events; arrows in the permission popup (f36eee7)
+
 ## [0.11.0] — 2026-08-15 (`app@de0d47a`)
 
 - fix(player-chat): honest judge/completion states, live-parity, CLI verdicts (de0d47a)

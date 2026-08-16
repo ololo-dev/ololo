@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.14.0] — 2026-08-16 (`app@21b29df`)
+
+- refactor(dry): deduplicate the jscpd hotspots that could actually drift (21b29df)
+
 ## [0.14.0] — 2026-08-16 (`app@3e016ad`)
 
 - perf(dev): line-tables-only debuginfo — target/ was eating the disk (3e016ad)

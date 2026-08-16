@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.13.0] — 2026-08-16 (`app@28c6a2d`)
+
+- feat(ololo): v0.13.0 — autonomous play: control channel for a hosted agent (28c6a2d)
+
 ## [0.12.0] — 2026-08-15 (`app@d947fc2`)
 
 - style: rustfmt sweep — green the fmt gate before v0.18.0 (d947fc2)

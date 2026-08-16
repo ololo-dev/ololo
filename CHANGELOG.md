@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.14.0] — 2026-08-16 (`app@3b93c7d`)
+
+- test(coverage): cover the risk-bearing gaps the coverage report surfaced (3b93c7d)
+
 ## [0.14.0] — 2026-08-16 (`app@21b29df`)
 
 - refactor(dry): deduplicate the jscpd hotspots that could actually drift (21b29df)

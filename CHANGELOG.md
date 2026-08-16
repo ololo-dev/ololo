@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.14.0] — 2026-08-16 (`app@d30a2d5`)
+
+- feat(judging): a judge now sees its own earlier verdicts in the session (d30a2d5)
+
 ## [0.14.0] — 2026-08-16 (`app@3b93c7d`)
 
 - test(coverage): cover the risk-bearing gaps the coverage report surfaced (3b93c7d)

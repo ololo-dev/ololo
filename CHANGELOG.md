@@ -2,6 +2,11 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.14.0] — 2026-08-16 (`app@1d32f1f`)
+
+- perf(tests): one integration binary per crate, nextest + mold in CI (1d32f1f)
+- style(ololo): rustfmt control.rs — re-green the CI format gate (0f56f8b)
+
 ## [0.14.0] — 2026-08-16 (`app@73645c6`)
 
 - feat(ololo): v0.14.0 — chat view for the probes pane (F5) (73645c6)

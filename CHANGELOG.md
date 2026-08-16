@@ -2,6 +2,11 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.14.0] — 2026-08-16 (`app@0f56f8b`)
+
+- style(ololo): rustfmt control.rs — re-green the CI format gate (0f56f8b)
+- feat(ololo): v0.14.0 — chat view for the probes pane (F5) (73645c6)
+
 ## [0.13.0] — 2026-08-16 (`app@28c6a2d`)
 
 - feat(ololo): v0.13.0 — autonomous play: control channel for a hosted agent (28c6a2d)

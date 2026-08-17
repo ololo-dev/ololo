@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.14.0] — 2026-08-17 (`app@12df5b7`)
+
+- feat(ololo): the chat view stops cutting messages (12df5b7)
+
 ## [0.14.0] — 2026-08-16 (`app@d30a2d5`)
 
 - feat(judging): a judge now sees its own earlier verdicts in the session (d30a2d5)

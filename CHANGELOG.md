@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.14.0] — 2026-08-17 (`app@9213a10`)
+
+- fix: audit remediation — probe integrity, CLI resilience, fd headroom (ec10dbe)
+
 ## [0.14.0] — 2026-08-17 (`app@12df5b7`)
 
 - feat(ololo): the chat view stops cutting messages (12df5b7)

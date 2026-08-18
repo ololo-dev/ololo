@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.15.0] — 2026-08-18 (`app@93ce153`)
+
+- fix(memory): capture the run command deterministically from the setup probe (D1) (93ce1531)
+
 ## [0.14.0] — 2026-08-18 (`app@de4002d`)
 
 - feat(projects): the task arc on the project page, per-project (UI-H2) (de4002df)

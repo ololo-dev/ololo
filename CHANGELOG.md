@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.14.0] — 2026-08-18 (`app@de4002d`)
+
+- feat(projects): the task arc on the project page, per-project (UI-H2) (de4002df)
+
 ## [0.14.0] — 2026-08-17 (`app@9213a10`)
 
 - fix: audit remediation — probe integrity, CLI resilience, fd headroom (ec10dbe)

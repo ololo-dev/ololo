@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.16.0] — 2026-08-20 (`app@95c6c0c`)
+
+- fix(ci): green the rust job — an unused import and a formatting pass (95c6c0c1)
+
 ## [0.16.0] — 2026-08-20 (`app@a448960`)
 
 - feat(judges): a session report, written for the player (a4489600)

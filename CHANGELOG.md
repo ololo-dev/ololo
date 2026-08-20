@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.15.0] — 2026-08-20 (`app@ffab719`)
+
+- fix(ololo): modals hand focus back to the agent instead of stranding it (ffab7198)
+
 ## [0.15.0] — 2026-08-19 (`app@49f82b1`)
 
 - feat(sessions): push judge settlement over WS; richer congrats popup (49f82b1c)

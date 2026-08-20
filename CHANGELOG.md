@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.16.0] — 2026-08-20 (`app@431f38e`)
+
+- feat(projects): campaigns — a big idea split into parts that unlock in order (431f38e4)
+
 ## [0.16.0] — 2026-08-20 (`app@1cfd68d`)
 
 - chore(ololo): v0.16.0 — modal focus restore, session-wide probe approval (1cfd68de)

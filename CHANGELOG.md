@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.16.0] — 2026-08-20 (`app@1cfd68d`)
+
+- chore(ololo): v0.16.0 — modal focus restore, session-wide probe approval (1cfd68de)
+
 ## [0.15.0] — 2026-08-20 (`app@de20f01`)
 
 - feat(ololo): "approve all for the session" in the probe permission box (de20f018)

@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.16.0] — 2026-08-21 (`app@f954451`)
+
+- fix(report): three rough patches, not eight (f954451a)
+
 ## [0.16.0] — 2026-08-21 (`app@8d1747d`)
 
 - feat(report): the debrief is laid out in the documentation's blocks (8d1747d5)

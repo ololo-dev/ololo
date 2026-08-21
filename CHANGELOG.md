@@ -2,6 +2,11 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.16.0] — 2026-08-21 (`app@aedc6b8`)
+
+- feat(badges): Campaigner, for clearing a whole campaign (aedc6b80)
+- feat(campaign): a campaign page stops pretending to host sessions (f8b4c9ae)
+
 ## [0.16.0] — 2026-08-21 (`app@cc3968d`)
 
 - fix(report): a player who pushed nothing still gets an account of it (cc3968d4)

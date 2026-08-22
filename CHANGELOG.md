@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.16.0] — 2026-08-22 (`app@64680f7`)
+
+- perf(judges): a judge can declare what it must not read (64680f75)
+
 ## [0.16.0] — 2026-08-21 (`app@13f8d99`)
 
 - feat(campaign): a part's dashboard shows what came before it (13f8d994)

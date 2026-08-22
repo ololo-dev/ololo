@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.16.0] — 2026-08-22 (`app@3ca2c0f`)
+
+- fix(judges): an artifact request stands until the session ends (3ca2c0f1)
+
 ## [0.16.0] — 2026-08-22 (`app@eeb7775`)
 
 - fix(ololo): a judge's artifact request reaches the agent, and reads like one (eeb77751)

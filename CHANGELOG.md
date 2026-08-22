@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.17.0] — 2026-08-22 (`app@680a3af`)
+
+- chore(ololo): v0.17.0 — artifact requests read as requests, probe pastes drop the brief (680a3af4)
+
 ## [0.16.0] — 2026-08-22 (`app@3ca2c0f`)
 
 - fix(judges): an artifact request stands until the session ends (3ca2c0f1)

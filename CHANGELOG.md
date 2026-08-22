@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.17.1] — 2026-08-22 (`app@3f595a3`)
+
+- fix(ololo): v0.17.1 — the probe paste gets its task brief back (3f595a31)
+
 ## [0.17.0] — 2026-08-22 (`app@f795a72`)
 
 - fix(campaign): sitting out a task's deadline no longer clears the part (f795a726)

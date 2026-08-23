@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.17.1] — 2026-08-23 (`app@4ed071d`)
+
+- fix(judging): honest deliveries stop reading as empty commits with stale screenshots (4ed071d1)
+
 ## [0.17.1] — 2026-08-23 (`app@22ad698`)
 
 - fix(report): the report appears when it is written, not on the next reload (22ad698b)

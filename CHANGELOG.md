@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.17.1] — 2026-08-23 (`app@b9d4a9d`)
+
+- feat(report): the session report shows what each judge actually scored (b9d4a9dc)
+
 ## [0.17.1] — 2026-08-22 (`app@3f595a3`)
 
 - fix(ololo): v0.17.1 — the probe paste gets its task brief back (3f595a31)

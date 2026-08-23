@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.17.1] — 2026-08-23 (`app@3383ba4`)
+
+- feat(report): captures are a brick wall, captioned by file name (3383ba43)
+
 ## [0.17.1] — 2026-08-23 (`app@b9d4a9d`)
 
 - feat(report): the session report shows what each judge actually scored (b9d4a9dc)

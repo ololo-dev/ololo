@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.17.1] — 2026-08-24 (`app@7fab098`)
+
+- feat(payments): Verifone and Fondy join the register, in dollars and euros (7fab0989)
+
 ## [0.17.1] — 2026-08-24 (`app@8b01534`)
 
 - refactor(payments): one switch decides who sells, and the pages follow (8b01534d)

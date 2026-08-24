@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.17.1] — 2026-08-24 (`app@1e016a9`)
+
+- feat(billing): payments go through monobank, charged in hryvnia (f2c00c89)
+
 ## [0.17.1] — 2026-08-24 (`app@634a55f`)
 
 - feat(judges): the agentic judge scores skill usefulness as its own criterion (634a55f6)

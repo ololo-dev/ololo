@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.17.1] — 2026-08-24 (`app@77369b6`)
+
+- fix(probes): a player's commands run on the player's machine (77369b67)
+
 ## [0.17.1] — 2026-08-23 (`app@4ed071d`)
 
 - fix(judging): honest deliveries stop reading as empty commits with stale screenshots (4ed071d1)

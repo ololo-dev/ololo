@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.18.0] — 2026-08-26 (`app@30e35f4`)
+
+- feat(ololo): v0.18.0 — the chat pane takes the sidebar, retelling the session like the web chat (30e35f42)
+
 ## [0.17.1] — 2026-08-24 (`app@7fab098`)
 
 - feat(payments): Verifone and Fondy join the register, in dollars and euros (7fab0989)

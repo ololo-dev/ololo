@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.19.1] — 2026-08-26 (`app@900aa62`)
+
+- fix(ololo): v0.19.1 — the agent boots into a pane-sized PTY (900aa62b)
+
 ## [0.19.0] — 2026-08-26 (`app@e4806f9`)
 
 - feat(ololo): v0.19.0 — the chat scrolls under the wheel and talks back (e4806f9c)

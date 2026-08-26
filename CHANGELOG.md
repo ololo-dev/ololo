@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.19.0] — 2026-08-26 (`app@e4806f9`)
+
+- feat(ololo): v0.19.0 — the chat scrolls under the wheel and talks back (e4806f9c)
+
 ## [0.18.1] — 2026-08-26 (`app@0ea47b8`)
 
 - feat(ololo): v0.18.1 — chat bubbles get room to breathe (0ea47b8c)

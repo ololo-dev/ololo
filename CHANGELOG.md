@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.19.4] — 2026-08-27 (`app@d646a91`)
+
+- fix(ololo): v0.19.4 — the chat message lands in the agent's input, like F3 (d646a913)
+
 ## [0.19.3] — 2026-08-27 (`app@2b72824`)
 
 - feat(ololo): v0.19.3 — a failed check explains itself in the chat (2b728244)

@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.19.5] — 2026-08-27 (`app@8e5508f`)
+
+- feat(ololo): v0.19.5 — any chat bubble can be handed to the agent (8e5508ff)
+
 ## [0.19.4] — 2026-08-27 (`app@d646a91`)
 
 - fix(ololo): v0.19.4 — the chat message lands in the agent's input, like F3 (d646a913)

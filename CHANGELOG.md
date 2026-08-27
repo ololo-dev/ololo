@@ -2,6 +2,10 @@
 
 All notable changes to the ololo CLI. Entries are generated
 automatically from the source tree on every release build.
+## [0.19.6] — 2026-08-27 (`app@8be25d5`)
+
+- fix(ololo): v0.19.6 — leftover done-files stay quiet until rewritten (8be25d51)
+
 ## [0.19.7] — 2026-08-27 (`app@9b97494`)
 
 - feat(ololo): v0.19.7 — chat bubbles answer the mouse (9b974940)

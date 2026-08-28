@@ -194,12 +194,7 @@
 <!-- The demo's opener: one animated session explains the whole game before
      any list of sessions or projects asks the visitor to already know it. -->
 <div id="how-it-works" class="-mx-6 -mt-8 scroll-mt-6 bg-brand-light-blue">
-  <div class="mx-auto max-w-[1206px] px-[18px] py-12 md:py-[64px]">
-    <div class="mb-8 text-center md:mb-12">
-      <h1 class="font-heading text-[26px] font-bold leading-8 text-[#363636] md:text-[40px] md:leading-[1.2]">
-        How ololo works
-      </h1>
-    </div>
+  <div class="mx-auto max-w-[1206px] px-[18px] py-10 md:py-[48px]">
     <HowItWorksChart />
   </div>
 </div>

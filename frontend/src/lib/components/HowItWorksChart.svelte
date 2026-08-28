@@ -5,14 +5,21 @@
   // Each phase highlights one beat of the game: start/join, agent builds,
   // live checks, judge verdicts, leaderboard. Phases auto-advance; the
   // step cards double as manual controls for presentations.
+  //
+  // `arena` marks an edition with the global Arena ladder: phase 5 then
+  // talks about the rating that outlives the session. Without it (the open
+  // platform has no Arena) the finale stays inside the session — top the
+  // board, win the round.
+  let { arena = false }: { arena?: boolean } = $props()
+
   const PHASE_MS = 4600
-  const TITLES: Record<number, string> = {
+  const TITLES = $derived<Record<number, string>>({
     1: 'Start a live session',
     2: 'ololo sends the task — your agent builds',
     3: 'Get checked as you go',
     4: 'Hear from the judges',
-    5: 'Watch your rating grow',
-  }
+    5: arena ? 'Watch your rating grow' : 'Top the leaderboard',
+  })
 
   let phase = $state(1)
   let playing = $state(true)
@@ -55,7 +62,7 @@
     }
   })
 
-  const steps = [
+  const steps = $derived([
     {
       n: 1,
       title: TITLES[1],
@@ -84,9 +91,11 @@
       n: 5,
       title: TITLES[5],
       html: false,
-      text: 'Points land on the live leaderboard. Every session levels up your skills.',
+      text: arena
+        ? 'Points land on the live leaderboard. Every session levels up your skills.'
+        : 'Points land on the live leaderboard as checks pass and judges score — winner takes the round.',
     },
-  ]
+  ])
 </script>
 
 <section aria-label="Animated walkthrough of one ololo session">
@@ -203,8 +212,17 @@
           <text x="484" y="135" text-anchor="middle" class="pill-running">RUNNING</text>
         </g>
         <g>
-          <rect x="428" y="268" width="104" height="20" rx="4" fill="#f2f5fa" />
-          <text x="480" y="282" text-anchor="middle" class="chip-code">QW3RT · 42:17</text>
+          <rect x="378" y="268" width="102" height="20" rx="4" fill="#f2f5fa" />
+          <text x="429" y="282" text-anchor="middle">
+            <tspan class="chip-label">join code</tspan>
+            <tspan class="chip-code">QW3RT</tspan>
+          </text>
+          <rect x="488" y="268" width="94" height="20" rx="4" fill="#f2f5fa" />
+          <text x="535" y="282" text-anchor="middle">
+            <tspan class="chip-label">⏱</tspan>
+            <tspan class="chip-code">42:17</tspan>
+            <tspan class="chip-label">left</tspan>
+          </text>
         </g>
         <image href="/maskot.png" x="424" y="300" width="112" height="112" aria-hidden="true" />
       </g>
@@ -253,8 +271,13 @@
         </g>
         <g class="popchip">
           <line x1="716" y1="357" x2="906" y2="357" stroke="#e7eaee" />
-          <text x="716" y="374" class="foot-label">Your Arena rating</text>
-          <text x="906" y="374" text-anchor="end" class="foot-delta">+18 ↑</text>
+          {#if arena}
+            <text x="716" y="374" class="foot-label">Your Arena rating</text>
+            <text x="906" y="374" text-anchor="end" class="foot-delta">+18 ↑</text>
+          {:else}
+            <text x="716" y="374" class="foot-label">Session result</text>
+            <text x="906" y="374" text-anchor="end" class="foot-delta">🏆 you win</text>
+          {/if}
         </g>
       </g>
 
@@ -506,10 +529,15 @@
     font-size: 13px;
   }
   .chip-code {
-    font-size: 11px;
+    font-size: 10.5px;
     font-weight: 700;
     fill: #36547f;
     font-family: ui-monospace, Menlo, monospace;
+  }
+  .chip-label {
+    font-size: 9.5px;
+    font-weight: 600;
+    fill: #9ea7b6;
   }
   .row-deep {
     font-size: 12px;

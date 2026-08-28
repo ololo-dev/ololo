@@ -239,14 +239,17 @@ services:
     image: dpage/pgadmin4:latest
     # Only meaningful when DATABASE_URL points at Postgres — start it with
     # `docker compose --profile postgres up -d`. The default (SQLite) stack
-    # skips it entirely, so its credentials are only required when used.
+    # skips it entirely. The credentials cannot be `:?`-required here:
+    # Compose interpolates the whole file before applying profiles, so a
+    # hard requirement would break `compose up` even without this profile.
+    # pgAdmin itself refuses to start while they are empty.
     profiles: ["postgres"]
     restart: unless-stopped
     ports:
       - 80
     environment:
-      PGADMIN_DEFAULT_EMAIL: "${PGADMIN_DEFAULT_EMAIL:?set PGADMIN_DEFAULT_EMAIL}"
-      PGADMIN_DEFAULT_PASSWORD: "${PGADMIN_DEFAULT_PASSWORD:?set PGADMIN_DEFAULT_PASSWORD (long random secret)}"
+      PGADMIN_DEFAULT_EMAIL: "${PGADMIN_DEFAULT_EMAIL:-}"
+      PGADMIN_DEFAULT_PASSWORD: "${PGADMIN_DEFAULT_PASSWORD:-}"
       # No outbound mail needed; silences postfix startup.
       PGADMIN_DISABLE_POSTFIX: "true"
     volumes:

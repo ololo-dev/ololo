@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { PageData } from './$types'
   import CodeBlock from '$lib/components/CodeBlock.svelte'
+  import HowItWorksChart from '$lib/components/HowItWorksChart.svelte'
   import ProjectCard from '$lib/components/projects/ProjectCard.svelte'
   import StartSessionPopup from '$lib/components/projects/StartSessionPopup.svelte'
   import { SITE_URL, SITE_NAME, DEFAULT_DESCRIPTION, DEFAULT_OG_IMAGE, pageTitle } from '$lib/seo'
@@ -188,6 +189,20 @@
   <meta name="twitter:image" content={DEFAULT_OG_IMAGE} />
   {@html jsonLdTag}
 </svelte:head>
+
+<!-- ===================== HOW IT WORKS ===================== -->
+<!-- The demo's opener: one animated session explains the whole game before
+     any list of sessions or projects asks the visitor to already know it. -->
+<div id="how-it-works" class="-mx-6 -mt-8 scroll-mt-6 bg-brand-light-blue">
+  <div class="mx-auto max-w-[1206px] px-[18px] py-12 md:py-[64px]">
+    <div class="mb-8 text-center md:mb-12">
+      <h1 class="font-heading text-[26px] font-bold leading-8 text-[#363636] md:text-[40px] md:leading-[1.2]">
+        How ololo works
+      </h1>
+    </div>
+    <HowItWorksChart />
+  </div>
+</div>
 
 <!-- ===================== LIVE SESSIONS ===================== -->
 {#if liveSessions.length > 0}

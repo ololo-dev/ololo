@@ -237,6 +237,10 @@ services:
   # port 5432). Saved server definitions persist on the pgadmin-data volume.
   pgadmin:
     image: dpage/pgadmin4:latest
+    # Only meaningful when DATABASE_URL points at Postgres — start it with
+    # `docker compose --profile postgres up -d`. The default (SQLite) stack
+    # skips it entirely, so its credentials are only required when used.
+    profiles: ["postgres"]
     restart: unless-stopped
     ports:
       - 80

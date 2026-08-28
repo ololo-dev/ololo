@@ -1,0 +1,174 @@
+# ololo — full stack BUILT FROM THIS CHECKOUT (no prebuilt images).
+#
+# The default docker-compose.yml pulls released images; this file builds the
+# three services from source instead — for self-hosting from a clone, or any
+# deployment platform that builds compose services from a git repo (Dokploy,
+# Coolify, plain `docker compose up --build`).
+#
+# Routing (set up in your platform's UI or reverse proxy):
+#   $APP_DOMAIN  /                            -> frontend    (port 3000)
+#   $APP_DOMAIN  /api /auth /git /health /ws  -> server      (port 8080)
+#   $GS_DOMAIN   (all paths)                  -> game-server (port 8081)
+#
+# Environment (a .env next to this file, or the platform's Environment tab):
+#   APP_DOMAIN           public domain of the app (frontend + API)
+#   GS_DOMAIN            public domain of the game server (WebSocket)
+#   JWT_SIGNING_KEY      >=32 random bytes: openssl rand -hex 32
+#   GAME_SERVER_ID       stable UUID; generate once: uuidgen | tr A-Z a-z
+#   DATABASE_URL         optional postgres:// URL; defaults to SQLite on the
+#                        shared volume — fine for a small deployment
+#   OLLAMA_URL / AI_PROVIDER / OPENROUTER_API_KEY / OPENCODE_API_KEY
+#                        LLM judges; also configurable later in the admin UI
+#
+# The first user to register becomes the admin.
+
+x-shared-db: &shared-db "${DATABASE_URL:-sqlite:///data/arena.db?mode=rwc}"
+
+services:
+  server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    restart: unless-stopped
+    # Alias the API on the private network under a stack-unique name: other
+    # stacks on a shared platform network may also run a service called
+    # `server`, and Docker DNS would round-robin between them.
+    networks:
+      dokploy-network:
+      default:
+        aliases:
+          - src-internal-server
+    environment:
+      DATABASE_URL: *shared-db
+      SERVER_PORT: "8080"
+      JWT_SIGNING_KEY: "${JWT_SIGNING_KEY:?set JWT_SIGNING_KEY (>=32 bytes)}"
+      ARENA_FRONTEND_ORIGINS: "${ARENA_FRONTEND_ORIGINS:-https://${APP_DOMAIN:-app.example.com}}"
+      ARENA_ACCESS_TOKEN_TTL_SECONDS: "${ARENA_ACCESS_TOKEN_TTL_SECONDS:-900}"
+      ARENA_REFRESH_TOKEN_TTL_DAYS: "${ARENA_REFRESH_TOKEN_TTL_DAYS:-30}"
+      ARENA_PROFILE_RATE_LIMIT_RPS: "${ARENA_PROFILE_RATE_LIMIT_RPS:-20}"
+      OLLAMA_URL: "${OLLAMA_URL:-}"
+      AI_PROVIDER: "${AI_PROVIDER:-ollama}"
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+      OPENCODE_API_KEY: "${OPENCODE_API_KEY:-}"
+      PUBLIC_APP_URL: "https://${APP_DOMAIN:-app.example.com}"
+      EMAIL_PROVIDER: "${EMAIL_PROVIDER:-}"
+      CLOUDFLARE_ACCOUNT_ID: "${CLOUDFLARE_ACCOUNT_ID:-}"
+      CLOUDFLARE_API_TOKEN: "${CLOUDFLARE_API_TOKEN:-}"
+      EMAIL_FROM_ADDRESS: "${EMAIL_FROM_ADDRESS:-}"
+      IMAGEKIT_PUBLIC_KEY: "${IMAGEKIT_PUBLIC_KEY:-}"
+      IMAGEKIT_PRIVATE_KEY: "${IMAGEKIT_PRIVATE_KEY:-}"
+      IMAGEKIT_URL_ENDPOINT: "${IMAGEKIT_URL_ENDPOINT:-}"
+      ARENA_PUBLIC_API_URL: "${ARENA_PUBLIC_API_URL:-}"
+      TURNSTILE_ENABLED: "${TURNSTILE_ENABLED:-false}"
+      TURNSTILE_SITEKEY: "${TURNSTILE_SITEKEY:-}"
+      TURNSTILE_SECRET: "${TURNSTILE_SECRET:-}"
+      # Seed fixtures baked into the server image (see server/Dockerfile).
+      ARENA_PROJECTS_DIR: "/app/projects"
+      ARENA_JUDGES_DIR: "/app/judges"
+      # Per-player bare repos need a persistent volume; the image default
+      # location is wiped on every redeploy.
+      OLOLO_GIT_REPOS_DIR: "/repos"
+      ARENA_LOG_FORMAT: "${ARENA_LOG_FORMAT:-json}"
+    volumes:
+      - arena-data:/data
+      - git-repos:/repos
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  game-server:
+    build:
+      context: .
+      dockerfile: game-server/Dockerfile
+    restart: unless-stopped
+    ports:
+      - 8081
+    networks:
+      dokploy-network:
+      default:
+        aliases:
+          - src-internal-game-server
+    environment:
+      DATABASE_URL: *shared-db
+      GAME_SERVER_PORT: "8081"
+      GAME_SERVER_ID: "${GAME_SERVER_ID:?set GAME_SERVER_ID (stable uuid)}"
+      GAME_SERVER_ADVERTISE_URL: "wss://${GS_DOMAIN:-gs.example.com}"
+      GAME_SERVER_ZMQ_BIND_ADDR: "tcp://src-internal-game-server:6000"
+      GAME_SERVER_CAPACITY: "${GAME_SERVER_CAPACITY:-64}"
+      ARENA_LOBBY_TIMER_SECS: "${ARENA_LOBBY_TIMER_SECS:-60}"
+      ARENA_JUDGE_MAX_CONCURRENT: "${ARENA_JUDGE_MAX_CONCURRENT:-3}"
+      ARENA_RESTART_STAGGER_MS: "${ARENA_RESTART_STAGGER_MS:-50}"
+      JWT_SIGNING_KEY: "${JWT_SIGNING_KEY:?set JWT_SIGNING_KEY (>=32 bytes)}"
+      OLLAMA_URL: "${OLLAMA_URL:-}"
+      AI_PROVIDER: "${AI_PROVIDER:-ollama}"
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+      OPENCODE_API_KEY: "${OPENCODE_API_KEY:-}"
+      ARENA_LOG_FORMAT: "${ARENA_LOG_FORMAT:-json}"
+      OLOLO_GIT_REPOS_DIR: "/repos"
+      ARENA_JUDGE_LOG_DIR: "/judge-logs"
+      ARENA_SESSION_LOG_DIR: "/session-logs"
+    # Execution judges (golf-verify) re-run committed player code under bwrap.
+    # These three are what make bwrap work inside a container (SYS_ADMIN +
+    # unconfined seccomp/apparmor + unmasked /proc); they relax the host's
+    # confinement of this container.
+    security_opt:
+      - seccomp:unconfined
+      - apparmor:unconfined
+      - systempaths=unconfined
+    cap_add:
+      - SYS_ADMIN
+    volumes:
+      - arena-data:/data
+      - git-repos:/repos
+      - judge-logs:/judge-logs
+      - session-logs:/session-logs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        PUBLIC_WS_URL: "wss://${APP_DOMAIN:-app.example.com}"
+    restart: unless-stopped
+    ports:
+      - 3000
+    networks:
+      dokploy-network:
+      default:
+    environment:
+      ORIGIN: "https://${APP_DOMAIN:-app.example.com}"
+      # Stack-unique alias (see the server service) so SSR calls this stack's
+      # API and never a sibling stack's.
+      INTERNAL_API_ORIGIN: "http://src-internal-server:8080"
+      PORT: "3000"
+      HOST: "0.0.0.0"
+      PROTOCOL_HEADER: "x-forwarded-proto"
+      ADDRESS_HEADER: "x-forwarded-for"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+volumes:
+  arena-data:
+  git-repos:
+  judge-logs:
+  session-logs:
+
+# Shared overlay network the platform's reverse proxy lives on. On Dokploy
+# this exists already; with plain docker compose create it once:
+#   docker network create dokploy-network
+networks:
+  dokploy-network:
+    external: true

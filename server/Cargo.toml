@@ -1,0 +1,90 @@
+[package]
+name = "server"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+authors.workspace = true
+
+[dependencies]
+arena-core = { path = "../arena-core" }
+axum = { version = "0.7.5", features = ["ws", "macros"] }
+tokio = { version = "1.38.0", features = ["full"] }
+tower = "0.4.13"
+tower-http = { version = "0.5.2", features = ["cors", "trace", "request-id"] }
+serde = { version = "1.0.203", features = ["derive"] }
+serde_json = "1.0.117"
+# Markdown project format (YAML frontmatter in readme.md / tasks/*.md).
+# serde_yaml 0.9.34 is the final stable release; actively maintained fork is
+# serde_yaml_neo, but 0.9.34 still builds on rust 1.93 and covers our needs
+# (Deserialize only). Swap to the fork only if a CVE lands.
+serde_yaml = "0.9.34"
+sea-orm = { version = "1.0.0", features = ["sqlx-sqlite", "sqlx-postgres", "runtime-tokio-rustls", "macros"] }
+dotenvy = "0.15.7"
+tracing = "0.1.40"
+tracing-subscriber = { version = "0.3.18", features = ["env-filter", "json"] }
+anyhow = "1.0.86"
+rig-core = "0.36.0"
+futures = "0.3.30"
+migration = { path = "./migration" }
+
+# NFR-001 crate pins. Verified against `cargo search` on 2026-05-02.
+# Only crates actually consumed by WP-008 / WP-009 are added here; the OAuth
+# crew (WP-010) and other waves add their own consumed crates separately.
+argon2 = "0.5"
+jsonwebtoken = { version = "10.3.0", default-features = false, features = ["rust_crypto"] }
+axum-extra = { version = "0.12.6", features = ["cookie"] }
+uuid = { version = "1.10", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+rand = "0.8"
+thiserror = "2.0"
+hex = "0.4"
+async-trait = "0.1"
+omq-zeromq = "0.7"
+# WP-005 (avatar-auth). RustCrypto stable versions verified 2026-05-06.
+hmac = "0.12"
+sha1 = "0.10"
+
+# WP-010 (OAuth). Pins verified via `cargo search` on 2026-05-02.
+oauth2 = "5.0.0"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+url = "2"
+
+# Email system — AWS SES v2 client. Versions verified 2026-05-10.
+# aws-sdk-sesv2 1.118.0 requires aws-config ^1.8.16 (verified via crates.io deps API).
+aws-config = { version = "1.8.16", features = ["behavior-version-latest"] }
+aws-sdk-sesv2 = "1.118.0"
+aws-credential-types = "1.2"
+sha2 = "0.10.9"
+subtle = "2.6.1"
+# monobank acquiring webhooks: X-Sign is a DER ECDSA-P256 signature over the
+# raw body, verified against a base64 PEM public key. Versions verified on
+# crates.io 2026-08-24.
+p256 = "0.14.0"
+base64 = "0.23.1"
+# Rate limiter concurrent state
+dashmap = "6.1.0"
+minijinja = { version = "2.20.0", default-features = false, features = ["builtins", "serde"] }
+which = "6"
+pulldown-cmark = { version = "0.13.4", default-features = false, features = ["html"] }
+
+[dev-dependencies]
+tower = { version = "0.4.13", features = ["util"] }
+http-body-util = "0.1"
+jsonwebtoken = { version = "10.3.0", default-features = false, features = ["rust_crypto"] }
+game-server = { path = "../game-server" }
+tempfile = "3"
+# Signing side of the monobank webhook check — the server only verifies.
+p256 = "0.14.0"
+base64 = "0.23.1"
+
+[[bin]]
+name = "server"
+path = "src/main.rs"
+
+[lib]
+name = "server"
+path = "src/lib.rs"
+
+[[bench]]
+name = "adaptation_latency"
+harness = false

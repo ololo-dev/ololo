@@ -1,0 +1,12 @@
+# Incremental compilation is off for this workspace.
+#
+# It buys little here — the crates are large and most local runs are
+# `cargo test --workspace`, which recompiles broadly anyway — and it costs a
+# lot: the incremental cache alone reached 10 GB beside a 25 GB `target`,
+# and twice filled the disk mid-build, which fails as corrupted artifacts
+# rather than as a clear "no space left".
+#
+# Override per-invocation with `CARGO_INCREMENTAL=1` when iterating on a
+# single crate.
+[build]
+incremental = false

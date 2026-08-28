@@ -1,0 +1,4 @@
+{"timestamp":1781000000.5,"message":{"type":"StatusUpdate","payload":{"message_id":"m1","model":"kimi-k2.5","token_usage":{"input_other":500,"output":50,"input_cache_read":100,"input_cache_creation":20}}}}
+{"timestamp":1781000010.0,"message":{"type":"StatusUpdate","payload":{"message_id":"m1","model":"kimi-k2.5","token_usage":{"input_other":500,"output":120,"input_cache_read":100,"input_cache_creation":20}}}}
+{"timestamp":1781000050.0,"message":{"type":"StatusUpdate","payload":{"message_id":"m2","model":"kimi-k2.5","token_usage":{"input_other":700,"output":80,"input_cache_read":300,"input_cache_creation":0}}}}
+{"timestamp":1781000060.0,"message":{"type":"SomethingElse","payload":{}}}

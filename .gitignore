@@ -1,0 +1,51 @@
+# Rust
+target/
+**/*.rs.bk
+
+# Node
+node_modules/
+frontend/node_modules/
+.svelte-kit/
+build/
+dist/
+frontend/storybook-static/
+
+# Env
+.env
+.env.local
+
+# Editors
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Local DB
+*.db
+*.sqlite
+*.sqlite3
+
+# Coverage
+coverage.lcov
+*coverage.lcov
+coverage-html/
+*.profraw
+*.profdata
+
+tmp/
+tmp1/
+
+# Claude Code local settings
+.claude/settings.local.json
+
+# wrangler local state
+.wrangler/
+
+# Judge run-log store (ARENA_JUDGE_LOG_DIR) — per-run LLM telemetry, not source
+judge-logs/
+game-server/judge-logs/
+
+# Session event-log store (ARENA_SESSION_LOG_DIR) — per-player runtime logs, not source
+session-logs/
+game-server/session-logs/
+.play/

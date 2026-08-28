@@ -1,0 +1,31 @@
+[package]
+name = "agent-tokens"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+authors.workspace = true
+
+[lib]
+name = "agent_tokens"
+path = "src/lib.rs"
+
+[[bin]]
+name = "agent-tokens"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+tracing = "0.1"
+dirs = "5"
+futures-util = "0.3"
+rusqlite = { version = "0.32", features = ["bundled"] }
+zstd = "0.13"
+# ponytail: clap and tokio are bin-only deps; the lib API is sync and does not require them
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time"] }
+
+[dev-dependencies]
+tempfile = "3"

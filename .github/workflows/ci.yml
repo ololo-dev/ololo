@@ -1,0 +1,110 @@
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    # Hosted runners only: on a public repo, a PR from any fork runs this
+    # workflow, and stranger code must never execute on project hardware.
+    runs-on: ubuntu-latest
+    # Postgres so the migration round-trip test runs against Postgres, not just
+    # SQLite — a min(uuid) style incompatibility took prod down once because it
+    # only surfaces on Postgres.
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: arena_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      ARENA_TEST_PG_URL: postgres://postgres:postgres@localhost:5432/arena_test
+      # Smaller test artifacts so the full workspace build fits the runner disk.
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+      - name: Install native build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libsqlite3-dev libzmq3-dev cmake bubblewrap
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.93.0"
+          components: rustfmt, clippy
+      # The workspace links ~140 test binaries; mold cuts that link storm to
+      # a fraction.
+      - name: Install mold linker
+        run: |
+          MOLD_VERSION=2.34.1
+          MOLD_DIR="$HOME/.mold-$MOLD_VERSION"
+          if [ ! -x "$MOLD_DIR/bin/mold" ]; then
+            mkdir -p "$MOLD_DIR"
+            curl -sfL "https://github.com/rui314/mold/releases/download/v${MOLD_VERSION}/mold-${MOLD_VERSION}-x86_64-linux.tar.gz" \
+              | tar xz --strip-components=1 -C "$MOLD_DIR"
+            mkdir -p "$MOLD_DIR/ld-dir"
+            ln -sf "$MOLD_DIR/bin/mold" "$MOLD_DIR/ld-dir/ld"
+          fi
+          echo "RUSTFLAGS=-C link-arg=-B$MOLD_DIR/ld-dir" >> "$GITHUB_ENV"
+      # nextest runs tests from every binary in one parallel pool (and one
+      # process per test) instead of cargo's binary-at-a-time schedule.
+      - name: Install cargo-nextest
+        run: |
+          if ! command -v cargo-nextest >/dev/null; then
+            curl -sfL https://get.nexte.st/latest/linux | tar zxf - -C "$HOME/.cargo/bin"
+          fi
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all -- --check
+      # Lints the shipping code (lib + bins). Integration-test targets still
+      # carry unused-import boilerplate; the test build below compiles them,
+      # and cleaning them up to add `--all-targets` here is a follow-up.
+      - name: Clippy
+        run: cargo clippy --workspace -- -D warnings
+      # Doctests are not covered by nextest; the workspace's only doctest is
+      # `#[ignore]`d, so nothing is lost.
+      - name: Test
+        run: cargo nextest run --workspace
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Enable pnpm
+        run: corepack enable && corepack prepare pnpm@11.9.0 --activate
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Type check
+        run: pnpm check
+      - name: Lint
+        run: pnpm lint
+      - name: Format check
+        run: pnpm format:check
+      - name: Test
+        run: pnpm test

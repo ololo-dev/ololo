@@ -1,0 +1,10 @@
+User-agent: *
+Allow: /
+Disallow: /settings
+Disallow: /profile
+Disallow: /cli-auth
+Disallow: /login
+Disallow: /logout
+Disallow: /register
+
+Sitemap: https://ololo.dev/sitemap.xml

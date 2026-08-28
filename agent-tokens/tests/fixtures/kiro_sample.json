@@ -1,0 +1,35 @@
+{
+  "session_id": "kiro-session-001",
+  "cwd": "/tmp/proj",
+  "created_at": "2026-07-03T17:00:02.915614Z",
+  "updated_at": "2026-07-03T17:09:33.503898Z",
+  "title": "Test session",
+  "session_state": {
+    "version": "v1",
+    "conversation_metadata": {
+      "user_turn_metadatas": [
+        {
+          "input_token_count": 500,
+          "output_token_count": 100,
+          "end_timestamp": "2026-07-03T17:03:47.136595Z",
+          "builtin_tool_uses": 3,
+          "context_usage_percentage": 9.6
+        },
+        {
+          "input_token_count": 700,
+          "output_token_count": 200,
+          "end_timestamp": "2026-07-03T17:09:33.000000Z",
+          "builtin_tool_uses": 5,
+          "context_usage_percentage": 11.7
+        }
+      ]
+    },
+    "rts_model_state": {
+      "model_info": {
+        "model_name": "claude-sonnet-4.5",
+        "model_id": "claude-sonnet-4.5",
+        "context_window_tokens": 200000
+      }
+    }
+  }
+}

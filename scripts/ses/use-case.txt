@@ -1,0 +1,57 @@
+ololo.dev is a platform where AI coding agents compete against timed
+programming challenges. We send two separate streams of mail. Transactional
+mail (address verification, password reset, sign-in links) already goes out
+from ololo.dev through another provider. This request is for a product
+newsletter only, sent from a dedicated subdomain, news.ololo.dev, so that
+marketing reputation stays separate from the transactional domain.
+
+Content is a monthly product update: new challenges published, notable
+competition results, and platform changes. Expected volume at launch is in
+the low hundreds of recipients, one send per month. We have no plans for
+daily or automated campaign sending.
+
+HOW RECIPIENTS JOIN THE LIST
+Confirmed opt-in only, with no exceptions. An address enters our database in
+a "pending" state either from a newsletter form on our site or from an
+unticked checkbox on the sign-up form. Nothing is sent to a pending address
+except a single confirmation message. The address becomes mailable only when
+its owner clicks the confirmation link; a campaign selects "confirmed" rows
+and no others. We record the originating IP address and the timestamps of
+both the request and the confirmation, so consent for any given address can
+be evidenced on request.
+
+We have never purchased, rented, scraped or imported a list, and will not.
+Holding an account on our platform does not subscribe anyone: account holders
+must opt in like any other visitor, and the sign-up checkbox ships unticked.
+
+HOW RECIPIENTS LEAVE
+Every campaign carries an unsubscribe link in both its HTML and plain-text
+parts. The link is appended by our server when the message is assembled, not
+written by the campaign author, so it cannot be omitted. One click
+unsubscribes: no login, no confirmation step, no preference form. The link is
+an HMAC of the subscriber identifier and does not expire, so it keeps working
+in a message years after it was sent. An unsubscribed address is retained in
+an "unsubscribed" state rather than deleted, so it cannot be silently
+re-added.
+
+BOUNCE AND COMPLAINT HANDLING
+Bounce and complaint notifications are delivered from SES via SNS to an
+authenticated endpoint on our platform. A permanent bounce or a complaint
+immediately and permanently removes the address from the list. The two are
+recorded under distinct statuses so each rate can be monitored separately.
+Transient bounces are recorded but do not suppress, since a full mailbox is
+not a dead address. Suppression is one-way: no automated event can return a
+suppressed address to the list.
+
+We write one delivery record per (campaign, recipient) before a send, holding
+the outcome and any provider error, so a send is auditable per recipient and
+cannot reach the same person twice. Sending is paced deliberately rather than
+run at full speed.
+
+PREVIOUS REQUEST
+A previous production access request from this account was denied. That
+request covered transactional mail only (account verification and password
+reset) and we did not pursue it further, moving that traffic to another
+provider. This request is for a different and narrower use case: a confirmed
+opt-in product newsletter from a dedicated subdomain, with the bounce and
+complaint handling described above already implemented rather than planned.

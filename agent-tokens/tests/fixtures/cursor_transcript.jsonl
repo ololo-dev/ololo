@@ -1,0 +1,4 @@
+{"role":"user","message":{"content":[{"type":"text","text":"<user_query>build the app</user_query>"}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"loading skill"},{"type":"tool_use","name":"ReadFile","input":{"path":"/tmp/proj/.agents/skills/using-gangsta/SKILL.md"}}]}}
+{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Glob","input":{"target_directory":"/tmp/proj","glob_pattern":"*"}},{"type":"tool_use","name":"Glob","input":{"target_directory":"/tmp/proj","glob_pattern":"**/*.rs"}}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"done"}]}}

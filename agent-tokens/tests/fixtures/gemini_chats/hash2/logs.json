@@ -1,0 +1,23 @@
+[
+  {
+    "sessionId": "gemini-log-session-001",
+    "messageId": 0,
+    "type": "user",
+    "message": "build an http server answering trivia",
+    "timestamp": "2026-06-11T10:00:00.000Z"
+  },
+  {
+    "sessionId": "gemini-log-session-001",
+    "messageId": 1,
+    "type": "user",
+    "message": "now add the scrabble endpoint",
+    "timestamp": "2026-06-11T10:05:00.000Z"
+  },
+  {
+    "sessionId": "gemini-log-session-002",
+    "messageId": 0,
+    "type": "user",
+    "message": "unrelated later session",
+    "timestamp": "2026-06-11T11:00:00.000Z"
+  }
+]

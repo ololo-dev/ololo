@@ -1,0 +1,36 @@
+[workspace]
+resolver = "2"
+members = [
+    "arena-core",
+    "game-server",
+    "server",
+    "server/migration",
+    "ololo",
+    "agent-tokens",
+]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.93.0"
+license = "Apache-2.0"
+authors = ["Andrey Kucherenko <kucherenko.andrey@gmail.com>"]
+
+# Full debuginfo made every dev artifact enormous (a server rlib alone was
+# 163 MB) and target/ ballooned past 30 GB, since cargo keeps every stale
+# hash forever. Line tables keep file:line backtraces and panic locations;
+# opt into full debuginfo ad hoc when stepping in a debugger:
+#   CARGO_PROFILE_DEV_DEBUG=full cargo build -p server
+[profile.dev]
+debug = "line-tables-only"
+
+# Argon2 is deliberately CPU-hard, and at debug opt-level every
+# auth-touching test pays for it tenfold. Optimizing just the KDF crates
+# keeps test debug-ability while making register/login fixtures cheap.
+[profile.dev.package.argon2]
+opt-level = 3
+[profile.dev.package.blake2]
+opt-level = 3
+
+# omq-zeromq was yanked from crates.io; patch to git source
+[patch.crates-io]
+omq-zeromq = { git = "https://github.com/paddor/omq.rs", tag = "omq-zeromq-v0.7.1" }

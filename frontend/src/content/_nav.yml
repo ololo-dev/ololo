@@ -1,0 +1,10 @@
+- id: getting-started
+  label: Getting Started
+- id: playing
+  label: Playing the Game
+- id: cli
+  label: ololo CLI
+- id: web
+  label: Web App
+- id: help
+  label: Help

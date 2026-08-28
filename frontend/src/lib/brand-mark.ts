@@ -1,0 +1,33 @@
+/**
+ * The ololo mark, as the two paths the footer variant of the brand sheet is
+ * built from, on a 48×48 viewBox.
+ *
+ * `BODY` is the white negative space: the animal is the hole in it, so the
+ * disc colour behind shows through and becomes the silhouette. `BELLY` is the
+ * pale blue the brand uses on dark. Kept as data rather than as an asset in
+ * `static/` because it is drawn inside other SVGs — a badge medal embeds it in
+ * its own `<svg>`, where an external `<image href>` does not render.
+ */
+export const MARK_VIEWBOX = "0 0 48 48";
+
+export const MARK_BODY =
+  "M41.5715319,40.3476581 C40.1403351,31.567176 35.3710167,22.8337952 31.0429815,18.5365854 " +
+  "C31.337764,16.3414634 31.5643688,16.8889959 32.2221113,16.195122 C33.7942843,14.5365854 " +
+  "33.401241,11.804878 31.0429815,8 C28.4882004,11.6097561 27.8986355,14.3414634 " +
+  "29.2742869,16.195122 C29.5690693,16.6341463 29.5690693,16.6341463 29.2742869,17.3658537 " +
+  "C26.3264625,15.6097561 21.6099435,15.6097561 18.6621191,17.3658537 C18.3673367,16.7804878 " +
+  "18.3673367,16.4878049 18.6621191,16.195122 C20.3325529,14.3414634 19.742988,11.6097561 " +
+  "16.8934245,8 C14.9001417,12.093588 14.5070984,14.8252953 15.7142947,16.195122 " +
+  "C16.7460332,17.3658537 16.7460332,16.9268293 16.8934245,18.5365854 C12.5652911,22.8338927 " +
+  "7.85101734,31.5675724 6.42902449,40.3482558 C2.44007459,36.06288 0,30.316395 0,24 " +
+  "C0,10.745166 10.745166,0 24,0 C37.254834,0 48,10.745166 48,24 C48,30.3161013 " +
+  "45.5601523,36.0623457 41.5715319,40.3476581 Z";
+
+export const MARK_BELLY =
+  "M13.4237288,55 C10.1920904,50.6054443 10.1920904,43.7694689 13.4237288,34.4920736 " +
+  "C18.2711864,20.5759806 29.7288136,20.4294954 34.5762712,34.4920736 " +
+  "C37.8079096,43.8671256 37.8079096,50.7031011 34.5762712,55 L13.4237288,55 Z";
+
+/** The belly runs past the disc, as in the design; clip it to the circle. */
+export const MARK_BODY_FILL = "#FFFFFF";
+export const MARK_BELLY_FILL = "#DCE9FC";

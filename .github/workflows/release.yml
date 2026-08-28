@@ -1,68 +1,64 @@
-# Builds the ololo CLI from the private ololo-dev/app source tree and
-# publishes binaries as a GitHub release in THIS public repo.
+# Release pipeline for the PUBLIC repository (ololo-dev/ololo).
 #
-# Triggered by repository_dispatch (sent by ololo-dev/app on pushes to master
-# that touch the CLI or its workspace deps) or manually via workflow_dispatch.
+# Every push to main — normally a platform snapshot sync — rebuilds and
+# publishes:
+#   - the ololo CLI for five platforms, as a GitHub release. The release for
+#     the current CLI version (ololo/Cargo.toml) is refreshed in place and
+#     `releases/latest` always points at the newest build — the contract
+#     https://ololo.dev/install.sh and install.ps1 depend on;
+#   - the three container images to GHCR: ololo-server, ololo-game-server,
+#     ololo-frontend, tagged :latest and :sha-<short>. docker-compose.yml
+#     pulls these by default.
 #
-# Secret required: APP_REPO_TOKEN — fine-grained PAT with contents:read on
-# ololo-dev/app (used only to check out the private source).
+# This file also ships in the private development repo, where it must never
+# run — hence the repository guard on the entry jobs.
 name: release
 
 on:
-  repository_dispatch:
-    types: [release-ololo]
+  push:
+    branches: [main]
   workflow_dispatch:
-    inputs:
-      ref:
-        description: "ololo-dev/app ref to build"
-        required: false
-        default: "master"
-
-env:
-  APP_REF: ${{ github.event.client_payload.sha || inputs.ref || 'master' }}
 
 jobs:
   version:
+    if: github.repository == 'ololo-dev/ololo'
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.v.outputs.version }}
-      app_sha: ${{ steps.v.outputs.app_sha }}
+      sha: ${{ steps.v.outputs.sha }}
       changes: ${{ steps.log.outputs.changes }}
     steps:
-      - name: Checkout app source
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
-          repository: ololo-dev/app
-          token: ${{ secrets.APP_REPO_TOKEN }}
-          ref: ${{ env.APP_REF }}
           fetch-depth: 0
       - id: v
         run: |
           echo "version=$(grep -m1 '^version' ololo/Cargo.toml | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
-          echo "app_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-      - name: Collect CLI changes since previous release
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Collect changes since the previous release
         id: log
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # The previous release body records the app commit it was built from;
-          # list CLI-relevant commit subjects since then.
+          # The previous release body records the commit it was built from;
+          # list commit subjects since then (snapshot syncs read as one line
+          # per sync, which is the granularity the public history has).
           prev=$(gh release view --repo "$GITHUB_REPOSITORY" --json body --jq .body 2>/dev/null \
-                 | grep -oE 'ololo-dev/app@[0-9a-f]{40}' | head -1 | cut -d@ -f2 || true)
+                 | grep -oE 'ololo-dev/ololo@[0-9a-f]{40}' | head -1 | cut -d@ -f2 || true)
           if [ -n "$prev" ] && git cat-file -e "$prev" 2>/dev/null; then
             range="$prev..HEAD"
           else
-            range="HEAD~20..HEAD"
+            range="HEAD~5..HEAD"
           fi
-          log=$(git log --no-merges --pretty='- %s (%h)' "$range" -- ololo agent-tokens arena-core Cargo.toml Cargo.lock | head -40)
-          [ -z "$log" ] && log="- Maintenance rebuild (no CLI-facing commits detected)"
+          log=$(git log --no-merges --pretty='- %s (%h)' "$range" | head -40)
+          [ -z "$log" ] && log="- Maintenance rebuild"
           {
             echo "changes<<CHANGES_EOF"
             echo "$log"
             echo "CHANGES_EOF"
           } >> "$GITHUB_OUTPUT"
 
-  build:
+  build-cli:
     needs: version
     strategy:
       fail-fast: false
@@ -85,12 +81,7 @@ jobs:
             artifact: ololo-windows-x86_64.zip
     runs-on: ${{ matrix.os }}
     steps:
-      - name: Checkout app source
-        uses: actions/checkout@v4
-        with:
-          repository: ololo-dev/app
-          token: ${{ secrets.APP_REPO_TOKEN }}
-          ref: ${{ env.APP_REF }}
+      - uses: actions/checkout@v4
 
       - name: Install Rust
         run: rustup toolchain install stable --profile minimal && rustup default stable && rustup target add ${{ matrix.target }}
@@ -118,7 +109,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: [version, build]
+    needs: [version, build-cli]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -134,53 +125,60 @@ jobs:
           tag_name: v${{ needs.version.outputs.version }}
           name: ololo v${{ needs.version.outputs.version }}
           body: |
-            Automated build of the ololo CLI.
+            Automated build of the ololo CLI and the platform container images.
 
             ### Changes
             ${{ needs.version.outputs.changes }}
 
-            Source: ololo-dev/app@${{ needs.version.outputs.app_sha }}
+            ### Containers
+            `ghcr.io/ololo-dev/ololo-server`, `ghcr.io/ololo-dev/ololo-game-server`,
+            `ghcr.io/ololo-dev/ololo-frontend` — `:latest` plus a `sha-<commit>`
+            tag per build.
+
+            Source: ololo-dev/ololo@${{ needs.version.outputs.sha }}
           files: dist/*
           make_latest: true
 
-  changelog:
-    needs: [version, release]
+  images:
+    if: github.repository == 'ololo-dev/ololo'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: server
+            dockerfile: server/Dockerfile
+          - name: game-server
+            dockerfile: game-server/Dockerfile
+          - name: frontend
+            dockerfile: frontend/Dockerfile
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      packages: write
+      contents: read
     steps:
       - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
         with:
-          ref: main
-
-      - name: Prepend changelog entry
-        env:
-          VERSION: ${{ needs.version.outputs.version }}
-          APP_SHA: ${{ needs.version.outputs.app_sha }}
-          CHANGES: ${{ needs.version.outputs.changes }}
-        run: |
-          today=$(date -u +%Y-%m-%d)
-          {
-            echo "## [${VERSION}] — ${today} (\`app@${APP_SHA:0:7}\`)"
-            echo
-            printf '%s\n' "$CHANGES"
-            echo
-          } > /tmp/entry.md
-          if [ ! -f CHANGELOG.md ]; then
-            printf '# Changelog\n\nAll notable changes to the ololo CLI. Entries are generated\nautomatically from the source tree on every release build.\n\n' > CHANGELOG.md
-          fi
-          # Insert the new entry before the first existing "## " heading.
-          awk '
-            !inserted && /^## / { while ((getline line < "/tmp/entry.md") > 0) print line; inserted=1 }
-            { print }
-            END { if (!inserted) while ((getline line < "/tmp/entry.md") > 0) print line }
-          ' CHANGELOG.md > CHANGELOG.new && mv CHANGELOG.new CHANGELOG.md
-
-      - name: Commit changelog
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add CHANGELOG.md
-          git diff --cached --quiet && exit 0
-          git commit -m "changelog: v${{ needs.version.outputs.version }} build from app@${{ needs.version.outputs.app_sha }}"
-          git push origin main
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/ololo-${{ matrix.name }}
+          tags: |
+            type=raw,value=latest
+            type=sha
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}

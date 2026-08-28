@@ -1,0 +1,4 @@
+{"version":"v1","kind":"Prompt","data":{"message_id":"m1","content":[{"kind":"text","data":"implement the thing"}],"meta":{"timestamp":1783098108}}}
+{"version":"v1","kind":"AssistantMessage","data":{"message_id":"m2","content":[{"kind":"text","data":"ok"},{"kind":"toolUse","data":{"toolUseId":"t1","name":"read","input":{"operations":[{"mode":"Directory","path":"."}]}}}]}}
+{"version":"v1","kind":"ToolResults","data":{"message_id":"m3","content":[{"kind":"toolResult","data":{}}]}}
+{"version":"v1","kind":"AssistantMessage","data":{"message_id":"m4","content":[{"kind":"toolUse","data":{"toolUseId":"t2","name":"shell","input":{"command":"ls"}}},{"kind":"toolUse","data":{"toolUseId":"t3","name":"read","input":{"operations":[{"mode":"Line","path":"/tmp/proj/.agents/skills/omerta/SKILL.md"}]}}}]}}

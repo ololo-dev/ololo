@@ -1,0 +1,56 @@
+@import "@fontsource/raleway/400.css";
+@import "@fontsource/raleway/600.css";
+@import "@fontsource/raleway/700.css";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /* The Zeplin mockups set every text layer in Raleway — one family for
+     body and headings alike, so everything inherits from body. */
+  body {
+    font-family: "Raleway", sans-serif;
+    color: #363636;
+  }
+}
+
+@layer components {
+  /* Shared typography for the legal pages (/terms, /privacy, /refund-policy). */
+  .legal h1 {
+    font-family: theme(fontFamily.heading);
+    font-size: 2.1rem;
+    font-weight: 700;
+    color: theme(colors.brand.text);
+  }
+  .legal .meta {
+    margin-top: 0.5rem;
+    color: theme(colors.brand.muted);
+    font-size: 0.9rem;
+  }
+  .legal h2 {
+    margin-top: 2rem;
+    font-family: theme(fontFamily.heading);
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: theme(colors.brand.text);
+  }
+  .legal p {
+    margin-top: 0.75rem;
+    line-height: 1.65;
+    color: theme(colors.brand.text);
+  }
+  .legal ul {
+    margin-top: 0.75rem;
+    padding-left: 1.4rem;
+    list-style: disc;
+    color: theme(colors.brand.text);
+  }
+  .legal li {
+    margin-top: 0.4rem;
+    line-height: 1.6;
+  }
+  .legal a {
+    color: theme(colors.brand.blue);
+    text-decoration: underline;
+  }
+}

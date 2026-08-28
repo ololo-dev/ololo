@@ -1,0 +1,13 @@
+Hello,
+
+Thank you for creating your ololo.dev account. Please verify your email
+address to complete your registration.
+
+Verify your email address:
+{{VERIFY_URL}}
+
+This link expires in 24 hours. If you did not create an ololo.dev account,
+you can safely ignore this email.
+
+──────────────────────────────────────
+ololo.dev — https://ololo.dev

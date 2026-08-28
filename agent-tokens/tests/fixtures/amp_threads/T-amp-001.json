@@ -1,0 +1,39 @@
+{
+  "id": "T-amp-001",
+  "created": 1781100000000,
+  "messages": [
+    {
+      "role": "user",
+      "content": [{ "type": "text", "text": "fix the bug" }]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        { "type": "text", "text": "on it" },
+        { "type": "tool_use", "name": "Bash", "input": { "cmd": "ls" } }
+      ],
+      "usage": {
+        "messageId": 1,
+        "model": "claude-sonnet-4.6",
+        "inputTokens": 900,
+        "outputTokens": 130,
+        "cacheReadInputTokens": 400,
+        "cacheCreationInputTokens": 60,
+        "credits": 0.12
+      }
+    },
+    {
+      "role": "assistant",
+      "content": [{ "type": "text", "text": "done" }],
+      "usage": {
+        "messageId": 2,
+        "model": "claude-sonnet-4.6",
+        "inputTokens": 1100,
+        "outputTokens": 70,
+        "cacheReadInputTokens": 800,
+        "cacheCreationInputTokens": 0,
+        "credits": 0.08
+      }
+    }
+  ]
+}

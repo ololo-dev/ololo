@@ -1,0 +1,43 @@
+[package]
+name = "arena-core"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+authors.workspace = true
+
+[dependencies]
+sea-orm = { version = "1.0.0", features = ["sqlx-sqlite", "sqlx-postgres", "runtime-tokio-rustls", "macros"] }
+serde = { version = "1.0.203", features = ["derive"] }
+serde_json = "1.0.117"
+uuid = { version = "1.10", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2.0"
+rand = "0.8"
+jsonwebtoken = { version = "10.3.0", default-features = false, features = ["rust_crypto"] }
+sha2 = "0.10.9"
+hex = "0.4"
+aes-gcm = "0.10.3"
+hkdf = "0.12.4"
+subtle = "2.6.1"
+shlex = "1"
+# The task DSL's `yaml probe` fence is parsed where the DSL is parsed (both
+# server seed and game-server materialization go through task_template).
+# 0.9.34 is the final stable release; same pin as server/Cargo.toml.
+serde_yaml = "0.9.34"
+minijinja = { version = "2.20.0", default-features = false, features = ["builtins", "serde"] }
+boa_engine = "0.21"
+tracing = "0.1.40"
+async-trait = "0.1"
+# WP-005: judges-exec deps. Versions kept compatible with server/Cargo.toml.
+rig-core = "0.36.0"
+tokio = { version = "1.38.0", features = ["time", "rt", "process"] }
+which = "6"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+migration = { path = "../server/migration" }
+sea-orm-migration = { version = "1.0.0", features = ["runtime-tokio-rustls", "sqlx-sqlite"] }
+tokio = { version = "1.38.0", features = ["macros", "rt-multi-thread"] }
+tempfile = "3"

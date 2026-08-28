@@ -1,0 +1,8 @@
+{"type":"session.start","data":{"sessionId":"copilot-session-001","version":1,"producer":"copilot-agent","copilotVersion":"1.0.51","startTime":"2026-05-22T20:25:26.119Z","selectedModel":"kimi-k2.5:cloud","context":{"cwd":"/tmp/proj","gitRoot":"/tmp/proj","branch":"main"}},"id":"e1","timestamp":"2026-05-22T20:25:26.119Z"}
+{"type":"session.model_change","data":{"previousModel":"kimi-k2.5:cloud","newModel":"gpt-5.4","reasoningEffort":null},"id":"e2","timestamp":"2026-05-22T20:25:27.312Z","parentId":"e1"}
+{"type":"user.message","data":{"content":"how does this repo work?"},"id":"e3","timestamp":"2026-05-22T20:25:28.000Z"}
+{"type":"assistant.message","data":{"messageId":"m1","model":"gpt-5.4","content":"","toolRequests":[{"toolCallId":"functions.view:0","name":"view","arguments":{"path":"/tmp/proj"}}]},"id":"e4","timestamp":"2026-05-22T20:25:30.000Z"}
+{"type":"tool.execution_start","data":{"toolCallId":"functions.view:0","toolName":"view","arguments":{"path":"/tmp/proj"},"turnId":"0"},"id":"e5","timestamp":"2026-05-22T20:25:31.000Z"}
+{"type":"tool.execution_start","data":{"toolCallId":"functions.view:1","toolName":"view","arguments":{"path":"/tmp/proj/skills/using-gangsta/SKILL.md"},"turnId":"0"},"id":"e6","timestamp":"2026-05-22T20:25:32.000Z"}
+{"type":"assistant.message","data":{"messageId":"m2","model":"gpt-5.4","content":"It is a repo."},"id":"e7","timestamp":"2026-05-22T20:25:35.000Z"}
+{"type":"session.shutdown","data":{},"id":"e8","timestamp":"2026-05-22T20:25:40.000Z"}

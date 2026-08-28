@@ -1,0 +1,82 @@
+//! Single integration-test binary for `server`.
+//!
+//! Every module here used to be its own `tests/*.rs` target — ~74
+//! separate binaries each linking the full dependency stack, which dominated
+//! CI compile time. One binary links once; nextest still runs the tests in
+//! parallel (one process per test).
+
+mod activity_event_query;
+mod adaptation_command_policy;
+mod admin_player_metadata_get;
+mod admin_player_metadata_notfound;
+mod admin_sessions_list;
+mod admin_ws;
+mod agents_delete_edge;
+mod agents_register_list;
+mod auth_jwt;
+mod auth_login_flow;
+mod auth_password;
+mod auth_turnstile;
+mod campaign_parts;
+mod categories_rename;
+mod cli_auth_post_auth;
+mod common;
+mod email_admin;
+mod email_auth;
+mod email_magic_link;
+mod email_password_reset;
+mod email_settings;
+mod git_push_flow;
+mod join_code_join;
+mod join_code_regenerate;
+mod judge_runs_api;
+mod judge_seed_defs;
+mod judge_usage_api;
+mod judges_api;
+mod judges_usage_api;
+mod llm_failover;
+mod llm_pools_api;
+mod llm_providers_api;
+mod llm_telemetry_api;
+mod members_crud;
+mod migration_sqlite_file;
+mod player_artifacts_authz;
+mod player_memory_api;
+mod player_page_admin_access;
+mod player_snapshot_score_fallback;
+mod project_ai_test;
+mod project_judges_top_players;
+mod project_seed_defs;
+mod project_session_duration;
+mod project_session_duration_api;
+mod projects_admin_points;
+mod projects_categories_settings;
+mod projects_create_list_get;
+mod projects_patch_delete;
+mod projects_points_fields;
+mod projects_slug_lookup;
+mod public_active_sessions;
+mod public_judges;
+mod resolve_join_code;
+mod seed_real_judges;
+mod session_player_metadata_patch;
+mod session_player_metadata_validation;
+mod session_report_api;
+mod session_snapshot_score_history;
+mod session_ws;
+mod sessions_by_code;
+mod sessions_crud;
+mod sessions_list_completion;
+mod sessions_pause_resume_cancel;
+mod settings_api;
+mod task_judges_attach_list;
+mod task_judges_detach;
+mod task_preview_api;
+mod task_stats_flow;
+mod tasks_create_list_get;
+mod tasks_patch_delete_reorder;
+mod tasks_session_tags;
+mod zmq_judge_score_refresh;
+mod zmq_project_observer;
+mod zmq_roundtrip;
+mod zmq_session_report_ready;

@@ -1,0 +1,23 @@
+[package]
+name = "migration"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+authors.workspace = true
+
+[[bin]]
+name = "migration"
+path = "src/main.rs"
+
+[lib]
+name = "migration"
+path = "src/lib.rs"
+
+[dependencies]
+async-std = { version = "1.12.0", features = ["attributes", "tokio1"] }
+rand = "0.8"
+sea-orm-migration = { version = "1.0.0", features = ["runtime-tokio-rustls", "sqlx-sqlite", "sqlx-postgres"] }
+
+[dev-dependencies]
+tokio = { version = "1.38", features = ["macros", "rt-multi-thread"] }
+sea-orm = { version = "1.0.0", features = ["sqlx-sqlite", "sqlx-postgres", "runtime-tokio-rustls"] }

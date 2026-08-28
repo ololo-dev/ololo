@@ -1,0 +1,50 @@
+[package]
+name = "ololo"
+version = "0.19.7"
+edition = "2024"
+license = "Apache-2.0"
+authors.workspace = true
+
+[[bin]]
+name = "ololo"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "io-util", "signal", "process"] }
+clap = { version = "4", features = ["derive", "env"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+keyring = "3"
+toml = "0.8"
+open = "5"
+anyhow = "1"
+thiserror = "2"
+dotenvy = "0.15"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["rustls-tls-webpki-roots", "connect"] }
+futures-util = "0.3"
+sha2 = "0.10"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+machine-uid = "0.6"
+which = "6"
+uuid = { version = "1", features = ["v4", "rng", "serde"] }
+hex = "0.4"
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+ratatui = "0.30"
+pulldown-cmark = { version = "0.13.4", default-features = false }
+crossterm = { version = "0.29", features = ["event-stream"] }
+portable-pty = "0.9"
+vt100 = "0.16"
+tracing-appender = "0.2"
+dirs = "5"
+agent-tokens = { path = "../agent-tokens" }
+gix = { version = "0.85", features = ["tree-editor"] }
+arena-core = { path = "../arena-core" }
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.31", default-features = false, features = ["signal", "process"] }
+
+[dev-dependencies]
+tempfile = "3"

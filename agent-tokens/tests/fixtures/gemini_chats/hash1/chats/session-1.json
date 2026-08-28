@@ -1,0 +1,47 @@
+{
+  "sessionId": "gemini-session-001",
+  "projectHash": "hash1",
+  "startTime": "2026-06-10T09:00:00.000Z",
+  "lastUpdated": "2026-06-10T09:05:00.000Z",
+  "messages": [
+    {
+      "id": "m1",
+      "type": "user",
+      "timestamp": "2026-06-10T09:00:01.000Z",
+      "content": "hello"
+    },
+    {
+      "id": "m2",
+      "type": "gemini",
+      "model": "gemini-2.5-pro",
+      "timestamp": "2026-06-10T09:00:10.000Z",
+      "content": "hi",
+      "tokens": {
+        "input": 1000,
+        "output": 200,
+        "cached": 300,
+        "thoughts": 50,
+        "tool": 0,
+        "total": 1250
+      },
+      "toolCalls": [
+        { "name": "run_shell_command", "args": { "command": "ls" } }
+      ]
+    },
+    {
+      "id": "m3",
+      "type": "gemini",
+      "model": "gemini-2.5-pro",
+      "timestamp": "2026-06-10T09:04:00.000Z",
+      "content": "done",
+      "tokens": {
+        "input": 2000,
+        "output": 100,
+        "cached": 1500,
+        "thoughts": 0,
+        "tool": 0,
+        "total": 2100
+      }
+    }
+  ]
+}

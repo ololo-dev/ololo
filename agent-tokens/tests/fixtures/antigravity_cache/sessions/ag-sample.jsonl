@@ -1,0 +1,9 @@
+{"type":"session_meta","sessionId":"ag-1","modelId":"claude-sonnet-4.6"}
+this line is junk, not JSON
+{"type":"usage","sessionId":"ag-1","timestamp":1781000000000,"input":100,"output":20,"cacheRead":50,"cacheWrite":5,"reasoning":10,"responseId":"r1"}
+{"type":"usage","sessionId":"ag-1","timestamp":1781000060000,"input":200,"output":30,"cacheRead":0,"cacheWrite":0,"reasoning":0,"modelId":"gemini-3-pro","responseId":"r2"}
+{"type":"usage","sessionId":"ag-1","timestamp":1781000060000,"input":999,"output":999,"responseId":"r2"}
+{"type":"usage","sessionId":"ag-2","timestamp":1781000120000,"input":10,"output":5}
+{"type":"other","ignored":true}
+{"type":"usage","sessionId":"ag-zero","timestamp":1781000200000,"input":0,"output":0}
+{"type":"usage","sessionId":"ag-nots","input":10,"output":5}

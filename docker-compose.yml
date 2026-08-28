@@ -1,0 +1,269 @@
+# Arena — production deployment for Dokploy (Compose deployment).
+#
+# The app services run PRE-BUILT images published to GHCR by the release
+# workflow (.github/workflows/release.yml, run on every push to main of the
+# public repository): ghcr.io/ololo-dev/ololo-{server,game-server,frontend},
+# public packages — no registry auth needed to pull.
+#
+# Pin or redirect via the environment (Dokploy's Environment tab or a .env):
+#   IMAGE_TAG        image tag to run (default: latest; e.g. sha-<commit>)
+#   IMAGE_REGISTRY   registry + owner prefix (default: ghcr.io/ololo-dev)
+#   IMAGE_PREFIX     image basename prefix (default: ololo)
+# To build from source instead, use docker-compose.source.yml.
+#
+# Dokploy handles routing/TLS via its UI — no Traefik labels here.
+# The SvelteKit frontend makes same-origin requests, so on the app host you
+# must configure path-based routing in Dokploy:
+#
+#   app.example.com  /                         -> frontend  (port 3000)
+#   app.example.com  /api /auth /git /health   -> server    (port 8080)
+#   app.example.com  /ws/observer /ws/player /ws/cli-auth
+#                    /ws/project /ws/admin     -> server    (port 8080)
+#   app.example.com  /ws/s/<code>/observe      -> server    (port 8080)
+#   app.example.com  /ws/s/<code>              -> game-server (port 8081)
+#   app.example.com  /ws/player/agent          -> game-server (port 8081)
+#   api.example.com  (optional, all paths)     -> server    (port 8080)
+#   gs.example.com   (optional, all paths)     -> game-server (port 8081)
+#
+# Set these in Dokploy's "Environment" (or a .env next to this file):
+#   APP_DOMAIN, API_DOMAIN, GS_DOMAIN
+#   DATABASE_URL         (optional; postgres:// URL — defaults to shared SQLite)
+#   JWT_SIGNING_KEY      (>=32 random bytes: openssl rand -hex 32)
+#   ARENA_FRONTEND_ORIGINS (defaults to https://$APP_DOMAIN)
+#   GAME_SERVER_ID       (stable UUID; regenerate once: uuidgen | tr A-Z a-z)
+#
+# Ollama is a shared external service (ollama.ololo.dev, hosted on the dev
+# host), not part of this stack. Point OLLAMA_URL at it per environment and
+# pull a judge model there once:
+#   docker exec ollama-shared ollama pull llama3.2   (or any small model)
+
+# Both app services must point at the SAME database. Default is a SQLite file
+# on the shared volume; set DATABASE_URL in Dokploy's Environment to a
+# postgres:// URL (e.g. a Dokploy-managed Postgres service reachable on the
+# docker network) to run on PostgreSQL. Never commit real credentials here.
+x-shared-db: &shared-db "${DATABASE_URL:-sqlite:///data/arena.db?mode=rwc}"
+
+services:
+  server:
+    image: "${IMAGE_REGISTRY:-ghcr.io/ololo-dev}/${IMAGE_PREFIX:-ololo}-server:${IMAGE_TAG:-latest}"
+    # Without this, `compose up` keeps whatever :latest digest is already on the
+    # host — a release redeploy silently reruns the OLD images (compose's
+    # default pull policy is "missing"). Always check the registry.
+    pull_policy: always
+    restart: unless-stopped
+    # A second stack (dev) also runs a service named `server` on the shared
+    # dokploy-network, so a bare `http://server:8080` from this frontend would
+    # round-robin between the two servers over Docker DNS — and the other server
+    # rejects this stack's JWTs. Address the API through a stack-unique alias.
+    networks:
+      dokploy-network:
+      default:
+        aliases:
+          - prod-internal-server
+    environment:
+      DATABASE_URL: *shared-db
+      SERVER_PORT: "8080"
+      JWT_SIGNING_KEY: "${JWT_SIGNING_KEY:?set JWT_SIGNING_KEY (>=32 bytes)}"
+      ARENA_FRONTEND_ORIGINS: "${ARENA_FRONTEND_ORIGINS:-https://${APP_DOMAIN:-app.example.com}}"
+      ARENA_ACCESS_TOKEN_TTL_SECONDS: "${ARENA_ACCESS_TOKEN_TTL_SECONDS:-900}"
+      ARENA_REFRESH_TOKEN_TTL_DAYS: "${ARENA_REFRESH_TOKEN_TTL_DAYS:-30}"
+      ARENA_PROFILE_RATE_LIMIT_RPS: "${ARENA_PROFILE_RATE_LIMIT_RPS:-20}"
+      # Shared Ollama (see ollama.ololo.dev on the dev host). Each stack sets
+      # OLLAMA_URL in its Dokploy environment: prod/chat use the HTTPS domain,
+      # the dev stack (co-located) uses the internal http://ollama-shared:11434.
+      OLLAMA_URL: "${OLLAMA_URL:-https://ollama.ololo.dev}"
+      AI_PROVIDER: "${AI_PROVIDER:-ollama}"
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+      OPENCODE_API_KEY: "${OPENCODE_API_KEY:-}"
+      PUBLIC_APP_URL: "https://${APP_DOMAIN:-app.example.com}"
+      # Transactional email: "ses" (AWS SDK default credential chain) or
+      # "cloudflare" (Email Service REST API). app_settings values set via
+      # the admin UI take precedence.
+      EMAIL_PROVIDER: "${EMAIL_PROVIDER:-ses}"
+      AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID:-}"
+      AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY:-}"
+      AWS_DEFAULT_REGION: "${AWS_DEFAULT_REGION:-}"
+      CLOUDFLARE_ACCOUNT_ID: "${CLOUDFLARE_ACCOUNT_ID:-}"
+      CLOUDFLARE_API_TOKEN: "${CLOUDFLARE_API_TOKEN:-}"
+      EMAIL_FROM_ADDRESS: "${EMAIL_FROM_ADDRESS:-}"
+      IMAGEKIT_PUBLIC_KEY: "${IMAGEKIT_PUBLIC_KEY:-}"
+      IMAGEKIT_PRIVATE_KEY: "${IMAGEKIT_PRIVATE_KEY:-}"
+      IMAGEKIT_URL_ENDPOINT: "${IMAGEKIT_URL_ENDPOINT:-}"
+      ARENA_PUBLIC_API_URL: "${ARENA_PUBLIC_API_URL:-}"
+      TURNSTILE_ENABLED: "${TURNSTILE_ENABLED:-false}"
+      TURNSTILE_SITEKEY: "${TURNSTILE_SITEKEY:-}"
+      TURNSTILE_SECRET: "${TURNSTILE_SECRET:-}"
+      # Seed content baked into the server image (see server/Dockerfile).
+      ARENA_PROJECTS_DIR: "/app/projects"
+      ARENA_JUDGES_DIR: "/app/judges"
+      # Per-player bare repos need a persistent volume; the default
+      # (~/.local/share/ololo/repos) is wiped on every redeploy.
+      OLOLO_GIT_REPOS_DIR: "/repos"
+      ARENA_LOG_FORMAT: "${ARENA_LOG_FORMAT:-json}"
+    volumes:
+      - arena-data:/data
+      - git-repos:/repos
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  game-server:
+    image: "${IMAGE_REGISTRY:-ghcr.io/ololo-dev}/${IMAGE_PREFIX:-ololo}-game-server:${IMAGE_TAG:-latest}"
+    pull_policy: always
+    restart: unless-stopped
+    ports:
+      - 8081
+    # Same shared-network collision as `server`: bind/advertise ZMQ on a
+    # stack-unique alias so this server reaches its own game-server.
+    networks:
+      dokploy-network:
+      default:
+        aliases:
+          - prod-internal-game-server
+    environment:
+      DATABASE_URL: *shared-db
+      GAME_SERVER_PORT: "8081"
+      GAME_SERVER_ID: "${GAME_SERVER_ID:-550e8400-e29b-41d4-a716-446655440000}"
+      GAME_SERVER_ADVERTISE_URL: "wss://${GS_DOMAIN:-gs.example.com}"
+      # Bind on a stack-unique alias so the stored zmq_url is also the address
+      # this stack's `server` connects to (and not the other stack's).
+      GAME_SERVER_ZMQ_BIND_ADDR: "tcp://prod-internal-game-server:6000"
+      GAME_SERVER_CAPACITY: "${GAME_SERVER_CAPACITY:-64}"
+      ARENA_LOBBY_TIMER_SECS: "${ARENA_LOBBY_TIMER_SECS:-60}"
+      ARENA_JUDGE_MAX_CONCURRENT: "${ARENA_JUDGE_MAX_CONCURRENT:-8}"
+      ARENA_RESTART_STAGGER_MS: "${ARENA_RESTART_STAGGER_MS:-50}"
+      JWT_SIGNING_KEY: "${JWT_SIGNING_KEY:?set JWT_SIGNING_KEY (>=32 bytes)}"
+      # Shared Ollama (see ollama.ololo.dev on the dev host). Each stack sets
+      # OLLAMA_URL in its Dokploy environment: prod/chat use the HTTPS domain,
+      # the dev stack (co-located) uses the internal http://ollama-shared:11434.
+      OLLAMA_URL: "${OLLAMA_URL:-https://ollama.ololo.dev}"
+      AI_PROVIDER: "${AI_PROVIDER:-ollama}"
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+      OPENCODE_API_KEY: "${OPENCODE_API_KEY:-}"
+      ARENA_LOG_FORMAT: "${ARENA_LOG_FORMAT:-json}"
+      # Judges read the per-player repos the server receives pushes into —
+      # both services must see the same volume at the same path.
+      OLOLO_GIT_REPOS_DIR: "/repos"
+      # On-disk judge run-log store ({join_code}/{username}/{task_id}.json).
+      # Needs a persistent volume or telemetry files reset on every redeploy.
+      ARENA_JUDGE_LOG_DIR: "/judge-logs"
+      # Per-player session event logs ({session_id}/{player_id}.jsonl) —
+      # the admin event-log API proxies these files; same persistence
+      # caveat as judge logs.
+      ARENA_SESSION_LOG_DIR: "/session-logs"
+    # Execution judges run committed player code under `bwrap`
+    # (arena_core::sandbox). Getting bwrap to work inside a container takes all
+    # three of these.
+    #
+    # seccomp/apparmor unconfined alone was not enough: the sandbox canary
+    # reported `bwrap: Can't mount proc on /newroot/proc: Operation not
+    # permitted`. `--unshare-all` implies `--unshare-user-try`, which SILENTLY
+    # continues when user-namespace creation is denied — so bwrap ran with the
+    # container's own (unprivileged) capabilities and could not mount procfs,
+    # /dev or the scratch tmpfs. SYS_ADMIN is what lets those mounts happen.
+    #
+    # Tradeoff, stated plainly: this relaxes the *host's* confinement of the
+    # game-server container — the process holding JWT_SIGNING_KEY and the
+    # database — in order to isolate untrusted player code from it. Escaping
+    # this container is meaningfully easier than escaping a default one.
+    # Dropping all three is a legitimate choice: the execution judge then
+    # refuses to score instead of penalizing players
+    # (arena_core::sandbox::self_check), so golf results simply go unverified.
+    #
+    # After any change here, check the game-server boot log for
+    # "execution-judge sandbox is NOT functional", or re-run a golf-verify
+    # judge and read `judge_results.error`.
+    security_opt:
+      - seccomp:unconfined
+      - apparmor:unconfined
+      # Docker masks paths inside /proc (/proc/kcore, /proc/keys, …) with bind
+      # mounts. The kernel refuses to mount a fresh procfs over those locked
+      # submounts, which is why SYS_ADMIN alone did not clear
+      # "Can't mount proc on /newroot/proc". This unmasks them.
+      - systempaths=unconfined
+    cap_add:
+      - SYS_ADMIN
+    volumes:
+      - arena-data:/data
+      - git-repos:/repos
+      - judge-logs:/judge-logs
+      - session-logs:/session-logs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  frontend:
+    # PUBLIC_WS_URL is baked into this image at release time (see
+    # .github/workflows/release.yml, default wss://ololo.dev). Rebuild/retag via
+    # the release workflow to change it — it cannot be overridden at run time.
+    image: "${IMAGE_REGISTRY:-ghcr.io/ololo-dev}/${IMAGE_PREFIX:-ololo}-frontend:${IMAGE_TAG:-latest}"
+    pull_policy: always
+    restart: unless-stopped
+    ports:
+      - 3000
+    networks:
+      dokploy-network:
+      default:
+    environment:
+      ORIGIN: "https://${APP_DOMAIN:-app.example.com}"
+      # Server-side loads/actions reach the API directly (see handleFetch in
+      # frontend/src/hooks.server.ts); same-origin relative fetches would
+      # otherwise resolve against SvelteKit's own router and 404. Use a
+      # stack-unique alias (see the server service) so this never resolves the
+      # dev stack's `server` on the shared dokploy-network.
+      INTERNAL_API_ORIGIN: "http://prod-internal-server:8080"
+      PORT: "3000"
+      HOST: "0.0.0.0"
+      PROTOCOL_HEADER: "x-forwarded-proto"
+      ADDRESS_HEADER: "x-forwarded-for"
+    healthcheck:
+      # node:22-slim has no curl; use Node's built-in fetch.
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  # Web UI for the Postgres database. Not routed by default — to reach it,
+  # attach a domain in Dokploy (service: pgadmin, port 80) and point DNS at
+  # the host. Login uses PGADMIN_DEFAULT_EMAIL/PASSWORD from the environment;
+  # then register the DB server inside pgAdmin (host = your Postgres service name,
+  # port 5432). Saved server definitions persist on the pgadmin-data volume.
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    restart: unless-stopped
+    ports:
+      - 80
+    environment:
+      PGADMIN_DEFAULT_EMAIL: "${PGADMIN_DEFAULT_EMAIL:?set PGADMIN_DEFAULT_EMAIL}"
+      PGADMIN_DEFAULT_PASSWORD: "${PGADMIN_DEFAULT_PASSWORD:?set PGADMIN_DEFAULT_PASSWORD (long random secret)}"
+      # No outbound mail needed; silences postfix startup.
+      PGADMIN_DISABLE_POSTFIX: "true"
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:80/misc/ping')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+
+volumes:
+  arena-data:
+  git-repos:
+  judge-logs:
+  session-logs:
+  pgadmin-data:
+
+# Shared overlay network Dokploy puts the Postgres service (and every stack) on.
+# Declared external so the app services can attach explicitly and expose their
+# stack-unique internal aliases; Dokploy also injects it for domained services.
+networks:
+  dokploy-network:
+    external: true

@@ -118,11 +118,12 @@
   </div>
 
   <figure class="m-0">
+    <div class="overflow-x-auto">
     <svg
       viewBox="0 0 960 430"
       role="img"
       aria-label="One ololo session: a player starts it with 'ololo start weather-widget', rivals join with 'ololo join QW3RT', agents build, ololo runs live checks, AI judges review the work, and points land on a live leaderboard."
-      class="scene block h-auto w-full"
+      class="scene block h-auto w-full min-w-[760px]"
       class:phase-1={phase === 1}
       class:phase-2={phase === 2}
       class:phase-3={phase === 3}
@@ -206,7 +207,7 @@
         <circle cx="480" cy="200" r="56" fill="#ffffff" stroke="#0269fb" stroke-width="2" />
         <image href="/logo.svg" x="458" y="160" width="44" height="44" aria-hidden="true" />
         <text class="small" x="480" y="228" text-anchor="middle">weather-widget</text>
-        <g>
+        <g class="g-run">
           <rect x="440" y="122" width="80" height="19" rx="9.5" fill="#ffe8e5" />
           <circle cx="452" cy="131.5" r="3" fill="#fb341c" />
           <text x="484" y="135" text-anchor="middle" class="pill-running">RUNNING</text>
@@ -217,6 +218,8 @@
             <tspan class="chip-label">join code</tspan>
             <tspan class="chip-code">QW3RT</tspan>
           </text>
+        </g>
+        <g class="g-run">
           <rect x="488" y="268" width="94" height="20" rx="4" fill="#f2f5fa" />
           <text x="535" y="282" text-anchor="middle">
             <tspan class="chip-label">⏱</tspan>
@@ -229,9 +232,9 @@
 
       <!-- ===== judges (right top) ===== -->
       <g class="g-judges">
-        <rect class="card-shape" x="700" y="46" width="222" height="146" rx="8" />
+        <rect class="card-shape" x="700" y="46" width="222" height="160" rx="8" />
         <text class="label" x="716" y="72">AI judges</text>
-        <text class="small" x="716" y="88">they review — and explain why</text>
+        <text class="small" x="716" y="88">see how you build — and say why</text>
         <g class="judge-row jr1">
           <rect x="716" y="98" width="190" height="24" rx="12" fill="#dce9fc" />
           <text x="730" y="114" class="row-deep">✓ Correctness</text>
@@ -246,6 +249,9 @@
           <rect x="716" y="158" width="190" height="24" rx="12" fill="#dce9fc" />
           <text x="730" y="174" class="row-deep">★ Creativity</text>
           <text x="892" y="174" text-anchor="end" class="row-deep">+5</text>
+        </g>
+        <g class="judge-row jr4">
+          <text x="716" y="198" class="judge-quote">“tests first, steady progress”</text>
         </g>
       </g>
 
@@ -290,7 +296,7 @@
       <g class="task-fly">
         <animateMotion
           dur="2.2s"
-          begin="0.5s"
+          begin="0.75s"
           repeatCount="indefinite"
           path="M420,205 C348,218 322,248 246,258"
         />
@@ -300,7 +306,7 @@
       <g class="task-fly">
         <animateMotion
           dur="2.2s"
-          begin="1s"
+          begin="1.5s"
           repeatCount="indefinite"
           path="M420,220 C352,242 326,320 246,338"
         />
@@ -359,6 +365,7 @@
         <animateMotion dur="1.6s" repeatCount="indefinite" path="M540,222 C620,252 636,308 700,320" />
       </circle>
     </svg>
+    </div>
     <figcaption class="sr-only">
       One ololo session, animated: a player starts it with "ololo start weather-widget", rivals join
       with "ololo join QW3RT", agents build, ololo runs live checks, AI judges review the work, and
@@ -613,6 +620,13 @@
       opacity 0.55s ease,
       transform 0.55s ease;
   }
+  /* Judges and leaderboard stay as ghosts before their phase, so the scene
+     always reads complete — their phase lights them up instead of
+     materializing them out of nothing. */
+  .g-judges,
+  .g-board {
+    opacity: 0.22;
+  }
   .seen-1 .g-you,
   .seen-1 .g-hub {
     opacity: 1;
@@ -655,6 +669,23 @@
     opacity: 1;
   }
 
+  /* phase 1: session status lights up only after the commands are typed.
+     An animation (not a transition) so the loop wrap 5→1 re-hides it. */
+  .g-run {
+    opacity: 0;
+  }
+  .phase-1 .g-run {
+    animation: fadein 0.5s ease 2.4s forwards;
+  }
+  .seen-2 .g-run {
+    opacity: 1;
+  }
+  @keyframes fadein {
+    to {
+      opacity: 1;
+    }
+  }
+
   /* typed commands (phase 1) */
   .cmd-type {
     clip-path: inset(-2px 100% -2px 0);
@@ -690,8 +721,15 @@
   .phase-3 .pulse {
     animation: pulse 2.2s ease-out infinite;
   }
-  .pulse.p2 {
-    animation-delay: 1.1s !important;
+  .phase-3 .pulse.p2 {
+    animation-delay: 1.1s;
+  }
+  /* in phase 1 the pulse waits for the typed commands, like .g-run */
+  .phase-1 .pulse.p1 {
+    animation-delay: 2.4s;
+  }
+  .phase-1 .pulse.p2 {
+    animation-delay: 3.5s;
   }
   @keyframes pulse {
     0% {
@@ -810,6 +848,14 @@
   .phase-4 .jr3 {
     animation-delay: 1.4s;
   }
+  .phase-4 .jr4 {
+    animation-delay: 2.1s;
+  }
+  .judge-quote {
+    font-size: 9.5px;
+    font-style: italic;
+    fill: #6b7a90;
+  }
   .seen-5 .judge-row {
     opacity: 1;
   }
@@ -857,7 +903,8 @@
     .cmd-type,
     .code-line,
     .judge-row,
-    .board-row {
+    .board-row,
+    .g-run {
       animation: none !important;
     }
     .seen-5 .cmd-type {

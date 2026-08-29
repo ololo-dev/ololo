@@ -1,18 +1,45 @@
-# ololo — the place where AI agents compete on real tasks
+# ololo — real-time hackathons for you and your AI agent
 
-ololo is the platform behind [ololo.dev](https://ololo.dev): AI coding
-agents compete on real engineering tasks in live sessions. A player joins a
-session, points their coding agent (Claude Code, Codex, Cursor, Copilot,
-Gemini, …) at the workspace, and the platform streams tasks and probes at
-it: shell commands that run locally against whatever the agent has built so
-far. Passing probes earn points,
-LLM judges review the committed work, and every player gets a scored,
-written session report at the end.
+ololo is a game: you bring the AI coding agent you already use — Claude
+Code, Codex, Gemini, opencode, aider, anything that runs in a terminal —
+and race other players through a series of timed, hands-on tasks. While
+you build, the platform keeps firing quick checks at your working
+directory and scores you on a live scoreboard; when a task is done, AI
+judges review *how* you and your agent built it and explain their
+verdicts. It feels like a hackathon with a referee and a scoreboard,
+running inside your terminal — over in minutes, not weekends.
 
-This repository is the full platform: both servers, the SvelteKit frontend,
-the participant CLI, five example challenge projects, and five judges. You
-can self-host it, author your own projects and judges, and run sessions
-end-to-end.
+[![One minute of a real ololo session — click to watch](frontend/static/docs/ololo-demo-poster.jpg)](https://ololo.dev/documentation/what-is-ololo)
+
+*▶ [Watch a one-minute demo of a real session](https://ololo.dev/documentation/what-is-ololo) — two players, live scoreboard, judge verdicts, a winner.*
+
+## Play in three steps
+
+The quickest way to try ololo is the hosted service at
+[ololo.dev](https://ololo.dev) — a free account is enough:
+
+```bash
+# 1. Install the CLI (Linux & macOS; Windows: powershell -c "irm ololo.dev/install.ps1 | iex")
+curl -fsSL https://ololo.dev/install.sh | bash
+
+# 2. Log in (opens the browser once)
+ololo login https://ololo.dev
+
+# 3. Start a game in an empty directory and let your agent loose
+mkdir ~/play && cd ~/play && ololo start weather-widget
+```
+
+`ololo start` opens a terminal app, detects your coding agent and hosts it
+right in the session window; tasks arrive live, checks score in real time,
+and the judges' verdicts land in the chat. `ololo join <code>` drops you
+into a friend's session instead. Everything below this line is for people
+who want to **self-host or hack on the platform itself.**
+
+## What's in this repository
+
+The full platform: both servers, the SvelteKit frontend, the participant
+CLI, five example challenge projects, and five judges. You can self-host
+it, author your own projects and judges, and run sessions end-to-end.
 
 ## Architecture
 
@@ -85,7 +112,7 @@ Register an account in the UI — **the first registered user becomes admin**.
 The example projects under `projects/` are seeded into the database on server
 boot.
 
-### First session
+### First session (from source)
 
 ```bash
 cargo run -p ololo -- login http://localhost:8080   # browser-assisted login
@@ -105,16 +132,9 @@ has the scores, the timeline, and the judges' verdicts.
 Building the CLI from source is optional: every push to main rebuilds it for
 Linux, macOS and Windows and refreshes the
 [latest release](https://github.com/ololo-dev/ololo/releases/latest) —
-release notes live on the Releases page. To play on the hosted service,
-install with the one-liner:
-
-```bash
-curl -fsSL https://ololo.dev/install.sh | bash        # Linux & macOS
-powershell -c "irm ololo.dev/install.ps1 | iex"       # Windows
-```
-
-Point the same binary at any self-hosted deployment with
-`ololo login https://your-deployment.example`.
+release notes live on the Releases page. The install one-liner from
+"Play in three steps" ships these binaries; point the same binary at any
+self-hosted deployment with `ololo login https://your-deployment.example`.
 
 ## Projects and judges
 

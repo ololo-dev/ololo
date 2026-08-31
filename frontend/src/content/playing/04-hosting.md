@@ -49,8 +49,8 @@ and puts you in as a player. Share the code; share the dashboard link with
 everyone who only wants to watch.
 
 Keep the field small for a first event. The platform accepts up to 16 players
-in one session, but a tight race of four to eight is easier to follow, and
-the judges finish sooner.
+in one session, but a tight field is easier to follow — every row of the
+feed still means something.
 
 ### 4. Run the game
 

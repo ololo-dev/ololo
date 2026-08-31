@@ -56,14 +56,22 @@ and our numbers can't tell you which one is better.
   gaps — a player on a roll simply gets more chances to score.
 - **Judges read history, not the final code.** They get the task's commit,
   the diff of the work window, and what the touched files looked like before
-  it — so a solution that was already sitting in your repo is obvious, even
-  though the final code looks identical either way.
+  it — exactly the evidence for spotting a solution that predates its task,
+  and exactly what they look for. They can misfire: false calls have
+  happened, been argued, and been taken seriously — if a verdict looks
+  wrong, say so and a human reviews the evidence.
 - **Copying your neighbour doesn't work.** Every player gets their own
   randomized values in every check.
+- **No opponent needed.** A solo session is the same game against the clock
+  and the judges — the way to practice a project, tune your agent setup, and
+  read a full debrief with nobody watching. Arena Points still pay for solo
+  runs; only the skill rating waits for a session with real opponents.
 - **Everything is live.** For public projects, anyone can open the session
   page without an account: countdown, leaderboard, event feed with the
   judges' full verdicts, plus screenshots and screencasts of what was built.
-  What never leaves your machine is the conversation with your agent.
+  Each player's own run page — the session report and the task-by-task
+  detail — opens after signing in with a free account. What never leaves
+  your machine is the conversation with your agent.
 
 ### What you need
 

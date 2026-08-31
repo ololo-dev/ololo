@@ -96,6 +96,9 @@ export function getSessionByCode(code: string, opts: { fetch?: FetchLike } = {})
     project_name: string | null;
     project_slug: string | null;
     project_description: string | null;
+    /** Whether signed-in spectators may open a player's run page — mirrors
+        the snapshot endpoint's visibility rule. Absent on older servers. */
+    project_public?: boolean;
     created_at?: string;
     started_at?: string | null;
     finished_at?: string | null;

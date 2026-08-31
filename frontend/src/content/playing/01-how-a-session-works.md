@@ -50,8 +50,9 @@ answer, the more chances you get to earn.
 Every player gets their own randomized values inside those checks — the same
 question with different numbers — so a neighbour's answer is no use to you.
 
-Every check and its outcome is recorded, and you can replay the whole
-timeline on the session dashboard afterwards.
+Every check and its outcome is recorded, and the session dashboard keeps
+the whole timeline after the game — every check, score move and verdict,
+readable end to end.
 
 ### Snapshots: your code is part of the game
 

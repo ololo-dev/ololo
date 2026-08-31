@@ -92,7 +92,7 @@
       title: TITLES[5],
       html: false,
       text: arena
-        ? 'Points land on the live leaderboard. Every session levels up your skills.'
+        ? 'Points land on the live leaderboard. Every session ends with the judges telling you what to fix.'
         : 'Points land on the live leaderboard as checks pass and judges score — winner takes the round.',
     },
   ])

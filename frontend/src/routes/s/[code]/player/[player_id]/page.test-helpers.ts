@@ -34,6 +34,8 @@ export type TestData = {
   token: string | null;
   playerName: string;
   history?: PlayerHistoryResponse | null;
+  /** The server's 403 boundary: a spectator reads the run, not its diffs. */
+  inspectRestricted?: boolean;
   taskStats?: TaskStatsResponse | null;
   isAuthenticated?: boolean;
   isAdmin?: boolean;
@@ -123,6 +125,7 @@ export function renderPage(data: TestData) {
         allowProjectCreation: false,
         user: null,
         history: null,
+        inspectRestricted: false,
         taskStats: null,
         judgesSettling: false,
         judgeAvatars: {},

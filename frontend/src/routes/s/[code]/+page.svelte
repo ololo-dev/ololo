@@ -32,6 +32,10 @@
   const isOwner = $derived(data.user?.id != null && data.user.id === data.session.owner_id);
   const isAdmin = $derived(data.isAdmin ?? false);
   const canControl = $derived(isOwner || isAdmin);
+  // A signed-in spectator on a public project may open any player's run —
+  // the same rule the snapshot endpoint enforces. Anonymous visitors keep
+  // the dashboard; the run page would only bounce them to /login.
+  const canViewRuns = $derived(data.user != null && data.session.project_public === true);
 
   // ponytail: optimistic flag — disables all control buttons during any in-flight patch
   let controlBusy = $state(false);
@@ -613,6 +617,7 @@
             joinCode={data.session.join_code}
             {userPlayers}
             {isAdmin}
+            {canViewRuns}
             emptyMessage="Waiting for first results…"
           />
         </div>
@@ -707,6 +712,7 @@
             joinCode={data.session.join_code}
             userPlayers={effectiveUserPlayers}
             {isAdmin}
+            {canViewRuns}
             detailLabel="Report"
             emptyMessage="No results recorded."
           />

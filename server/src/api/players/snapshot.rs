@@ -40,14 +40,25 @@ pub async fn get_player_snapshot(
         .ok_or(PlayerError::NotFound)?;
     let player_id = player.id;
 
-    // Verify the player belongs to the authenticated user; admins may view
-    // any player's page.
+    // The run page is readable by any signed-in visitor when the project is
+    // public — the docs promise a spectator the report and the verdicts, and
+    // a share link is worthless if it dead-ends on Forbidden. What stays with
+    // the owner and admins is the inspection surface: diffs, repository
+    // files and session memory keep their own guards.
     if player.user_id_fk != Some(user_id)
         && !crate::auth::is_user_admin(&state.db, user_id)
             .await
             .map_err(|e| PlayerError::Internal(e.to_string()))?
     {
-        return Err(PlayerError::Forbidden);
+        let project_public = projects::Entity::find_by_id(session.project_id_fk)
+            .one(&state.db)
+            .await
+            .map_err(|e| PlayerError::Internal(e.to_string()))?
+            .map(|p| p.public)
+            .unwrap_or(false);
+        if !project_public {
+            return Err(PlayerError::Forbidden);
+        }
     }
 
     let last_seq = state

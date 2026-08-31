@@ -81,3 +81,51 @@ describe("player page view", () => {
     expect(screen.getByTestId("task-view-details").getAttribute("aria-pressed")).toBe("true");
   });
 });
+
+describe("the inspection boundary", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  const snapshot = makeSnapshot({
+    tasks: [
+      makeTaskSummary({
+        task_id: "task-1",
+        ordinal: 1,
+        scheduler_state: { state: "active", activated_at: null, deadline_at: null },
+      }),
+    ],
+    probes: [makeProbe({ resolved_at: "2026-08-02T10:00:00Z", state: "resolved" })],
+  });
+
+  it("Hides the Details view from a spectator", () => {
+    // inspectRestricted mirrors the server's 403 on the history endpoint:
+    // the run's owner and admins inspect, a signed-in spectator reads.
+    renderPage({
+      live: true,
+      snapshot,
+      token: "t",
+      playerName: "p",
+      inspectRestricted: true,
+    });
+    expect(screen.queryByTestId("task-view-details")).toBeNull();
+    expect(screen.getByTestId("task-view-chat")).not.toBeNull();
+  });
+
+  it("A remembered Details choice does not open another player's run on it", () => {
+    localStorage.setItem(`player:task-view:${snapshot.player_id}`, "details");
+    renderPage({
+      live: true,
+      snapshot,
+      token: "t",
+      playerName: "p",
+      inspectRestricted: true,
+    });
+    expect(screen.getByTestId("task-view-chat").getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("Keeps Details for the owner", () => {
+    renderPage({ live: true, snapshot, token: "t", playerName: "p" });
+    expect(screen.getByTestId("task-view-details")).not.toBeNull();
+  });
+});

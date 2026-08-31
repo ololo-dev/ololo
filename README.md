@@ -1,5 +1,8 @@
 # ololo — real-time hackathons for you and your AI agent
 
+[![Discord](https://img.shields.io/badge/discord-join%20the%20server-5865F2?logo=discord&logoColor=white)](https://discord.gg/TnD8WHWqKD)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+
 ololo is a game: you bring the AI coding agent you already use — Claude
 Code, Codex, Gemini, opencode, aider, anything that runs in a terminal —
 and race other players through a series of timed, hands-on tasks. While
@@ -254,6 +257,13 @@ reports. The hosted service additionally runs closed components that are
 not in this tree: payment/billing integrations, a global cross-session
 ladder with skill ratings and badges, and a larger private library of
 judges and challenge projects.
+
+## Community
+
+Questions, self-hosting help, project and judge authoring, or just looking
+for someone to race — the crowd lives on Discord:
+**[discord.gg/TnD8WHWqKD](https://discord.gg/TnD8WHWqKD)**. Bug reports and
+pull requests are welcome right here on GitHub.
 
 ## License
 

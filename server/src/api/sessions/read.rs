@@ -867,15 +867,17 @@ pub async fn get_by_code(
         .await
         .ok()
         .flatten();
-    let (project_id, project_name, project_slug, project_description) = match project {
-        Some(p) => (
-            Some(p.id.to_string()),
-            Some(p.name),
-            p.slug,
-            Some(p.description),
-        ),
-        None => (None, None, None, None),
-    };
+    let (project_id, project_name, project_slug, project_description, project_public) =
+        match project {
+            Some(p) => (
+                Some(p.id.to_string()),
+                Some(p.name),
+                p.slug,
+                Some(p.description),
+                p.public,
+            ),
+            None => (None, None, None, None, false),
+        };
     Json(serde_json::json!({
         "id": row.id,
         "join_code": row.join_code,
@@ -885,6 +887,9 @@ pub async fn get_by_code(
         "project_name": project_name,
         "project_slug": project_slug,
         "project_description": project_description,
+        // Whether signed-in spectators may open a player's run page — the
+        // same visibility rule the snapshot endpoint enforces.
+        "project_public": project_public,
         "created_at": row.created_at,
         "started_at": row.started_at,
         "finished_at": row.finished_at,

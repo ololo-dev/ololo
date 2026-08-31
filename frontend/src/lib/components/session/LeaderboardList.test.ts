@@ -56,6 +56,51 @@ describe("LeaderboardList", () => {
     expect(screen.queryByText("Completed")).toBeNull();
   });
   /**
+   * A signed-in spectator on a public project may open any player's run —
+   * the pill renders on the same rule the snapshot endpoint enforces, so
+   * the link exists exactly where the page behind it will answer.
+   */
+  it("offers the run link to spectators when canViewRuns is set", () => {
+    render(LeaderboardList, {
+      entries: [makeEntry({ display_name: "Rival" })],
+      joinCode: "ABC123",
+      userPlayers: [],
+      emptyMessage: "empty",
+      canViewRuns: true,
+    });
+    const link = screen.getByRole("link", { name: /Open Rival's run/ });
+    expect(link.getAttribute("href")).toBe("/s/ABC123/player/p1");
+  });
+
+  /**
+   * The card is 300px wide. With the status pill beside the name and a run
+   * link at the end of the row, "Andrey" rendered as "A…" on ololo.dev — the
+   * name is the one thing a leaderboard row exists to say, so it gets the
+   * line to itself and the status goes down with the agent.
+   */
+  it("keeps the name on its own line, with the status beside the agent", () => {
+    render(LeaderboardList, {
+      entries: [
+        makeEntry({
+          display_name: "Andrey",
+          agent_display_name: "opencode",
+          completion_status: "in_progress",
+        }),
+      ],
+      joinCode: "ABC123",
+      userPlayers: [],
+      emptyMessage: "empty",
+    });
+    const name = screen.getByText("Andrey");
+    expect(name.textContent?.trim()).toBe("Andrey");
+    expect(name.querySelector("span")).toBeNull();
+    const badgeLine = screen.getByText("In progress").closest("p");
+    expect(badgeLine).not.toBeNull();
+    expect(badgeLine!.textContent).toContain("opencode");
+    expect(badgeLine!.textContent).not.toContain("Andrey");
+  });
+
+  /**
    * The player run page — report, chat with the agent, task details, judge
    * verdicts — is reachable from nowhere else in the app. It used to hang off
    * a 14px icon at half opacity whose only explanation was a `title`.

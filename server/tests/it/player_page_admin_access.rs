@@ -1,7 +1,9 @@
 //! Admin access to player pages:
-//! admins may read any player's snapshot, history, and task-stats;
-//! non-admins stay owner-only, and stat reporting (POST) stays owner-only
-//! even for admins.
+//! admins may read any player's snapshot, history, and task-stats.
+//! The snapshot itself is readable by any signed-in visitor on a public
+//! project (the docs promise a spectator the report and the verdicts), but
+//! the inspection surface — history — stays owner-and-admin, and stat
+//! reporting (POST) stays owner-only even for admins.
 
 use axum::http::{Method, StatusCode};
 use server::build_router;
@@ -177,7 +179,7 @@ async fn admin_can_read_any_players_page() {
 }
 
 #[tokio::test]
-async fn non_admin_still_cannot_read_other_players_page() {
+async fn a_spectator_reads_the_run_but_not_its_inspection_surface() {
     let state = test_state().await;
     let app = build_router(state);
 
@@ -201,8 +203,22 @@ async fn non_admin_still_cannot_read_other_players_page() {
         ))
         .await
         .expect("other snapshot");
-    let (sc, _) = read_body_json(resp).await;
-    assert_eq!(sc, StatusCode::FORBIDDEN);
+    let (sc, body) = read_body_json(resp).await;
+    // Fixture projects are public (non-admin creators cannot make private
+    // ones), so a signed-in stranger reads the run page.
+    assert_eq!(sc, StatusCode::OK, "spectator snapshot: {body}");
+
+    let resp = app
+        .clone()
+        .oneshot(req_with_cookie(
+            Method::GET,
+            &format!("/api/sessions/{join_code}/players/{player_id}/history"),
+            &cookie_other,
+            None,
+        ))
+        .await
+        .expect("other history");
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 
     let resp = app
         .oneshot(req_with_cookie(

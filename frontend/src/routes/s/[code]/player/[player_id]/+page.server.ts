@@ -33,14 +33,20 @@ export const load: PageServerLoad = async ({ params, url, fetch, cookies }) => {
     throw error(500, "Failed to load player data");
   }
 
-  // Best-effort: git history load never blocks the page render.
+  // Best-effort: git history load never blocks the page render. A 403 is
+  // not a failure but a boundary: a signed-in spectator may read the run,
+  // while diffs and files stay with the player and admins — the page hides
+  // the inspection tabs instead of showing them broken.
   let history: PlayerHistoryResponse | null = null;
+  let inspectRestricted = false;
   try {
     const histResp = await fetch(
       `/api/sessions/${encodeURIComponent(params.code)}/players/${encodeURIComponent(params.player_id)}/history`,
     );
     if (histResp.ok) {
       history = (await histResp.json()) as PlayerHistoryResponse;
+    } else if (histResp.status === 403) {
+      inspectRestricted = true;
     }
   } catch {
     // non-fatal
@@ -110,6 +116,7 @@ export const load: PageServerLoad = async ({ params, url, fetch, cookies }) => {
     judgesSettling,
     snapshot,
     history,
+    inspectRestricted,
     taskStats,
     judgeAvatars,
     sessionId,

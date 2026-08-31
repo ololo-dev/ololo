@@ -103,7 +103,11 @@ async fn get_status(app: &axum::Router, uri: &str, cookie: &str) -> StatusCode {
 }
 
 #[tokio::test]
-async fn stranger_is_forbidden_on_both_endpoints() {
+async fn a_spectator_passes_authz_on_a_public_project() {
+    // Fixture projects are public (non-admin creators cannot make private
+    // ones), so a signed-in stranger clears authorization on both visual
+    // endpoints — screenshots and screencasts are the public face of a run.
+    // 404, not 403: the probe/file genuinely does not exist.
     let (app, code, player_id, cookies) = artifact_fixture().await;
     let probe_uri = format!(
         "/api/sessions/{code}/players/{player_id}/artifacts/{}",
@@ -111,14 +115,14 @@ async fn stranger_is_forbidden_on_both_endpoints() {
     );
     assert_eq!(
         get_status(&app, &probe_uri, &cookies.stranger).await,
-        StatusCode::FORBIDDEN,
-        "a stranger must never reach artifact lookups"
+        StatusCode::NOT_FOUND,
+        "a spectator is authorized on a public project"
     );
     let file_uri = format!("/api/sessions/{code}/players/{player_id}/repo-file?path=shot.png");
     assert_eq!(
         get_status(&app, &file_uri, &cookies.stranger).await,
-        StatusCode::FORBIDDEN,
-        "a stranger must never reach repo files"
+        StatusCode::NOT_FOUND,
+        "a spectator may fetch run images on a public project"
     );
 }
 

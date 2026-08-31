@@ -683,24 +683,34 @@
   const sessionReport = $derived(
     wsClient?.snapshot?.session_report ?? data.snapshot.session_report ?? null,
   )
+  // Details is the inspection view — probe commands, raw output — and it
+  // follows the same boundary the server already enforces on the history
+  // endpoint: the run's owner and admins see it, a spectator does not.
+  const canInspect = $derived(!data.inspectRestricted)
   const defaultView = $derived<TaskView>(
-    data.live ? 'chat' : sessionReport || data.judgesSettling ? 'report' : 'details',
+    data.live
+      ? 'chat'
+      : sessionReport || data.judgesSettling
+        ? 'report'
+        : canInspect
+          ? 'details'
+          : 'chat',
   )
-  const taskView = $derived<TaskView>(viewChoice ?? defaultView)
+  const taskView = $derived.by<TaskView>(() => {
+    const chosen = viewChoice ?? defaultView
+    // A remembered choice from someone's own run must not open another
+    // player's inspection view.
+    return chosen === 'details' && !canInspect ? defaultView : chosen
+  })
 
   // The report only makes sense once the session is over; while it runs the
   // toggle stays the two views it always was.
   const viewOptions = $derived(
-    data.live
-      ? [
-          { id: 'chat' as const, label: 'Chat' },
-          { id: 'details' as const, label: 'Details' },
-        ]
-      : [
-          { id: 'report' as const, label: 'Report' },
-          { id: 'chat' as const, label: 'Chat' },
-          { id: 'details' as const, label: 'Details' },
-        ],
+    [
+      ...(data.live ? [] : [{ id: 'report' as const, label: 'Report' }]),
+      { id: 'chat' as const, label: 'Chat' },
+      ...(canInspect ? [{ id: 'details' as const, label: 'Details' }] : []),
+    ],
   )
 
   function setTaskView(v: TaskView) {
@@ -790,9 +800,15 @@
     if (prev >= 0 && n > prev) wsClient?.refreshSnapshot()
   })
 
+  // A spectator reads the run — report, judges, stats — but the inspection
+  // surface (diffs, files, memory) belongs to the player and admins, so its
+  // tabs disappear rather than render broken. (Memory hides itself the same
+  // way: its endpoint answers 403 and memoryEnabled stays false.)
   const sectionTabs = $derived([
     { id: 'tasks' as const, label: 'Tasks', count: visibleTasks.length },
-    { id: 'changes' as const, label: 'Changes', count: commits.length },
+    ...(data.inspectRestricted
+      ? []
+      : [{ id: 'changes' as const, label: 'Changes', count: commits.length }]),
     { id: 'judges' as const, label: 'Judges', count: judgeCount },
     { id: 'stats' as const, label: 'Stats', count: taskStatsEntries.length },
     ...(memoryEnabled

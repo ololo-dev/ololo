@@ -44,6 +44,7 @@ mod player_artifacts_authz;
 mod player_memory_api;
 mod player_page_admin_access;
 mod player_snapshot_score_fallback;
+mod player_snapshot_visibility;
 mod project_ai_test;
 mod project_judges_top_players;
 mod project_seed_defs;

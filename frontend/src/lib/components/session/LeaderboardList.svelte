@@ -27,6 +27,7 @@
     userPlayers,
     emptyMessage,
     isAdmin = false,
+    canViewRuns = false,
     detailLabel = "Details",
   }: {
     entries: LeaderboardRow[];
@@ -34,6 +35,9 @@
     userPlayers: PlayerSummary[];
     emptyMessage: string;
     isAdmin?: boolean;
+    /** Signed-in spectators on a public project may open any player's run —
+        the same rule the snapshot endpoint enforces server-side. */
+    canViewRuns?: boolean;
     /** What the run link promises. A finished session leads with its report;
         while the game is on, the page is the live detail of the run. */
     detailLabel?: string;
@@ -58,7 +62,7 @@
         ? entry.player_id
         : (ownUserIdToPlayerId.get(entry.player_id) ?? null)}
       {@const profileHref = entry.username ? `/u/${entry.username}` : null}
-      {@const playerHref = ownPlayerId !== null || isAdmin
+      {@const playerHref = ownPlayerId !== null || isAdmin || canViewRuns
         ? `/s/${joinCode}/player/${encodeURIComponent(entry.username ?? ownPlayerId ?? entry.player_id)}`
         : null}
       <li>
@@ -86,18 +90,26 @@
               </span>
             {/if}
             <div class="min-w-0 flex-grow">
-              <p class="flex items-center gap-[6px] text-[13px] font-medium" style="color: #363636;">
-                <span class="truncate">{entry.display_name}</span>
-                {#if entry.completion_status}
-                  {@const badge = completionBadges[entry.completion_status]}
-                  <span
-                    class="shrink-0 whitespace-nowrap rounded-full px-[6px] py-[1px] text-[10px] font-semibold"
-                    style={badge.style}
-                  >{badge.label}</span>
-                {/if}
+              <!-- The name owns the first line. The card is 300px wide, and a
+                   status pill beside the name left "Andrey" rendering as "A…"
+                   once the row also carried a run link — so the status moves
+                   down to the agent's line, where nothing competes with it. -->
+              <p class="truncate text-[13px] font-medium" style="color: #363636;" title={entry.display_name}>
+                {entry.display_name}
               </p>
-              {#if entry.agent_display_name}
-                <p class="truncate text-[11px]" style="color: #8fb4ec;">{entry.agent_display_name}</p>
+              {#if entry.agent_display_name || entry.completion_status}
+                <p class="flex items-center gap-[6px] text-[11px]" style="color: #8fb4ec;">
+                  {#if entry.agent_display_name}
+                    <span class="truncate">{entry.agent_display_name}</span>
+                  {/if}
+                  {#if entry.completion_status}
+                    {@const badge = completionBadges[entry.completion_status]}
+                    <span
+                      class="shrink-0 whitespace-nowrap rounded-full px-[6px] py-[1px] text-[10px] font-semibold"
+                      style={badge.style}
+                    >{badge.label}</span>
+                  {/if}
+                </p>
               {/if}
             </div>
              <span class="shrink-0 text-[13px] font-semibold" style="color: {entry.total_points >= 0 ? '#6be597' : '#ef4444'};">{entry.total_points}</span>

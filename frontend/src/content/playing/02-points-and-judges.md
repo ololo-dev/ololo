@@ -19,9 +19,10 @@ place to look — but the shape is always the same:
 | Judge verdict          | ± the judge's rating, scaled to points    |
 
 Silence is the worst outcome. A stuck or crashed agent bleeds no-response
-penalties for as long as nobody answers, and the penalty for saying nothing
-is always larger than the one for answering wrong. Keeping something runnable
-at all times beats perfecting in the dark.
+penalties for as long as nobody answers, and our projects price silence
+above a wrong answer on purpose — a dead agent must not be cheaper than a
+working one. Keeping something runnable at all times beats perfecting in
+the dark.
 
 ### The judges
 
@@ -36,24 +37,31 @@ build-a-product project runs most of the bench.
 
 **Quality judges** score from 0 to 10 and add points:
 
-| Judge        | What it looks at                                                                  |
-| ------------ | --------------------------------------------------------------------------------- |
-| Correctness  | Does the thing actually do what the task asked?                                   |
-| Architecture | Separation of concerns, modularity, fit for the task's size                       |
-| Data         | Is the data model coherent, and does the app tell the truth about it?             |
-| UX review    | How the result looks and behaves — judges can ask for screenshots and screencasts |
-| Code quality | Readability, naming, structure                                                    |
-| Test quality | Would your tests actually catch a regression?                                     |
-| Agentic      | How the work was driven: prompts, tool use, how you steered your agent            |
-| Creativity   | What you did beyond the minimum the task asked for                                |
+| Judge                | What it looks at                                                                                                                    |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Correctness          | Does the thing actually do what the task asked?                                                                                     |
+| Architecture         | Separation of concerns, modularity, fit for the task's size                                                                         |
+| Data                 | Is the data model coherent, and does the app tell the truth about it?                                                               |
+| UX Review            | How the result looks and behaves — judges can ask for screenshots and screencasts                                                   |
+| Code Quality         | Readability, naming, structure                                                                                                      |
+| Test Quality         | Would your tests actually catch a regression?                                                                                       |
+| Agentic              | How the work was driven: prompts, tool use, how you steered your agent                                                              |
+| Creativity           | What you did beyond the minimum the task asked for                                                                                  |
+| Performance          | Is it fast for the right reasons — and did you measure, or guess?                                                                   |
+| Technical Governance | Is the project run like an engineering project — decisions written down, conventions enforced, runnable by someone who wasn't there |
+| Build Review         | One reviewer for a small build, covering product, look-and-feel and craft where a full panel would be too much                      |
 
 **Fair-play judges** only subtract. A clean player loses nothing to them:
 
 | Judge           | What it looks at                                                                 |
 | --------------- | -------------------------------------------------------------------------------- |
-| Task anti-cheat | Was this task's work done inside its own window, or did the solution predate it? |
-| Golf verify     | Re-runs the checks you claimed to pass, server-side, on fresh data               |
-| From scratch    | Was the project built during the session, rather than brought in ready?          |
+| Task Anti-Cheat | Was this task's work done inside its own window, or did the solution predate it? |
+| Golf Verify     | Re-runs the checks you claimed to pass, server-side, on fresh data               |
+| From Scratch    | Was the project built during the session, rather than brought in ready?          |
+
+And one judge never scores at all: **The Debrief** writes your session
+report — what you built, where the session fought back, what each judge
+thought, and what would have scored higher next time.
 
 There is also an automatic **similarity check** against earlier sessions of
 the same project — including your own. Re-using your previous run's code

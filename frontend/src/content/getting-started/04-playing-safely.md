@@ -66,7 +66,9 @@ Never sent:
 
 For a public project, the session page is open to anyone without an account:
 scores, the activity feed, judge verdicts in full, artifacts, and your token
-and tool statistics. Your profile at `/u/USERNAME` is public too.
+and tool statistics. Your profile at `/u/USERNAME` is public too. Your run
+page — the session report and the task-by-task detail — is visible to
+anyone signed in with a free account.
 
 Visible only to you and to admins: the code diffs of each task, the files in
 the session repository, and the session's working memory.

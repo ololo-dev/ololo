@@ -3,8 +3,10 @@
 //!
 //! The artifact never leaves git: the probe row stores a `"<sha>:<path>"`
 //! blob reference the game-server wrote when the push arrived, and this
-//! endpoint reads that exact blob. Owner-only (admins may view any player),
-//! mirroring the snapshot/memory endpoints.
+//! endpoint reads that exact blob. Visible on the snapshot's rule — the
+//! player, an admin, or any signed-in visitor of a public project — because
+//! screenshots and screencasts are the public face of a run: the docs
+//! promise them to spectators, and the run page is built around them.
 
 use crate::auth::jwt::AccessClaims;
 use crate::state::AppState;
@@ -20,7 +22,9 @@ use super::error::PlayerError;
 
 /// Resolve the session by join code and the player by param, and enforce
 /// the read authorization both endpoints below share: the player's own
-/// user, or an admin.
+/// user, an admin, or — on a public project — any signed-in visitor. Both
+/// callers serve visual material only (delivered artifacts, image files),
+/// so the widening leaks no source; diffs and memory keep stricter guards.
 async fn authorize_player_read(
     db: &sea_orm::DatabaseConnection,
     code: &str,
@@ -48,7 +52,16 @@ async fn authorize_player_read(
             .await
             .map_err(|e| PlayerError::Internal(e.to_string()))?
     {
-        return Err(PlayerError::Forbidden);
+        let project_public =
+            arena_core::entities::projects::Entity::find_by_id(session.project_id_fk)
+                .one(db)
+                .await
+                .map_err(|e| PlayerError::Internal(e.to_string()))?
+                .map(|p| p.public)
+                .unwrap_or(false);
+        if !project_public {
+            return Err(PlayerError::Forbidden);
+        }
     }
     Ok((session, player))
 }

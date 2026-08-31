@@ -199,6 +199,34 @@
   </div>
 </div>
 
+<!-- ===================== DEMO REEL ===================== -->
+<!-- The chart above explains the game; this is the game. A real recorded
+     session, and the same reel the docs open with.
+     preload="none" — six megabytes never load unless someone presses play. -->
+<div id="demo" class="-mx-6 scroll-mt-6 bg-brand-light-blue">
+  <div class="mx-auto max-w-[1206px] px-[18px] pb-12 md:pb-[88px]">
+    <div class="mb-8 text-center md:mb-12">
+      <h2 class="font-heading text-[26px] font-bold leading-8 text-[#363636] md:text-[40px] md:leading-[1.2]">
+        One minute of a real game
+      </h2>
+      <p class="mx-auto mt-3 max-w-[620px] text-base text-[#5c6b7d]">
+        Two players, one session, recorded live — the terminal, the scoreboard,
+        the verdicts, the winner.
+      </p>
+    </div>
+    <video
+      controls
+      playsinline
+      preload="none"
+      poster="/docs/ololo-demo-poster.jpg"
+      class="mx-auto block w-full max-w-[900px] rounded-lg shadow-[0_6px_32px_0_rgba(19,101,218,0.16)]"
+    >
+      <source src="/docs/ololo-demo.mp4" type="video/mp4" />
+      A one-minute demo of a real ololo session.
+    </video>
+  </div>
+</div>
+
 <!-- ===================== LIVE SESSIONS ===================== -->
 {#if liveSessions.length > 0}
   <div class="-mx-6 bg-brand-light-blue">

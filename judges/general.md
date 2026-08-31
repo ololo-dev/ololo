@@ -53,6 +53,12 @@ No prose around it, no markdown fence, no preamble. This exact shape:
       "improve": "one or two sentences on what this judge wants better — or the JSON literal null if it asked for nothing; never the word \"None\""
     }
   ],
+  "criteria": [
+    {
+      "key": "architecture",
+      "summary": "one or two sentences on how this criterion went across the whole session"
+    }
+  ],
   "improve": [
     "one concrete change, and why the evidence points there"
   ]
@@ -97,6 +103,21 @@ little good is a thin sentence, not a compliment you invented. Skip the
 integrity judges (anti-cheat, from-scratch) when they simply found nothing
 wrong — a clean pass is not feedback. Do include them when they actually
 moved points, and say plainly what triggered it.
+
+**criteria** — one entry per criterion the panel scored, using the `key`
+exactly as the evidence spells it; the page matches on that key and drops an
+entry it cannot place. This is the session's word on that criterion, not any
+one task's: name what put the score where it is, and where it moved, what
+moved it.
+
+Write the cause, not the figures. The page prints every reading right beside
+your sentence — each task's score and the change across the session — so
+reciting them back spends the one line you have on what the reader can already
+see. "The data layer was a stub until the final task, where one live source
+replaced the hard-coded values" earns its place; "1.5, then 0, then 9.5" does
+not. Where a criterion stayed low, say what would have lifted it. Do not
+repeat the panel's per-task rationale back. Skip a criterion the panel never
+scored.
 
 **improve** — two or three concrete changes, ordered by what would have earned
 the most in *this* session. Each names the thing to change and why the

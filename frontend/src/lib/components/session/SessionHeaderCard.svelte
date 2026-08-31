@@ -121,7 +121,7 @@
   );
 </script>
 
-<div class="mb-[20px] overflow-hidden rounded-[8px] bg-white px-[32px] py-[24px]">
+<div class="mb-[20px] overflow-hidden rounded-[8px] bg-white px-[24px] py-[20px]">
   <div class="mb-[16px] flex flex-wrap items-center gap-[12px]">
     <h1 class="font-heading text-[28px] font-bold leading-tight" style="color: #363636;">
       {joinCode}

@@ -600,13 +600,13 @@
       <div class="mb-[20px] flex flex-col gap-[16px] lg:flex-row">
 
         <!-- Score over time chart (flex-grow) -->
-        <div class="min-w-0 flex-grow overflow-hidden rounded-[8px] bg-white px-[32px] py-[24px]">
+        <div class="min-w-0 flex-grow overflow-hidden rounded-[8px] bg-white px-[24px] py-[20px]">
           <h2 class="mb-[16px] font-heading text-[16px] font-bold" style="color: #363636;">Score over time</h2>
           <ScoreChart {phase} {leaderboard} {reportMembers} {sessionReport} scoreHistory={effectiveScoreHistory} />
         </div>
 
         <!-- Leaderboard (fixed 300px on large screens) -->
-        <div class="w-full overflow-hidden rounded-[8px] bg-white px-[16px] py-[24px] lg:w-[300px] lg:shrink-0">
+        <div class="w-full overflow-hidden rounded-[8px] bg-white px-[16px] py-[20px] lg:w-[300px] lg:shrink-0 lg:self-start">
           <h2 class="mb-[16px] px-[8px] font-heading text-[16px] font-bold" style="color: #363636;">Leaderboard</h2>
           <LeaderboardList
             entries={mergedLeaderboardWithInfo}
@@ -650,7 +650,27 @@
       />
 
     {:else}
-      <!-- Finished: chart + leaderboard side by side, then project info -->
+      <!-- Finished: the page is a report, and most visitors arrive on a shared
+           link — it names the session before it charts it. A running session
+           keeps the board on top instead: there the moving scoreboard is the
+           reason the page is open. -->
+      <!-- Header card: join code, Complete badge, project link — no join command, collapsible description -->
+      <SessionHeaderCard
+        joinCode={data.session.join_code}
+        projectName={data.session.project_name}
+        projectSlug={data.session.project_slug}
+        projectId={data.session.project_id}
+        badge={judgingPending ? "judging" : "complete"}
+        showCopy={false}
+        showShare={true}
+        {copied}
+        onCopy={copyCommand}
+        description={data.session.project_description}
+        startedAt={data.session.started_at ?? null}
+        finishedAt={effectiveFinishedAt}
+        createdAt={data.session.created_at ?? null}
+      />
+
 
       <!-- Replay controls: sweep a playhead through the session; the chart
            draws in and the activity feed reveals events up to it. Admin-only,
@@ -671,13 +691,13 @@
       <div class="mb-[20px] flex flex-col gap-[16px] lg:flex-row">
 
         <!-- Score over time chart -->
-        <div class="min-w-0 flex-grow overflow-hidden rounded-[8px] bg-white px-[32px] py-[24px]">
+        <div class="min-w-0 flex-grow overflow-hidden rounded-[8px] bg-white px-[24px] py-[20px]">
           <h2 class="mb-[16px] font-heading text-[16px] font-bold" style="color: #363636;">Score over time</h2>
           <ScoreChart {phase} {leaderboard} {reportMembers} {sessionReport} scoreHistory={effectiveScoreHistory} revealUntil={replay.revealUntil} />
         </div>
 
         <!-- Final leaderboard -->
-        <div class="w-full overflow-hidden rounded-[8px] bg-white px-[16px] py-[24px] lg:w-[300px] lg:shrink-0">
+        <div class="w-full overflow-hidden rounded-[8px] bg-white px-[16px] py-[20px] lg:w-[300px] lg:shrink-0 lg:self-start">
           <h2 class="mb-[4px] px-[8px] font-heading text-[16px] font-bold" style="color: #363636;">Final Results</h2>
           <p class="mb-[16px] px-[8px] text-sm" style="color: #8fb4ec;" data-testid="result-summary">
             {resultSummary ?? "Session complete."}
@@ -687,28 +707,12 @@
             joinCode={data.session.join_code}
             userPlayers={effectiveUserPlayers}
             {isAdmin}
+            detailLabel="Report"
             emptyMessage="No results recorded."
           />
         </div>
 
       </div>
-
-      <!-- Header card: join code, Complete badge, project link — no join command, collapsible description -->
-      <SessionHeaderCard
-        joinCode={data.session.join_code}
-        projectName={data.session.project_name}
-        projectSlug={data.session.project_slug}
-        projectId={data.session.project_id}
-        badge={judgingPending ? "judging" : "complete"}
-        showCopy={false}
-        showShare={true}
-        {copied}
-        onCopy={copyCommand}
-        description={data.session.project_description}
-        startedAt={data.session.started_at ?? null}
-        finishedAt={effectiveFinishedAt}
-        createdAt={data.session.created_at ?? null}
-      />
 
       {#if data.campaign}
         <SessionCampaignCard campaign={data.campaign} />

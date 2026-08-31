@@ -55,4 +55,41 @@ describe("LeaderboardList", () => {
     expect(screen.queryByText("Awaiting judges")).toBeNull();
     expect(screen.queryByText("Completed")).toBeNull();
   });
+  /**
+   * The player run page — report, chat with the agent, task details, judge
+   * verdicts — is reachable from nowhere else in the app. It used to hang off
+   * a 14px icon at half opacity whose only explanation was a `title`.
+   */
+  it("names the link to a player's run instead of hiding it behind an icon", () => {
+    render(LeaderboardList, {
+      entries: [makeEntry({ username: "alpha" })],
+      joinCode: "ABC123",
+      userPlayers: [
+        {
+          player_id: "p1",
+          user_id: "u1",
+          display_name: "Alpha",
+          fingerprint: null,
+          joined_at: "2026-08-27T14:35:00Z",
+          reconnected_at: null,
+          revoked_at: null,
+        },
+      ],
+      emptyMessage: "empty",
+      detailLabel: "Report",
+    });
+    const link = screen.getByRole("link", { name: /Open Alpha's run/ });
+    expect(link.getAttribute("href")).toBe("/s/ABC123/player/alpha");
+    expect(link.textContent?.trim()).toBe("Report");
+  });
+
+  it("offers no run link for another player when the viewer is not an admin", () => {
+    render(LeaderboardList, {
+      entries: [makeEntry({ username: "alpha" })],
+      joinCode: "ABC123",
+      userPlayers: [],
+      emptyMessage: "empty",
+    });
+    expect(screen.queryByRole("link", { name: /Open Alpha's run/ })).toBeNull();
+  });
 });

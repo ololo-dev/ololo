@@ -279,7 +279,7 @@ describe("routes/s/[code]/+page.svelte", () => {
     expect(document.querySelectorAll('a[href="/s/ABC123/player/beta"]').length).toBe(0);
   });
 
-  it("admin gets player detail links on every leaderboard row with a distinct icon", () => {
+  it("admin gets a named run link on every leaderboard row", () => {
     const report = {
       ...finishedReport,
       players: [
@@ -316,14 +316,16 @@ describe("routes/s/[code]/+page.svelte", () => {
       },
     });
 
-    // Own row keeps the regular agent-session link…
+    // Own row keeps its link to the run…
     const ownLinks = document.querySelectorAll('a[href="/s/ABC123/player/alpha"]');
     expect(ownLinks.length).toBeGreaterThan(0);
-    expect(ownLinks[0]!.getAttribute("title")).toBe("View agent session");
-    // …while other players' rows get the admin variant with the Eye icon.
+    expect(ownLinks[0]!.textContent?.trim()).toBe("Report");
+    expect(ownLinks[0]!.getAttribute("aria-label")).toContain("Alpha");
+    // …and an admin gets the same named link on every other row.
     const adminLinks = document.querySelectorAll('a[href="/s/ABC123/player/beta"]');
     expect(adminLinks.length).toBeGreaterThan(0);
-    expect(adminLinks[0]!.getAttribute("title")).toBe("View player session (admin)");
+    expect(adminLinks[0]!.textContent?.trim()).toBe("Report");
+    expect(adminLinks[0]!.getAttribute("aria-label")).toContain("Beta");
   });
 
   it("leaderboard href logic: own player links to detail path, others to /u", () => {

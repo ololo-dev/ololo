@@ -1,6 +1,8 @@
 <script lang="ts">
   import { ikAvatar } from '$lib/imagekit';
   import ImageLightbox from '$lib/components/sessions/ImageLightbox.svelte';
+  import ClampedText from './ClampedText.svelte';
+  import MarkdownContent from '$lib/components/MarkdownContent.svelte';
   import type { ActivityEvent } from "$lib/types/arena";
 
   let {
@@ -158,18 +160,6 @@
     return `${s}s`;
   }
 
-  // Judge comments can run to a paragraph; clamp long ones and let the reader
-  // expand per row. Keyed by verdict (judge + task + time), not the row index.
-  let expandedFeedback = $state(new Set<string>());
-  function feedbackKey(ev: ActivityEvent): string {
-    return `${ev.timestamp}|${ev.player_id}|${ev.task_id}|${ev.judge_name ?? ""}`;
-  }
-  function toggleFeedback(key: string) {
-    const next = new Set(expandedFeedback);
-    if (next.has(key)) next.delete(key);
-    else next.add(key);
-    expandedFeedback = next;
-  }
 </script>
 
 <div class="rounded-[8px] bg-white px-[24px] py-[20px]">
@@ -184,10 +174,10 @@
             type="button"
             onclick={() => (typeFilter = t.id)}
             data-testid="activity-filter-type-{t.id}"
-            class="rounded-full px-2.5 py-0.5 text-[11px] font-semibold transition-colors
+            class="rounded-full px-3 py-1 text-[12px] font-semibold transition-colors
                    {typeFilter === t.id
                      ? 'bg-brand-blue text-white'
-                     : 'bg-brand-light-blue text-brand-muted hover:text-brand-text'}"
+                     : 'bg-brand-light-blue text-[#5b6b86] hover:text-brand-text'}"
           >
             {t.label}
           </button>
@@ -198,10 +188,10 @@
           <button
             type="button"
             onclick={() => (playerFilter = null)}
-            class="rounded-full px-2.5 py-0.5 text-[11px] font-semibold transition-colors
+            class="rounded-full px-3 py-1 text-[12px] font-semibold transition-colors
                    {playerFilter === null
                      ? 'bg-brand-blue text-white'
-                     : 'bg-brand-light-blue text-brand-muted hover:text-brand-text'}"
+                     : 'bg-brand-light-blue text-[#5b6b86] hover:text-brand-text'}"
           >
             Everyone
           </button>
@@ -210,10 +200,10 @@
               type="button"
               onclick={() => (playerFilter = playerFilter === p.id ? null : p.id)}
               data-testid="activity-filter-player-{p.name}"
-              class="rounded-full px-2.5 py-0.5 text-[11px] font-semibold transition-colors
+              class="rounded-full px-3 py-1 text-[12px] font-semibold transition-colors
                      {playerFilter === p.id
                        ? 'bg-brand-blue text-white'
-                       : 'bg-brand-light-blue text-brand-muted hover:text-brand-text'}"
+                       : 'bg-brand-light-blue text-[#5b6b86] hover:text-brand-text'}"
             >
               {p.name}
             </button>
@@ -224,7 +214,7 @@
   {/if}
 
   {#if orderedEvents.length === 0}
-    <p class="text-[13px]" style="color: #8fb4ec;">
+    <p class="text-[14px]" style="color: #5b6b86;">
       {playerFilter === null && typeFilter === 'all'
         ? 'No activity yet.'
         : 'Nothing matches the current filters.'}
@@ -235,20 +225,20 @@
         {@const elapsed = elapsedLabel(ev)}
         {@const avatarUrl = avatarByPlayerId.get(ev.player_id) ?? null}
         <div
-          class="flex items-start gap-[12px] rounded-[6px] px-[10px] py-[12px] transition-colors hover:bg-[#f4f8fe]"
+          class="flex items-start gap-[12px] rounded-[6px] px-[10px] py-[14px] transition-colors hover:bg-[#f4f8fe]"
           class:border-t={i > 0}
           style="border-color: #eef3fb;"
         >
           <!-- Avatar -->
           {#if avatarUrl}
             <img
-              src={ikAvatar(avatarUrl, 28)}
+              src={ikAvatar(avatarUrl, 32)}
               alt="{ev.player_display_name} avatar"
-              class="mt-[2px] h-[28px] w-[28px] shrink-0 rounded-full object-cover"
+              class="mt-[2px] h-[32px] w-[32px] shrink-0 rounded-full object-cover"
             />
           {:else}
             <span
-              class="mt-[2px] inline-flex h-[28px] w-[28px] shrink-0 items-center justify-center rounded-full text-[12px] font-semibold text-white"
+              class="mt-[2px] inline-flex h-[32px] w-[32px] shrink-0 items-center justify-center rounded-full text-[14px] font-semibold text-white"
               style="background: #8fb4ec;"
             >
               {ev.player_display_name.charAt(0).toUpperCase()}
@@ -258,84 +248,84 @@
           <!-- Name + action -->
           <div class="min-w-0 flex-grow">
             <div class="flex items-baseline gap-[6px]">
-              <span class="shrink-0 text-[13px] font-semibold" style="color: #363636;">
+              <span class="shrink-0 text-[14px] font-semibold" style="color: #363636;">
                 {ev.player_display_name}
               </span>
               {#if ev.kind === "task_started"}
-                <span class="text-[13px]" style="color: #6b7280;">
+                <span class="text-[14px]" style="color: #6b7280;">
                   started working on
                 </span>
-                <span class="text-[13px] font-medium" style="color: #363636;">
+                <span class="text-[14px] font-medium" style="color: #363636;">
                   Task {ev.task_ordinal}
                 </span>
               {:else if ev.kind === "task_scored" && ev.judge_name}
-                <span class="text-[13px]" style="color: #6b7280;">
+                <span class="text-[14px]" style="color: #6b7280;">
                   evaluated by
                 </span>
-                <span class="text-[13px] font-medium" style="color: #363636;">
+                <span class="text-[14px] font-medium" style="color: #363636;">
                   {ev.judge_name}
                 </span>
                 <!-- Name the task: a judge runs once per task, so without this
                      several per-task verdicts read as identical duplicate rows. -->
                 {#if ev.task_ordinal != null}
-                  <span class="text-[13px]" style="color: #6b7280;">on</span>
-                  <span class="text-[13px] font-medium" style="color: #363636;">
+                  <span class="text-[14px]" style="color: #6b7280;">on</span>
+                  <span class="text-[14px] font-medium" style="color: #363636;">
                     Task {ev.task_ordinal}
                   </span>
                 {/if}
                 {#if ev.point_delta != null}
                   <span
-                    class="text-[13px] font-semibold tabular-nums"
+                    class="text-[14px] font-semibold tabular-nums"
                     style="color: {ev.point_delta >= 0 ? '#6be597' : '#ef4444'};"
                   >
                     {ev.point_delta >= 0 ? "+" : ""}{ev.point_delta} points
                   </span>
                 {/if}
               {:else if ev.kind === "task_scored"}
-                <span class="text-[13px]" style="color: #6b7280;">
+                <span class="text-[14px]" style="color: #6b7280;">
                   implemented
                 </span>
-                <span class="text-[13px] font-medium" style="color: #363636;">
+                <span class="text-[14px] font-medium" style="color: #363636;">
                   Task {ev.task_ordinal}
                 </span>
               {:else if ev.kind === "similarity"}
                 {@const pct = ev.detail?.duplicated_pct ?? 0}
                 {@const src = (ev.detail?.sources ?? [])[0]}
-                <span class="text-[13px]" style="color: #6b7280;">
+                <span class="text-[14px]" style="color: #6b7280;">
                   copy/paste check
                 </span>
                 {#if ev.point_delta != null && ev.point_delta < 0}
-                  <span class="text-[13px] font-medium" style="color: #363636;">
+                  <span class="text-[14px] font-medium" style="color: #363636;">
                     {pct.toFixed(0)}%{#if src}&nbsp;matches {src.player} @ <a class="underline" href="/s/{src.join_code}">{src.join_code}</a>{/if}
                   </span>
-                  <span class="text-[13px] font-semibold tabular-nums" style="color: #ef4444;">
+                  <span class="text-[14px] font-semibold tabular-nums" style="color: #ef4444;">
                     {ev.point_delta} points
                   </span>
                 {:else}
-                  <span class="text-[13px] font-medium" style="color: #6be597;">
+                  <span class="text-[14px] font-medium" style="color: #6be597;">
                     clean{pct > 0 ? ` (${pct.toFixed(0)}%)` : ''}
                   </span>
                 {/if}
               {:else if ev.kind === "artifact_received"}
                 {@const count = artifactFiles(ev).length}
-                <span class="text-[13px]" style="color: #6b7280;">
+                <span class="text-[14px]" style="color: #6b7280;">
                   delivered
                 </span>
-                <span class="truncate text-[13px] font-medium" style="color: #363636;" title={ev.detail?.path}>
+                <span class="truncate text-[14px] font-medium" style="color: #363636;" title={ev.detail?.path}>
                   {count > 1 ? `${count} files` : artifactFileName(ev)}
                 </span>
-                <span class="shrink-0 text-[12px] tabular-nums" style="color: #8fb4ec;">
+                <span class="shrink-0 text-[13px] tabular-nums" style="color: #5b6b86;">
                   {artifactSizeLabel(ev)}
                 </span>
               {/if}
             </div>
             {#if ev.task_title && ev.kind !== "task_scored" && ev.kind !== "similarity"}
-              <p class="mt-[2px] truncate text-[12px]" style="color: #8fb4ec;" title={ev.task_title}>
+              <p class="mt-[2px] truncate text-[13px]" style="color: #5b6b86;" title={ev.task_title}>
                 {ev.task_title}
               </p>
             {/if}
             {#if ev.kind === "task_scored" && !ev.judge_name && ev.point_delta && ev.point_delta > 0}
-              <p class="mt-[2px] text-[12px] font-semibold" style="color: #6be597;">
+              <p class="mt-[2px] text-[13px] font-semibold" style="color: #6be597;">
                 +{ev.point_delta} points
               </p>
             {/if}
@@ -379,7 +369,7 @@
                 </div>
               {:else}
                 <!-- Anything else: say what arrived; link when fetchable. -->
-                <p class="mt-[2px] text-[12px]" style="color: #8fb4ec;" data-testid="artifact-info">
+                <p class="mt-[2px] text-[13px]" style="color: #5b6b86;" data-testid="artifact-info">
                   {ct || "artifact"}
                   {#if ev.detail?.within_cap === false}
                     — exceeds the requested size cap
@@ -407,7 +397,7 @@
                   {@const note = c.rationale || (!anyRationale ? ev.detail.feedback : null)}
                   <span class="group relative inline-flex">
                     <span
-                      class="inline-flex items-center gap-[4px] rounded-full px-[8px] py-[2px] text-[11px] font-medium {note ? 'cursor-help' : ''}"
+                      class="inline-flex items-center gap-[4px] rounded-full px-[10px] py-[3px] text-[12px] font-medium {note ? 'cursor-help' : ''}"
                       style="background: #f0f5fd; color: #4b5f7d;"
                     >
                       {c.key}
@@ -419,7 +409,7 @@
                           {c.score.toFixed(1)}
                         </span>
                       {:else}
-                        <span style="color: #b3c6e0;">n/a</span>
+                        <span style="color: #7b8aa3;">n/a</span>
                       {/if}
                     </span>
                     {#if note}
@@ -428,11 +418,15 @@
                       <span class="sr-only">{note}</span>
                       <span
                         aria-hidden="true"
-                        class="pointer-events-none invisible absolute bottom-full left-0 z-20 mb-[6px] w-max max-w-[340px] rounded-lg bg-white p-[10px] text-[12px] leading-[1.5] opacity-0 shadow-[0_6px_24px_0_rgba(19,101,218,0.18)] transition-opacity duration-100 group-hover:visible group-hover:opacity-100"
-                        style="color: #5b6b86;"
+                        class="pointer-events-none invisible absolute bottom-full left-0 z-20 mb-[6px] w-max max-w-[360px] rounded-lg bg-white p-[12px] opacity-0 shadow-[0_6px_24px_0_rgba(19,101,218,0.18)] transition-opacity duration-100 group-hover:visible group-hover:opacity-100"
                         data-testid="criterion-hovercard"
                       >
-                        {note}
+                        <!-- Rationales quote files and symbols in backticks
+                             just as the long-form verdicts do. -->
+                        <MarkdownContent
+                          value={note}
+                          class="verdict-md !text-[13px] !leading-[1.55]"
+                        />
                       </span>
                     {/if}
                   </span>
@@ -443,43 +437,23 @@
               <!-- A verdict without a criteria sheet (anti-cheat, execution
                    judges): the written comment has no chip to live on, so it
                    stays inline. -->
-              {@const key = feedbackKey(ev)}
-              {@const fb = ev.detail.feedback}
-              {@const long = fb.length > 160}
-              {@const open = expandedFeedback.has(key)}
               <div
                 class="mt-[6px] border-l-2 pl-[10px]"
                 style="border-color: #e3ecf9;"
                 data-testid="verdict-feedback"
               >
-                <p
-                  class="text-[12px] leading-[1.5]"
-                  class:line-clamp-3={long && !open}
-                  style="color: #5b6b86;"
-                >
-                  {fb}
-                </p>
-                {#if long}
-                  <button
-                    type="button"
-                    class="mt-[2px] text-[11px] font-medium underline"
-                    style="color: #8fb4ec;"
-                    onclick={() => toggleFeedback(key)}
-                  >
-                    {open ? "Show less" : "Show more"}
-                  </button>
-                {/if}
+                <ClampedText text={ev.detail.feedback} />
               </div>
             {/if}
           </div>
 
           <!-- When it happened (wall clock) + how far into the session -->
           <span
-            class="mt-[4px] flex shrink-0 flex-col items-end font-mono text-[11px] tabular-nums"
-            style="color: #b3c6e0;"
+            class="mt-[4px] flex shrink-0 flex-col items-end font-mono text-[12px] tabular-nums"
+            style="color: #7b8aa3;"
             title={fullTimestamp(ev)}
           >
-            <span style="color: #8fb4ec;">{clockLabel(ev) || "—"}</span>
+            <span style="color: #5b6b86;">{clockLabel(ev) || "—"}</span>
             {#if elapsed}
               <span>+{elapsed}</span>
             {/if}

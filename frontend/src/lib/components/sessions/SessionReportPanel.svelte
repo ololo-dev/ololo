@@ -212,39 +212,123 @@
   const verdictCount = $derived(orderedVerdicts.length);
   const judgeCount = $derived(new Set(orderedVerdicts.map((e) => e.v.judge_slug)).size);
 
-  /** The criteria sheet, flattened for the scorecard: one row per criterion
-   *  per judge that scored it, with the weight it carried. */
+  /** The criteria sheet, summarised for the scorecard: ONE row per criterion
+   *  for the whole session.
+   *
+   *  The panel scores the same sheet on every task, so a per-task row listed
+   *  "Architecture" once per task — eleven criteria over three tasks read as
+   *  thirty-three rows, the same names over and over. The report is the
+   *  session's summary; the per-task detail lives on the Judges tab. Each row
+   *  therefore carries the average across tasks, how it moved task by task,
+   *  and the panel's latest note as the description. */
+  type TaskScore = { ordinal: number; score: number | null };
+  type Note = { ordinal: number; text: string };
   type ScoreRow = {
     key: string;
-    ordinal: number;
     title: string;
     weight: number;
-    score: number | null;
-    judge: string;
-    rationale: string;
+    judges: string[];
+    avg: number | null;
+    perTask: TaskScore[];
+    /** Last scored task minus first — null unless at least two were scored. */
+    delta: number | null;
+    summary: Note | null;
+    earlier: Note[];
+    /** The reporter's own word on this criterion across the session — the
+        description when it exists, since it reads across the tasks the way a
+        summary should. */
+    reported: string | null;
   };
 
+  /** `criteria` from the report document, by key. Empty on reports written
+      before the reporter was asked for it. */
+  const reportedCriteria = $derived(
+    new Map((doc?.criteria ?? []).filter((c) => c.key && c.summary).map((c) => [c.key, c.summary])),
+  );
+
   const scorecard = $derived.by(() => {
-    const rows: ScoreRow[] = [];
-    for (const t of tasks) {
+    type Acc = {
+      key: string;
+      title: string;
+      weight: number;
+      judges: Set<string>;
+      sum: number;
+      n: number;
+      perTask: TaskScore[];
+      notes: Note[];
+    };
+    const byKey = new Map<string, Acc>();
+
+    for (const t of [...tasks].sort((a, b) => a.ordinal - b.ordinal)) {
       const ev = evaluationsByTask.get(t.task_id);
       if (!ev) continue;
       for (const c of ev.criteria ?? []) {
+        const acc: Acc = byKey.get(c.key) ?? {
+          key: c.key,
+          title: c.title || c.key,
+          weight: c.weight,
+          judges: new Set<string>(),
+          sum: 0,
+          n: 0,
+          perTask: [],
+          notes: [],
+        };
+        // A criterion can be redefined between tasks; the latest sheet wins.
+        acc.title = c.title || acc.title;
+        acc.weight = c.weight;
+
+        const graded: number[] = [];
         for (const sc of c.scores ?? []) {
-          rows.push({
-            key: `${t.task_id}:${c.key}:${sc.judge_slug}`,
-            ordinal: t.ordinal,
-            title: c.title,
-            weight: c.weight,
-            score: sc.score ?? null,
-            judge: sc.judge_slug,
-            rationale: sc.rationale,
-          });
+          acc.judges.add(sc.judge_slug);
+          if (typeof sc.score === "number") {
+            acc.sum += sc.score;
+            acc.n += 1;
+            graded.push(sc.score);
+          }
+          if (sc.rationale?.trim()) acc.notes.push({ ordinal: t.ordinal, text: sc.rationale });
         }
+        acc.perTask.push({
+          ordinal: t.ordinal,
+          score: graded.length ? graded.reduce((a, b) => a + b, 0) / graded.length : null,
+        });
+        byKey.set(c.key, acc);
       }
     }
-    return rows.sort((a, b) => a.ordinal - b.ordinal || b.weight - a.weight);
+
+    return [...byKey.values()]
+      .map((acc): ScoreRow => {
+        const scored = acc.perTask.filter((p) => p.score !== null);
+        const first = scored[0]?.score ?? null;
+        const last = scored[scored.length - 1]?.score ?? null;
+        return {
+          key: acc.key,
+          title: acc.title,
+          weight: acc.weight,
+          judges: [...acc.judges],
+          avg: acc.n > 0 ? acc.sum / acc.n : null,
+          perTask: acc.perTask,
+          delta: scored.length >= 2 && first !== null && last !== null ? last - first : null,
+          summary: acc.notes.length > 0 ? acc.notes[acc.notes.length - 1] : null,
+          earlier: acc.notes.slice(0, -1).reverse(),
+          reported: reportedCriteria.get(acc.key) ?? null,
+        };
+      })
+      .sort((a, b) => b.weight - a.weight || a.title.localeCompare(b.title));
   });
+
+  /** The panel's per-task notes to fold under a row. With the reporter's
+   *  summary above, every note is evidence for it; without one, the newest
+   *  note is already the description and only the older ones remain. */
+  function panelNotes(row: ScoreRow): Note[] {
+    const all = row.summary ? [row.summary, ...row.earlier] : row.earlier;
+    return row.reported ? all : row.earlier;
+  }
+
+  /** Criteria sheets are per task, so more than one scored task means the
+   *  scorecard can show movement rather than a single reading. */
+  const scoredTaskCount = $derived(
+    tasks.filter((t) => (evaluationsByTask.get(t.task_id)?.criteria?.length ?? 0) > 0).length,
+  );
 
   /** A judge's display name, resolved from the verdicts that carry both. */
   const judgeNameBySlug = $derived(
@@ -478,8 +562,9 @@
           <section data-testid="report-scorecard">
             <h3>The scorecard</h3>
             <p>
-              Every criterion the panel scored, out of ten, with the share of the task's
-              points it carried.
+              Every criterion the panel scored, out of ten{scoredTaskCount > 1
+                ? ", averaged over the tasks it was scored on"
+                : ""}, with the share of a task's points it carried.
             </p>
             <ul class="sheet">
               {#each scorecard as row (row.key)}
@@ -487,10 +572,12 @@
                   <div class="sheet-head">
                     <b>{row.title}</b>
                     <span class="muted">
-                      {Math.round(row.weight * 100)}% of the task · scored by {judgeLabel(row.judge)}
+                      {Math.round(row.weight * 100)}% of {scoredTaskCount > 1
+                        ? "each task"
+                        : "the task"} · scored by {row.judges.map(judgeLabel).join(", ")}
                     </span>
-                    <b class="sheet-score {scoreTone(row.score)}">
-                      {row.score === null ? "—" : row.score.toFixed(1)}<span class="muted">/10</span>
+                    <b class="sheet-score {scoreTone(row.avg)}">
+                      {row.avg === null ? "—" : row.avg.toFixed(1)}<span class="muted">/10</span>
                     </b>
                   </div>
                   <!-- The score as a bar as well as a number: eleven criteria
@@ -498,14 +585,63 @@
                        without reading every line. -->
                   <div class="meter" aria-hidden="true">
                     <span
-                      class={scoreTone(row.score)}
-                      style="width: {Math.max(0, Math.min(10, row.score ?? 0)) * 10}%"
+                      class={scoreTone(row.avg)}
+                      style="width: {Math.max(0, Math.min(10, row.avg ?? 0)) * 10}%"
                     ></span>
                   </div>
-                  <MarkdownContent
-                    value={markdownSafe(row.rationale)}
-                    class="mt-2 text-[15px]"
-                  />
+                  {#if row.perTask.length > 1}
+                    <!-- How the criterion moved across the session. The average
+                         above says where it landed; this says whether the work
+                         was getting better or worse while it landed there. -->
+                    <p class="trend" data-testid="report-scorecard-trend">
+                      {#each row.perTask as p (p.ordinal)}
+                        <span class="trend-step">
+                          <span class="muted">Task {p.ordinal}</span>
+                          <b class={scoreTone(p.score)}>
+                            {p.score === null ? "—" : p.score.toFixed(1)}
+                          </b>
+                        </span>
+                      {/each}
+                      {#if row.delta !== null && Math.abs(row.delta) >= 0.05}
+                        <span class="trend-delta {row.delta > 0 ? 'pos' : 'neg'}">
+                          {row.delta > 0 ? "▲" : "▼"}
+                          {Math.abs(row.delta).toFixed(1)} across the session
+                        </span>
+                      {/if}
+                    </p>
+                  {/if}
+                  <!-- The description is the reporter's, because it is the one
+                       voice that read every task: the panel writes a fresh
+                       rationale per task, and the last of those is a reading of
+                       the final task, not of the session. Reports written before
+                       the reporter was asked for this fall back to that last
+                       note rather than showing nothing. -->
+                  {#if row.reported}
+                    <MarkdownContent
+                      value={markdownSafe(row.reported)}
+                      class="mt-2 text-[15px]"
+                    />
+                  {:else if row.summary}
+                    <MarkdownContent
+                      value={markdownSafe(row.summary.text)}
+                      class="mt-2 text-[15px]"
+                    />
+                  {/if}
+                  {#if panelNotes(row).length > 0}
+                    <!-- The panel's own words stay reachable: they are the
+                         evidence behind the summary above. -->
+                    <details class="earlier">
+                      <summary>
+                        What the panel said, task by task ({panelNotes(row).length})
+                      </summary>
+                      {#each panelNotes(row) as note (note.ordinal)}
+                        <div class="earlier-note">
+                          <span class="muted">Task {note.ordinal}</span>
+                          <MarkdownContent value={markdownSafe(note.text)} class="text-[15px]" />
+                        </div>
+                      {/each}
+                    </details>
+                  {/if}
                 </li>
               {/each}
             </ul>
@@ -900,6 +1036,54 @@
     height: 100%;
     border-radius: 2px;
     background: currentColor;
+  }
+
+  /* The task-by-task reading under the average: small, tabular, and wrapping
+     on a phone rather than scrolling. */
+  .trend {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 14px;
+    margin: 8px 0 0;
+    font-size: 13px;
+  }
+
+  .trend-step {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 5px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .trend-delta {
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .earlier {
+    margin-top: 8px;
+  }
+
+  .earlier > summary {
+    cursor: pointer;
+    font-size: 13px;
+    color: #5b6b86;
+    width: fit-content;
+  }
+
+  .earlier > summary:hover {
+    color: #0269fb;
+  }
+
+  .earlier-note {
+    margin-top: 10px;
+    padding-left: 12px;
+    border-left: 2px solid #e3ecf9;
+  }
+
+  .earlier-note .muted {
+    font-size: 13px;
   }
 
 

@@ -423,6 +423,88 @@ describe("SessionReportPanel", () => {
       expect(rows[1].textContent).toContain("—");
     });
 
+    /**
+     * The panel scores the same sheet on every task, so a per-task row listed
+     * "Architecture" once per task — eleven criteria over three tasks read as
+     * thirty-three rows of repeating names. The report is the summary; the
+     * per-task detail belongs to the Judges tab.
+     */
+    it("summarises a criterion once for the whole session, not once per task", () => {
+      const criterion = (score: number, rationale: string) => ({
+        key: "architecture",
+        title: "Architecture",
+        weight: 0.25,
+        scores: [{ judge_slug: "architecture", score, rationale }],
+      });
+      const evaluationsByTask = new Map<string, PlayerTaskEvaluation>([
+        [
+          "t1",
+          { task_id: "t1", criteria: [criterion(7, "one big function")] } as PlayerTaskEvaluation,
+        ],
+        [
+          "t3",
+          { task_id: "t3", criteria: [criterion(9, "split into modules")] } as PlayerTaskEvaluation,
+        ],
+      ]);
+      render(SessionReportPanel, { ...withVerdicts, evaluationsByTask });
+
+      const rows = within(screen.getByTestId("report-scorecard")).getAllByTestId(
+        "report-scorecard-row",
+      );
+      expect(rows).toHaveLength(1);
+      // The average across the tasks it was scored on, not either reading.
+      expect(rows[0].textContent).toContain("8.0");
+      // How it moved, and by how much.
+      const trend = within(rows[0]).getByTestId("report-scorecard-trend");
+      expect(trend.textContent).toMatch(/Task 1\s*7\.0/);
+      expect(trend.textContent).toMatch(/Task 3\s*9\.0/);
+      expect(trend.textContent).toContain("2.0 across the session");
+      // One description — the panel's latest — with the earlier note folded away.
+      expect(rows[0].textContent).toContain("split into modules");
+      expect(within(rows[0]).getByText(/What the panel said, task by task/)).not.toBeNull();
+    });
+
+    /**
+     * The panel writes a fresh rationale per task, so its last note is a
+     * reading of the final task — not of the session. The reporter is the one
+     * judge that read every task, so its word is the description.
+     */
+    it("describes a criterion in the reporter's words, not the panel's last note", () => {
+      const criterion = (score: number, rationale: string) => ({
+        key: "architecture",
+        title: "Architecture",
+        weight: 0.25,
+        scores: [{ judge_slug: "architecture", score, rationale }],
+      });
+      const evaluationsByTask = new Map<string, PlayerTaskEvaluation>([
+        [
+          "t1",
+          { task_id: "t1", criteria: [criterion(4, "one big function")] } as PlayerTaskEvaluation,
+        ],
+        [
+          "t3",
+          { task_id: "t3", criteria: [criterion(8, "split into modules")] } as PlayerTaskEvaluation,
+        ],
+      ]);
+      const reported: PlayerSessionReport = {
+        ...report,
+        document: {
+          ...report.document!,
+          criteria: [
+            { key: "architecture", summary: "Started as one function and ended properly split." },
+          ],
+        },
+      };
+      render(SessionReportPanel, { ...withVerdicts, report: reported, evaluationsByTask });
+
+      const row = screen.getByTestId("report-scorecard-row");
+      expect(row.textContent).toContain("Started as one function and ended properly split.");
+      // Both panel notes stay reachable as the evidence behind it — including
+      // the last one, which is no longer doing the summarising.
+      const notes = within(row).getByText(/What the panel said, task by task \(2\)/);
+      expect(notes).not.toBeNull();
+    });
+
     it("renders a rationale as markdown, without eating its glob paths", () => {
       const evaluationsByTask = new Map<string, PlayerTaskEvaluation>([
         [

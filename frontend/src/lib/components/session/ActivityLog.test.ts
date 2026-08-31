@@ -167,15 +167,69 @@ describe("ActivityLog judge comments", () => {
     expect(screen.getByTestId("verdict-feedback").textContent).toContain("Solid core loop");
   });
 
-  it("clamps a long comment and toggles it open", async () => {
+  it("renders the verdict as markdown, not as raw syntax", () => {
+    render(ActivityLog, {
+      props: {
+        events: [scoredEvent("The `handle_session` loop in `src/bin/server.rs` **never** breaks.")],
+      },
+    });
+    const box = screen.getByTestId("verdict-feedback");
+    expect([...box.querySelectorAll("code")].map((c) => c.textContent)).toEqual([
+      "handle_session",
+      "src/bin/server.rs",
+    ]);
+    expect(box.querySelector("strong")?.textContent).toBe("never");
+    // The backticks and asterisks themselves must not reach the reader.
+    expect(box.textContent).not.toContain("`");
+    expect(box.textContent).not.toContain("**");
+  });
+
+  /**
+   * jsdom does no layout, so the clamp measurement has to be staged: heights
+   * are the only thing the component reads to decide whether the toggle is
+   * worth showing.
+   */
+  function stageOverflow(clipped: boolean) {
+    const descriptors = {
+      clientHeight: { configurable: true, value: 54 },
+      scrollHeight: { configurable: true, value: clipped ? 90 : 54 },
+    };
+    Object.defineProperties(HTMLElement.prototype, descriptors);
+    return () => {
+      Reflect.deleteProperty(HTMLElement.prototype, "clientHeight");
+      Reflect.deleteProperty(HTMLElement.prototype, "scrollHeight");
+    };
+  }
+
+  it("clamps a comment the column cannot hold and toggles it open", async () => {
     const { fireEvent } = await import("@testing-library/svelte");
-    render(ActivityLog, { props: { events: [scoredEvent("detail ".repeat(60))] } });
-    const para = screen.getByTestId("verdict-feedback").querySelector("p");
-    expect(para?.classList.contains("line-clamp-3")).toBe(true);
-    await fireEvent.click(screen.getByText("Show more"));
-    expect(screen.getByText("Show less")).toBeTruthy();
-    expect(
-      screen.getByTestId("verdict-feedback").querySelector("p")?.classList.contains("line-clamp-3"),
-    ).toBe(false);
+    const restore = stageOverflow(true);
+    try {
+      render(ActivityLog, { props: { events: [scoredEvent("detail ".repeat(60))] } });
+      const clamp = () => screen.getByTestId("verdict-feedback").firstElementChild;
+      expect(clamp()?.classList.contains("clamped")).toBe(true);
+      await fireEvent.click(screen.getByText("Show more"));
+      expect(screen.getByText("Show less")).toBeTruthy();
+      expect(clamp()?.classList.contains("clamped")).toBe(false);
+    } finally {
+      restore();
+    }
+  });
+
+  /**
+   * Regression: the toggle used to appear whenever the comment ran past 160
+   * characters, but at the feed's ~990px three lines hold far more than that.
+   * Half the verdicts on a live dashboard offered "Show more" and revealed
+   * nothing when clicked.
+   */
+  it("offers no toggle when the whole comment already fits", () => {
+    const restore = stageOverflow(false);
+    try {
+      render(ActivityLog, { props: { events: [scoredEvent("detail ".repeat(60))] } });
+      expect(screen.getByTestId("verdict-feedback")).toBeTruthy();
+      expect(screen.queryByText("Show more")).toBeNull();
+    } finally {
+      restore();
+    }
   });
 });

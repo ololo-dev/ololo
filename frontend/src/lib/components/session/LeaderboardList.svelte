@@ -27,12 +27,16 @@
     userPlayers,
     emptyMessage,
     isAdmin = false,
+    detailLabel = "Details",
   }: {
     entries: LeaderboardRow[];
     joinCode: string;
     userPlayers: PlayerSummary[];
     emptyMessage: string;
     isAdmin?: boolean;
+    /** What the run link promises. A finished session leads with its report;
+        while the game is on, the page is the live detail of the run. */
+    detailLabel?: string;
   } = $props();
 
   const ownPlayerIds = $derived(new Set(userPlayers.map((p) => p.player_id)));
@@ -99,17 +103,23 @@
              <span class="shrink-0 text-[13px] font-semibold" style="color: {entry.total_points >= 0 ? '#6be597' : '#ef4444'};">{entry.total_points}</span>
           </svelte:element>
           {#if playerHref}
+            <!-- The only door in the app to a player's run — report, chat with
+                 the agent, task details, judge verdicts. It used to be a 14px
+                 icon at half opacity explained by a `title` alone, so the
+                 richest page on the site went unfound. It says what it is. -->
             <a
               href={playerHref}
-              class="mr-[8px] shrink-0 rounded-[4px] p-[4px] opacity-50 transition-opacity hover:opacity-100 group-hover:opacity-80"
-              style="color: #8fb4ec;"
-              title={ownPlayerId !== null ? "View agent session" : "View player session (admin)"}
+              class="mr-[8px] flex shrink-0 items-center gap-[3px] whitespace-nowrap rounded-full
+                     bg-brand-light-blue px-[10px] py-[5px] text-[12px] font-semibold text-brand-blue
+                     transition-colors hover:bg-brand-tag-bg"
+              aria-label="Open {entry.display_name}'s run — {detailLabel.toLowerCase()}, chat and details"
             >
               {#if ownPlayerId !== null}
-                <Activity size={14} />
+                <Activity size={13} aria-hidden="true" />
               {:else}
-                <Eye size={14} />
+                <Eye size={13} aria-hidden="true" />
               {/if}
+              {detailLabel}
             </a>
           {/if}
         </div>

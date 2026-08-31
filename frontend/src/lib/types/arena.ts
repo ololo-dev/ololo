@@ -352,6 +352,10 @@ export interface SessionReportDoc {
   built: { brief: string; tasks?: { ordinal: number; note: string }[] };
   friction?: { ordinal: number; what_happened: string; why?: string | null }[];
   judges?: { judge: string; good: string; improve?: string | null }[];
+  /** The reporter's word on each criterion across the whole session, keyed by
+      criterion key. Absent on reports written before the reporter was asked
+      for it — the scorecard then falls back to the panel's own last note. */
+  criteria?: { key: string; summary: string }[];
   improve?: string[];
 }
 

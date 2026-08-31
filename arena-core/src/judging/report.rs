@@ -54,6 +54,13 @@ pub struct SessionReportDoc {
     /// One entry per scoring judge that had something to say.
     #[serde(default)]
     pub judges: Vec<JudgeNote>,
+    /// One entry per criterion the panel scored, summarising the whole
+    /// session rather than any one task. The scorecard shows a criterion
+    /// once — averaged over the tasks it was scored on — and this is the
+    /// description under it; without it the page can only fall back to the
+    /// panel's own note from the last task, which is a reading, not a summary.
+    #[serde(default)]
+    pub criteria: Vec<CriterionNote>,
     /// Concrete changes, ordered by what would have earned the most here.
     #[serde(default)]
     pub improve: Vec<String>,
@@ -81,6 +88,14 @@ pub struct FrictionItem {
     /// silent — an honest blank beats a guess.
     #[serde(default)]
     pub why: Option<String>,
+}
+
+/// The reporter's session-wide word on one criterion, keyed by the criterion
+/// key exactly as the evidence spells it — the page matches on it.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct CriterionNote {
+    pub key: String,
+    pub summary: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -149,6 +164,13 @@ fn normalize(doc: &mut SessionReportDoc) {
         scrub(&mut j.good);
         blank_to_none(&mut j.improve);
     }
+    for c in &mut doc.criteria {
+        scrub(&mut c.summary);
+    }
+    // A key the page cannot match, or an empty summary, would render as a
+    // criterion with no description at all — drop it and let the fallback run.
+    doc.criteria
+        .retain(|c| !c.key.trim().is_empty() && !c.summary.trim().is_empty());
     for s in &mut doc.improve {
         scrub(s);
     }
@@ -251,6 +273,20 @@ pub struct SiblingVerdict {
     pub task_title: String,
     pub point_delta: i32,
     pub feedback: String,
+    /// The criteria this verdict scored. The reporter is asked for a
+    /// per-criterion summary of the session, which it can only write if it
+    /// sees the sheet — the prose feedback alone names criteria unevenly and
+    /// never by key.
+    #[serde(default)]
+    pub criteria: Vec<SiblingCriterion>,
+}
+
+/// One row of a verdict's criteria sheet, as the reporter is shown it.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct SiblingCriterion {
+    pub key: String,
+    pub score: Option<f64>,
+    pub rationale: String,
 }
 
 /// How much of one sibling's feedback the reporter is shown. Long enough to
@@ -333,6 +369,26 @@ pub async fn load_sibling_verdicts(
             }
             let judge = judge_by_id.get(&tj.judge_id)?;
             let task = task_by_id.get(&tj.task_id)?;
+            let criteria = r
+                .rating
+                .get("criteria")
+                .and_then(|v| v.as_array())
+                .map(|rows| {
+                    rows.iter()
+                        .filter_map(|row| {
+                            let key = row["key"].as_str()?.trim().to_string();
+                            if key.is_empty() {
+                                return None;
+                            }
+                            Some(SiblingCriterion {
+                                key,
+                                score: row["score"].as_f64(),
+                                rationale: row["rationale"].as_str().unwrap_or("").to_string(),
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
             let mut feedback = r.feedback;
             if feedback.len() > SIBLING_FEEDBACK_CAP {
                 feedback.truncate(SIBLING_FEEDBACK_CAP);
@@ -345,6 +401,7 @@ pub async fn load_sibling_verdicts(
                 task_title: task.title.clone(),
                 point_delta: r.point_delta,
                 feedback,
+                criteria,
             })
         })
         .collect();
@@ -512,6 +569,19 @@ fn build_report_prompt(dossier_json: &str, siblings: &[SiblingVerdict]) -> Strin
                 "### {} — task {} “{}” ({:+} pts)\n\n{}\n\n",
                 v.judge_name, v.task_ordinal, v.task_title, v.point_delta, v.feedback
             ));
+            // The sheet, with its keys: `criteria` in the report is keyed back
+            // onto these, so the model has to see the spelling it must answer in.
+            if !v.criteria.is_empty() {
+                out.push_str("Criteria scored (key — score/10 — why):\n\n");
+                for c in &v.criteria {
+                    let score = c
+                        .score
+                        .map(|s| format!("{s:.1}"))
+                        .unwrap_or_else(|| "not scored".to_string());
+                    out.push_str(&format!("- `{}` — {} — {}\n", c.key, score, c.rationale));
+                }
+                out.push('\n');
+            }
         }
     }
 
@@ -579,6 +649,11 @@ mod tests {
                 task_title: "Bind to a port".into(),
                 point_delta: 12,
                 feedback: "The accept loop and the protocol are one function.".into(),
+                criteria: vec![SiblingCriterion {
+                    key: "architecture".into(),
+                    score: Some(4.0),
+                    rationale: "One function does both jobs.".into(),
+                }],
             },
             SiblingVerdict {
                 judge_name: "Tests".into(),
@@ -587,6 +662,7 @@ mod tests {
                 task_title: "Concurrent clients".into(),
                 point_delta: -3,
                 feedback: "No test opens a socket.".into(),
+                criteria: Vec::new(),
             },
         ];
         let prompt = build_report_prompt("{}", &siblings);
@@ -594,6 +670,9 @@ mod tests {
         assert!(prompt.contains("Architecture — task 0 “Bind to a port” (+12 pts)"));
         assert!(prompt.contains("Tests — task 1 “Concurrent clients” (-3 pts)"));
         assert!(prompt.contains("No test opens a socket."));
+        // The sheet rides along with its keys: the report answers by key, so
+        // the model has to be shown the spelling it must use.
+        assert!(prompt.contains("`architecture` — 4.0 — One function does both jobs."));
     }
 
     #[test]
@@ -621,6 +700,38 @@ mod tests {
         assert!(doc.friction[0].why.is_none());
         assert_eq!(doc.judges[0].improve.as_deref(), Some("SELECT is large"));
         assert_eq!(doc.improve.len(), 1);
+    }
+
+    #[test]
+    fn the_per_criterion_summary_survives_and_is_pruned() {
+        // The scorecard shows a criterion once for the session; this is the
+        // description under it. An entry the page cannot place — no key, or
+        // nothing said — would render as a criterion with no words at all, so
+        // it is dropped and the page falls back to the panel's own note.
+        let raw = r#"{
+          "built": {"brief": "A server.", "tasks": []},
+          "criteria": [
+            {"key": "architecture", "summary": "Held at 9 across all three tasks."},
+            {"key": "tests", "summary": "   "},
+            {"key": "  ", "summary": "orphaned"},
+            {"key": "data", "summary": "Rose once the probe stopped failing."}
+          ]
+        }"#;
+        let doc = parse_report_doc(raw).expect("parses");
+        let keys: Vec<&str> = doc.criteria.iter().map(|c| c.key.as_str()).collect();
+        assert_eq!(keys, ["architecture", "data"]);
+        // Our vocabulary is scrubbed here as it is everywhere else.
+        assert_eq!(
+            doc.criteria[1].summary,
+            "Rose once the check stopped failing."
+        );
+    }
+
+    #[test]
+    fn a_report_without_criteria_still_parses() {
+        // Every report written before the field existed.
+        let doc = parse_report_doc(DOC).expect("parses");
+        assert!(doc.criteria.is_empty());
     }
 
     #[test]

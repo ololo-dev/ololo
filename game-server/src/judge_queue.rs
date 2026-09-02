@@ -22,7 +22,9 @@ use arena_core::judging::{
 };
 use arena_core::llm::ModelConfig;
 use arena_core::llm::resolve::LlmOverride;
-use arena_core::protocol::{JudgeScoredPayload, PlayerAgentFrame, ZmqEvent};
+use arena_core::protocol::{
+    JudgeScoredPayload, PlayerAgentFrame, PlayerJudgeStatusPayload, ZmqEvent,
+};
 
 use crate::state::GameServerState;
 
@@ -2225,6 +2227,7 @@ pub async fn enqueue_judge_run(
             {
                 tracing::warn!(error = %e, "judge_queue: failed to persist running status");
             }
+            let started_at = Utc::now();
             state
                 .event_publisher
                 .publish(&ZmqEvent::JudgeStarted {
@@ -2233,9 +2236,26 @@ pub async fn enqueue_judge_run(
                     task_id,
                     judge_slug: judge_slug.clone(),
                     judge_name: judge_name.clone(),
-                    timestamp: Utc::now(),
+                    timestamp: started_at,
                 })
                 .await;
+            // The player's own agent hears it too, so the CLI can say who
+            // is reviewing what — the web page learns the same from the bus.
+            if let Some(tx) = state.player_agent_registry.get(&player_id) {
+                send_agent_frame(
+                    tx.value(),
+                    PlayerAgentFrame::JudgeStarted(PlayerJudgeStatusPayload {
+                        task_id,
+                        judge_slug: judge_slug.clone(),
+                        judge_name: judge_name.clone(),
+                        status: "running".to_string(),
+                        error: None,
+                        updated_at: Some(started_at),
+                        judge_result_id: None,
+                    }),
+                    player_id,
+                );
+            }
         }
 
         let run = match cfg
@@ -2466,6 +2486,7 @@ async fn persist_and_publish_failure(
     {
         tracing::warn!(error = %e, "judge_queue: failed to persist failed status");
     }
+    let failed_at = Utc::now();
     state
         .event_publisher
         .publish(&ZmqEvent::JudgeFailed {
@@ -2475,9 +2496,26 @@ async fn persist_and_publish_failure(
             judge_slug: judge_slug.to_string(),
             judge_name: judge_name.to_string(),
             error: public_judge_error(message),
-            timestamp: Utc::now(),
+            timestamp: failed_at,
         })
         .await;
+    // Same generic message to the agent, so its "reviewing" line lets go of
+    // the judge instead of spinning on a run that already gave up.
+    if let Some(tx) = state.player_agent_registry.get(&player_id) {
+        send_agent_frame(
+            tx.value(),
+            PlayerAgentFrame::JudgeFailed(PlayerJudgeStatusPayload {
+                task_id,
+                judge_slug: judge_slug.to_string(),
+                judge_name: judge_name.to_string(),
+                status: "failed".to_string(),
+                error: Some(public_judge_error(message)),
+                updated_at: Some(failed_at),
+                judge_result_id: None,
+            }),
+            player_id,
+        );
+    }
 }
 
 /// Persist a judge run's full telemetry to the on-disk log store

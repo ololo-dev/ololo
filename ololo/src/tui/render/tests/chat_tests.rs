@@ -31,6 +31,7 @@ fn chat_view_renders_task_header_check_and_verdict() {
         "done-note",
     )));
     app.on_event(crate::tui::event::TuiEvent::JudgeScored {
+        task_id: None,
         judge_name: "Creativity".to_string(),
         point_delta: 17,
         feedback: "goes beyond".to_string(),
@@ -407,6 +408,7 @@ mod nothing_is_truncated {
             0, "Wx", "d",
         )));
         app.on_event(crate::tui::event::TuiEvent::JudgeScored {
+            task_id: None,
             judge_name: "Creativity".to_string(),
             point_delta: 17,
             feedback: "The build goes well beyond a plain weather card: quick picks, \
@@ -460,4 +462,41 @@ mod nothing_is_truncated {
             "the chat pane must start further left (be wider): chat at {chat_left}, probes at {probes_left}"
         );
     }
+}
+
+#[test]
+fn chat_pane_keeps_a_status_row_above_the_compose_bar() {
+    let mut app = fresh_app(120, 40);
+    app.sidebar_view = SidebarView::Chat;
+    app.has_pty = true;
+    app.header.status = crate::tui::header::Status::Running;
+    app.on_event(crate::tui::event::TuiEvent::ProbeResult(task_probe(
+        0,
+        "Wx",
+        "done-note",
+    )));
+    app.on_event(crate::tui::event::TuiEvent::JudgeStarted {
+        task_id: None,
+        judge_name: "Data".to_string(),
+    });
+    app.next_probe_due = Some(std::time::Instant::now() + std::time::Duration::from_secs(45));
+    let flat = header_flat(&app, 120, 40);
+    assert!(flat.contains("TASK #0"), "transcript still renders");
+    assert!(
+        flat.contains("Data reviewing"),
+        "status row names the judge: {flat}"
+    );
+    assert!(
+        flat.contains("in 4") && flat.contains("next check"),
+        "status row counts down: {flat}"
+    );
+    assert!(
+        flat.contains("message the agent"),
+        "compose bar survives under the status row"
+    );
+    // Without anything to say, the row yields its line to the transcript.
+    app.judge_runs.clear();
+    app.next_probe_due = None;
+    let flat = header_flat(&app, 120, 40);
+    assert!(!flat.contains("next check"), "no status, no row");
 }

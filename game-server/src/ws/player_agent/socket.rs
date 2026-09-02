@@ -27,6 +27,22 @@ use uuid::Uuid;
 /// second caps the per-player dispatch rate without hurting gameplay.
 const PASS_REDISPATCH_FLOOR_SECS: i32 = 1;
 
+/// How long the loop sleeps before the next dispatch: the floor after a
+/// pass (or a completion-flag nudge), the backed-off interval otherwise.
+/// One rule, shared with the `ProbeGraded.next_probe_in_secs` hint the
+/// agent narrates, so the countdown the player sees is the sleep the
+/// scheduler takes.
+pub(crate) fn next_probe_delay_secs(
+    current_interval_secs: i32,
+    dispatch_next_immediately: bool,
+) -> i32 {
+    if dispatch_next_immediately {
+        PASS_REDISPATCH_FLOOR_SECS
+    } else {
+        current_interval_secs.max(1)
+    }
+}
+
 /// Which `players` row an agent socket may drive.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SocketPlayer {
@@ -780,11 +796,7 @@ pub async fn handle_player_agent_socket(
             dispatch_next_immediately = true;
         }
 
-        let sleep_secs = if dispatch_next_immediately {
-            PASS_REDISPATCH_FLOOR_SECS
-        } else {
-            current_interval_secs.max(1)
-        };
+        let sleep_secs = next_probe_delay_secs(current_interval_secs, dispatch_next_immediately);
         let next_probe_at = Utc::now() + chrono::Duration::seconds(sleep_secs as i64);
         update_next_probe_at(&state, session_id, player_id, Some(next_probe_at)).await;
         // Drain the session broadcast during the inter-probe sleep so RunningCountdown

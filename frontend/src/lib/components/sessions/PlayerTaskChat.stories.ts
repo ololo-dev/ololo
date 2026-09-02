@@ -230,3 +230,21 @@ export const FinishedSession: Story = {
     live: false,
   },
 };
+
+/** The status footer counting down to the next check while the previous
+ *  task's judges are still reading — the live session's resting state. */
+export const NextCheckCountdown: Story = {
+  args: {
+    ...LiveSession.args,
+    nextProbeAt: new Date(Date.now() + 45_000).toISOString(),
+    agentConnected: true,
+    completionStatus: "in_progress",
+  },
+};
+
+export const AgentDisconnected: Story = {
+  args: {
+    ...LiveSession.args,
+    agentConnected: false,
+  },
+};

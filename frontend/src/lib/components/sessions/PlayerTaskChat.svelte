@@ -8,6 +8,7 @@
     PlayerTaskEvaluation,
     PlayerArtifactRef,
     PlayerHistoryCommit,
+    PlayerCompletionStatus,
   } from '$lib/types/arena'
   import TypewriterMarkdown from './TypewriterMarkdown.svelte'
   import MarkdownContent from '$lib/components/MarkdownContent.svelte'
@@ -57,6 +58,14 @@
     score?: number
     rank?: number
     totalTasks?: number
+    /** When the scheduler dispatches the next probe — the status footer's
+     *  countdown. Null between tasks and once the player is done. */
+    nextProbeAt?: string | null
+    sessionPaused?: boolean
+    /** Whether the player's ololo agent socket is up; null when unknown. */
+    agentConnected?: boolean | null
+    /** The player's overall standing: in progress, waiting on judges, done. */
+    completionStatus?: PlayerCompletionStatus | null
   }
   let {
     tasks,
@@ -79,6 +88,10 @@
     score = 0,
     rank = 0,
     totalTasks = 0,
+    nextProbeAt = null,
+    sessionPaused = false,
+    agentConnected = null,
+    completionStatus = null,
   }: Props = $props()
 
   // ── The transcript ───────────────────────────────────────────────────────
@@ -117,22 +130,15 @@
     | { kind: 'closed'; key: string; ordinal: number; at: number | null; status: string }
     | { kind: 'retry'; key: string; ordinal: number; at: number | null }
     | {
-        /** Open-ended task guidance: what "done" means and where it stands.
-         *  waiting  — the player has not declared completion yet
-         *  accepted — delivered; judges are actively reviewing
-         *  checks   — verdicts are in, but judge-requested evidence (extra
-         *             checks / files) still holds the task
-         *  wrapping — everything settled; the next task is moments away */
+        /** Open-ended task guidance while the player works: what "done"
+         *  means. Once the task is delivered, the status footer narrates
+         *  where it stands (judges reviewing, evidence outstanding,
+         *  wrapping up). */
         kind: 'completion'
         key: string
         ordinal: number
         at: number | null
-        state: 'waiting' | 'accepted' | 'checks' | 'wrapping'
         doneFile: string | null
-        /** `checks` state: judge extra checks not yet passing. */
-        pendingChecks: number
-        /** `checks` state: requested artifact files not yet delivered. */
-        pendingDeliveries: number
       }
     | { kind: 'artifact'; key: string; ordinal: number; at: number | null; entries: GalleryEntry[] }
     | {
@@ -289,8 +295,34 @@
     return judgeNamesBySlug.get(slug) ?? slug.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
   }
 
-  const items = $derived.by(() => {
+  /** The current task's standing plus the judges' whereabouts across every
+   *  task — what the status footer narrates. Gathered while the transcript
+   *  is built, from the same facts the bubbles show. */
+  type StatusFacts = {
+    ordinal: number
+    openEnded: boolean
+    doneFile: string | null
+    accepted: boolean
+    judging: boolean
+    pendingChecks: number
+    pendingDeliveries: number
+    /** Judges attached to the current task, not started yet. */
+    queued: string[]
+    /** Judges actually evaluating right now, by task. */
+    reviewing: { ordinal: number; names: string[] }[]
+    /** The newest task whose judges have all reported (none running or
+     *  queued anywhere) — "judges are done with task #N". */
+    judgesDoneWith: number | null
+    /** The current task's probe in flight, if one is. */
+    inFlight: PlayerProbeEntry | null
+  }
+
+  const built = $derived.by(() => {
     const out: ChatItem[] = []
+    let facts: StatusFacts | null = null
+    const reviewingAll: { ordinal: number; names: string[] }[] = []
+    let anyJudgeBusy = false
+    let judgesDoneWith: number | null = null
     for (const task of tasks) {
       const ord = task.ordinal
       const taskProbes = probesByTask.get(task.task_id) ?? []
@@ -404,7 +436,7 @@
         if (probeStatus(latest) === 'fail' && points === 0 && !judgeRegistered) continue
         out.push({
           kind: 'check',
-          key: `check:${testId}`,
+          key: `check:${task.task_id}:${testId}`,
           ordinal: ord,
           at: ts(latest.resolved_at) ?? ts(latest.dispatched_at),
           latest,
@@ -567,29 +599,44 @@
       // brief has landed.
       const isCurrent = task.task_id === tasks[tasks.length - 1]?.task_id
       const pendingDeliveries = [...requestRows.values()].filter((r) => !r.delivered).length
-      if (openEnded && !sessionFinished && isCurrent) {
-        const base = {
-          kind: 'completion' as const,
+      if (openEnded && !sessionFinished && isCurrent && !accepted && task.scheduler_state !== null) {
+        out.push({
+          kind: 'completion',
           key: `completion:${task.task_id}`,
           ordinal: ord,
           at: null,
           doneFile,
+        })
+      }
+
+      // The judges' whereabouts, for the status footer.
+      if (reviewingNames.length > 0) reviewingAll.push({ ordinal: ord, names: reviewingNames })
+      if (reviewingNames.length > 0 || queuedNames.length > 0) anyJudgeBusy = true
+      else if (judges.length > 0 || failed.length > 0) judgesDoneWith = ord
+      if (isCurrent) {
+        // A check dispatched and not yet answered — the newest one speaks.
+        const inFlight = taskProbes
+          .filter(
+            (p) =>
+              p.state === 'dispatched' &&
+              p.outcome === null &&
+              !!(p.test_command || p.rendered_command) &&
+              p.rendered_command !== 'llm:rubric' &&
+              !REQUEST_RE.test(p.test_command || p.rendered_command),
+          )
+          .sort((a, b) => (ts(b.dispatched_at) ?? 0) - (ts(a.dispatched_at) ?? 0))[0]
+        facts = {
+          ordinal: ord,
+          openEnded,
+          doneFile,
+          accepted,
+          judging,
           pendingChecks,
           pendingDeliveries,
-        }
-        if (!accepted && task.scheduler_state !== null) {
-          out.push({ ...base, state: 'waiting' })
-        } else if (accepted) {
-          if (queuedNames.length > 0 || reviewingNames.length > 0) {
-            out.push({ ...base, state: 'accepted' })
-          } else if (pendingChecks + pendingDeliveries > 0) {
-            // The silent gap this banner exists for: every verdict chip is
-            // in, yet the task holds — judge-requested evidence is still
-            // being retried or awaited.
-            out.push({ ...base, state: 'checks' })
-          } else if (judging) {
-            out.push({ ...base, state: 'wrapping' })
-          }
+          queued: queuedNames,
+          reviewing: [],
+          judgesDoneWith: null,
+          inFlight: inFlight ?? null,
         }
       }
 
@@ -626,13 +673,156 @@
       out.push({ kind: 'session-end', key: 'session-end', ordinal: Number.MAX_SAFE_INTEGER, at: null })
       out.push({ kind: 'summary', key: 'summary', ordinal: Number.MAX_SAFE_INTEGER, at: null })
     }
-    return out.sort(
-      (a, b) =>
-        a.ordinal - b.ordinal ||
-        STAGE[a.kind] - STAGE[b.kind] ||
-        atOf(a) - atOf(b) ||
-        PRIO[a.kind] - PRIO[b.kind],
-    )
+    if (facts !== null) {
+      const f: StatusFacts = facts
+      f.reviewing = reviewingAll
+      f.judgesDoneWith = anyJudgeBusy ? null : judgesDoneWith
+    }
+    return {
+      items: out.sort(
+        (a, b) =>
+          a.ordinal - b.ordinal ||
+          STAGE[a.kind] - STAGE[b.kind] ||
+          atOf(a) - atOf(b) ||
+          PRIO[a.kind] - PRIO[b.kind],
+      ),
+      facts,
+    }
+  })
+  const items = $derived(built.items)
+  const statusFacts = $derived(built.facts)
+
+  // ── The status footer ────────────────────────────────────────────────────
+  // What is happening right now and what comes next, pinned under the
+  // transcript while the session runs: the judges at work, the check in
+  // flight, the countdown to the next one. The same narration ololo's TUI
+  // keeps in its chat pane's bottom row — a player should never wonder
+  // whether the silence is the system working or the system stuck.
+  type LiveStatus = {
+    text: string
+    /** Seconds to the next check, worn as a chip after the text. */
+    countdown: number | null
+    /** Something is actively happening — spinner instead of a still dot. */
+    busy: boolean
+    tone: 'info' | 'ok' | 'warn'
+  }
+
+  let nowMs = $state(Date.now())
+  $effect(() => {
+    if (!browser || sessionFinished || replayEngaged) return
+    const timer = setInterval(() => {
+      nowMs = Date.now()
+    }, 1000)
+    return () => clearInterval(timer)
+  })
+
+  /** `A` · `A and B` · `A, B and C`. */
+  function listNames(names: string[]): string {
+    if (names.length <= 1) return names[0] ?? ''
+    return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
+  }
+
+  /** `Correctness and Data reviewing task #2, Creativity reviewing task #1`. */
+  function reviewingPhrase(groups: { ordinal: number; names: string[] }[]): string {
+    return groups.map((g) => `${listNames(g.names)} reviewing task #${g.ordinal}`).join(', ')
+  }
+
+  /** The judge hold spelled out: what still keeps the task open. */
+  function holdPhrase(f: StatusFacts): string {
+    if (f.pendingChecks > 0 && f.pendingDeliveries > 0)
+      return `the judges are waiting on ${f.pendingChecks} extra ${f.pendingChecks === 1 ? 'check' : 'checks'} (retried automatically) and ${f.pendingDeliveries} requested ${f.pendingDeliveries === 1 ? 'file' : 'files'}.`
+    if (f.pendingDeliveries > 0)
+      return `the judges are waiting on ${f.pendingDeliveries} requested ${f.pendingDeliveries === 1 ? 'file' : 'files'} — see the request above.`
+    return `${f.pendingChecks === 1 ? 'an extra check' : `${f.pendingChecks} extra checks`} from the judges ${f.pendingChecks === 1 ? 'is' : 'are'} still running; ololo retries ${f.pendingChecks === 1 ? 'it' : 'them'} automatically.`
+  }
+
+  const liveStatus = $derived.by((): LiveStatus | null => {
+    if (sessionFinished || replayEngaged || tasks.length === 0) return null
+    if (sessionPaused)
+      return {
+        tone: 'warn',
+        busy: false,
+        countdown: null,
+        text: 'Session paused — checks and judging resume when the host unpauses.',
+      }
+    if (agentConnected === false)
+      return {
+        tone: 'warn',
+        busy: false,
+        countdown: null,
+        text: 'Waiting for your ololo agent to reconnect — checks run on your machine, so nothing moves until it is back.',
+      }
+    const f = statusFacts
+    const reviewing = f?.reviewing ?? []
+    const working = reviewing.length > 0
+    if (completionStatus === 'completed' || completionStatus === 'awaiting_judges') {
+      return working
+        ? {
+            tone: 'info',
+            busy: true,
+            countdown: null,
+            text: `All your tasks are done — ${reviewingPhrase(reviewing)}. The session ends when every player finishes.`,
+          }
+        : {
+            tone: 'ok',
+            busy: false,
+            countdown: null,
+            text: 'All your tasks are done ✓ — the session ends when every player finishes.',
+          }
+    }
+    if (!f) return null
+    // The lead: where the judges are, said before what comes next.
+    const lead = working
+      ? `Evaluation in progress — ${reviewingPhrase(reviewing)}.`
+      : f.judgesDoneWith !== null
+        ? `Judges are done with task #${f.judgesDoneWith}.`
+        : ''
+    const withLead = (now: string) => (lead ? `${lead} ${now}` : now)
+    // A delivered open-ended task: the ball is with the panel.
+    if (f.openEnded && f.accepted) {
+      if (working || f.queued.length > 0) {
+        const who = working ? reviewingPhrase(reviewing) : `judges queued: ${listNames(f.queued)}`
+        return { tone: 'info', busy: true, countdown: null, text: `Task delivered ✓ — ${who}.` }
+      }
+      if (f.pendingChecks + f.pendingDeliveries > 0)
+        return {
+          tone: 'info',
+          busy: true,
+          countdown: null,
+          text: `Verdicts are in — ${holdPhrase(f)} The next task starts once everything settles.`,
+        }
+      if (f.judging)
+        return {
+          tone: 'ok',
+          busy: true,
+          countdown: null,
+          text: 'All verdicts are in ✓ — wrapping up this task; the next one is moments away.',
+        }
+    }
+    if (f.inFlight) {
+      const cmd = f.inFlight.test_command || f.inFlight.rendered_command
+      const now =
+        f.doneFile && DONE_FILE_IN_CMD_RE.test(cmd)
+          ? `Looking for ${f.doneFile}…`
+          : f.inFlight.label && !f.inFlight.label.startsWith('registered:')
+            ? `Checking your code now — ${f.inFlight.label}…`
+            : 'Checking your code now…'
+      return { tone: 'info', busy: true, countdown: null, text: withLead(now) }
+    }
+    const due = nextProbeAt ? new Date(nextProbeAt).getTime() : Number.NaN
+    if (!Number.isNaN(due)) {
+      const secs = Math.max(0, Math.ceil((due - nowMs) / 1000))
+      if (secs > 0) {
+        const now =
+          f.openEnded && !f.accepted && f.doneFile
+            ? `ololo looks for ${f.doneFile} again in`
+            : 'Next check of your code in'
+        return { tone: 'info', busy: working, countdown: secs, text: withLead(now) }
+      }
+      return { tone: 'info', busy: true, countdown: 0, text: withLead('Next check any moment now…') }
+    }
+    if (lead) return { tone: working ? 'info' : 'ok', busy: working, countdown: null, text: lead }
+    return null
   })
 
   // Follow the transcript during replay: as the playhead reveals new messages,
@@ -1421,51 +1611,21 @@
         </span>
       </div>
     {:else if item.kind === 'completion'}
-      <!-- The open-ended contract, spelled out: what "done" means while the
-           player works, and that the ball is with the judges once accepted. -->
+      <!-- The open-ended contract, spelled out while the player works: what
+           "done" means. Once delivered, the status footer takes over. -->
       <div
         class="mx-auto w-full max-w-[640px] rounded-xl border border-dashed border-brand-border/70 bg-brand-light-blue/30 px-4 py-2.5 text-center"
         data-testid="chat-completion-{item.ordinal}"
       >
-        {#if item.state === 'waiting'}
-          <p class="text-[12px] text-brand-text/80">
-            <span class="font-semibold">You decide when this task is done.</span>
-            {#if item.doneFile}
-              Write <code class="rounded bg-white/80 px-1 font-mono text-[11px] font-bold">{item.doneFile}</code>
-              describing what you built — ololo picks it up automatically.
-            {:else}
-              Declare completion the way the brief says — ololo picks it up automatically.
-            {/if}
-          </p>
-        {:else if item.state === 'accepted'}
-          <p class="text-[12px] text-brand-text/80">
-            <span class="font-semibold text-green-700">Completion accepted ✓</span>
-            — the judge panel is reviewing your delivery.
-          </p>
-        {:else if item.state === 'checks'}
-          <p class="text-[12px] text-brand-text/80">
-            <span class="font-semibold">Verdicts are in</span>
-            —
-            {#if item.pendingChecks > 0 && item.pendingDeliveries > 0}
-              the judges are waiting on {item.pendingChecks} extra
-              {item.pendingChecks === 1 ? 'check' : 'checks'} (retried automatically) and
-              {item.pendingDeliveries} requested {item.pendingDeliveries === 1 ? 'file' : 'files'}.
-            {:else if item.pendingDeliveries > 0}
-              the judges are waiting on {item.pendingDeliveries} requested
-              {item.pendingDeliveries === 1 ? 'file' : 'files'} — see the request above.
-            {:else}
-              {item.pendingChecks === 1 ? 'an extra check' : `${item.pendingChecks} extra checks`}
-              from the judges {item.pendingChecks === 1 ? 'is' : 'are'} still running; ololo
-              retries {item.pendingChecks === 1 ? 'it' : 'them'} automatically.
-            {/if}
-            The next task starts once everything settles.
-          </p>
-        {:else}
-          <p class="text-[12px] text-brand-text/80">
-            <span class="font-semibold text-green-700">All verdicts are in ✓</span>
-            — wrapping up this task; the next one is moments away.
-          </p>
-        {/if}
+        <p class="text-[13px] text-brand-text/80">
+          <span class="font-semibold">You decide when this task is done.</span>
+          {#if item.doneFile}
+            Write <code class="rounded bg-white/80 px-1 font-mono text-[11px] font-bold">{item.doneFile}</code>
+            describing what you built — ololo picks it up automatically.
+          {:else}
+            Declare completion the way the brief says — ololo picks it up automatically.
+          {/if}
+        </p>
       </div>
     {:else if item.kind === 'session-end'}
       <div class="my-2 flex items-center gap-3" data-testid="chat-session-end">
@@ -1489,6 +1649,44 @@
       />
     {/if}
   {/each}
+  {#if liveStatus}
+    <!-- The status footer: what is happening now and what comes next. Sits
+         under the transcript, outside the scroll, so it is always in view —
+         the "typing…" line of this chat. -->
+    <div class="mx-auto w-full max-w-[920px] pt-2" data-testid="chat-status" aria-live="polite">
+      <div
+        class="flex items-center gap-2.5 rounded-xl border px-3.5 py-2 text-[13px] shadow-sm {liveStatus.tone === 'warn'
+          ? 'border-amber-200 bg-amber-50 text-amber-900'
+          : liveStatus.tone === 'ok'
+            ? 'border-green-200/80 bg-white text-brand-text/80'
+            : 'border-brand-border/60 bg-white text-brand-text/80'}"
+      >
+        {#if liveStatus.busy}
+          <span
+            class="inline-block h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-brand-blue/50 border-t-transparent"
+            aria-hidden="true"
+          ></span>
+        {:else}
+          <span
+            class="inline-block h-2 w-2 shrink-0 rounded-full {liveStatus.tone === 'warn'
+              ? 'bg-amber-500'
+              : liveStatus.tone === 'ok'
+                ? 'bg-green-500'
+                : 'bg-brand-blue/60'}"
+            aria-hidden="true"
+          ></span>
+        {/if}
+        <span class="min-w-0 flex-1">{liveStatus.text}</span>
+        {#if liveStatus.countdown !== null && liveStatus.countdown > 0}
+          <span
+            class="shrink-0 rounded-full bg-brand-light-blue px-2 py-0.5 text-[12px] font-bold tabular-nums text-brand-blue"
+            data-testid="chat-status-countdown">{liveStatus.countdown}s</span
+          >
+        {/if}
+      </div>
+    </div>
+  {/if}
+
 </div>
 
 {#if lightbox}

@@ -13,7 +13,7 @@
 //! text wraps with a hanging indent so the structure survives, and history
 //! is reached by scrolling rather than by cutting.
 
-use crate::tui::app::{ChatMsg, SidebarView, TuiApp};
+use crate::tui::app::{ChatMsg, SidebarView, StatusLine, TuiApp};
 use crate::tui::render::common::wrap_text;
 use crate::tui::render::markdown::md_indented;
 use crate::tui::render::probes::result_glyph;
@@ -118,8 +118,8 @@ pub(crate) fn bubble_at(
         return None;
     }
     let inner_w = area.width.saturating_sub(4).max(1) as usize;
-    let compose_rows = if app.has_pty { 1 } else { 0 };
-    let inner_h = area.height.saturating_sub(2 + compose_rows) as usize;
+    let (compose_rows, status_rows) = bottom_rows(app, inner_w);
+    let inner_h = area.height.saturating_sub(2 + compose_rows + status_rows) as usize;
     let row_off = row.checked_sub(area.y + 1)? as usize;
     if row_off >= inner_h {
         return None;
@@ -135,13 +135,31 @@ pub(crate) fn bubble_at(
         .position(|&(s, e)| line_idx >= s && line_idx < e)
 }
 
+/// Rows the pane keeps below the transcript: the compose bar (with a
+/// hosted agent) and the live status (while the session has something to
+/// say about what happens next) — up to `STATUS_MAX_ROWS` of it, so a
+/// narrow pane wraps the sentence instead of cutting it.
+fn bottom_rows(app: &TuiApp, inner_w: usize) -> (u16, u16) {
+    let compose = if app.has_pty { 1 } else { 0 };
+    let status = app
+        .live_status()
+        .map(|st| status_lines(&st, inner_w).len() as u16)
+        .unwrap_or(0);
+    (compose, status)
+}
+
+/// The most rows the status may take from the transcript.
+const STATUS_MAX_ROWS: usize = 2;
+
 pub(crate) fn render_chat(f: &mut Frame, area: Rect, app: &TuiApp) {
     // Borders (2) + horizontal padding (2) around the text.
     let inner_w = area.width.saturating_sub(4).max(1) as usize;
     // With a hosted agent the last inner row is the compose bar — the
-    // "✉ message" button, or the input line while typing.
-    let compose_rows = if app.has_pty { 1 } else { 0 };
-    let inner_h = area.height.saturating_sub(2 + compose_rows) as usize;
+    // "✉ message" button, or the input line while typing. Above it, the
+    // status row says what the session is doing and what comes next.
+    let status = app.live_status();
+    let (compose_rows, status_rows) = bottom_rows(app, inner_w);
+    let inner_h = area.height.saturating_sub(2 + compose_rows + status_rows) as usize;
 
     let msgs = app.chat_transcript();
     // The selected bubble (chat_cursor counts up from the newest).
@@ -188,10 +206,24 @@ pub(crate) fn render_chat(f: &mut Frame, area: Rect, app: &TuiApp) {
     let inner = block.inner(area);
     f.render_widget(block, area);
     let transcript = Rect {
-        height: inner.height.saturating_sub(compose_rows),
+        height: inner.height.saturating_sub(compose_rows + status_rows),
         ..inner
     };
     f.render_widget(Paragraph::new(Text::from(visible)), transcript);
+    if let Some(st) = status.as_ref()
+        && status_rows > 0
+        && inner.height >= compose_rows + status_rows
+    {
+        let rows = Rect {
+            y: inner.y + inner.height - status_rows - compose_rows,
+            height: status_rows,
+            ..inner
+        };
+        f.render_widget(
+            Paragraph::new(Text::from(status_lines(st, rows.width as usize))),
+            rows,
+        );
+    }
     if compose_rows > 0 && inner.height > 0 {
         let bar = Rect {
             y: inner.y + inner.height - 1,
@@ -231,6 +263,63 @@ fn compose_line(app: &TuiApp, width: usize) -> Paragraph<'static> {
         )),
     };
     Paragraph::new(line)
+}
+
+/// Braille spinner frames — the same idiom the agent CLIs use for "working".
+const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/// The status rows: a spinner (busy) or a still dot, then the sentence
+/// wrapped under a hanging indent, with the seconds of a countdown set in
+/// bold so the eye finds them. Capped at `STATUS_MAX_ROWS` — a sentence
+/// longer than that ends in `…` rather than eating the transcript.
+fn status_lines(st: &StatusLine, width: usize) -> Vec<Line<'static>> {
+    let glyph = if st.busy {
+        let tick = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| (d.as_millis() / 100) as usize)
+            .unwrap_or(0);
+        SPINNER[tick % SPINNER.len()]
+    } else {
+        "·"
+    };
+    let body_w = width.saturating_sub(3).max(1);
+    let mut segs = wrap_text(&st.text, body_w);
+    if segs.len() > STATUS_MAX_ROWS {
+        segs.truncate(STATUS_MAX_ROWS);
+        if let Some(last) = segs.last_mut() {
+            let mut chars: Vec<char> = last.chars().collect();
+            chars.truncate(body_w.saturating_sub(1));
+            chars.push('…');
+            *last = chars.into_iter().collect();
+        }
+    }
+    let dim = Style::default().fg(Color::Gray);
+    let bold = Style::default()
+        .fg(Color::White)
+        .add_modifier(Modifier::BOLD);
+    let last_i = segs.len().saturating_sub(1);
+    segs.into_iter()
+        .enumerate()
+        .map(|(i, seg)| {
+            let prefix = if i == 0 {
+                format!(" {glyph} ")
+            } else {
+                "   ".to_string()
+            };
+            let mut spans = vec![Span::styled(prefix, Style::default().fg(Color::Cyan))];
+            // `… in 12s` — the number is the part that changes every second.
+            let tail = st.countdown.filter(|s| *s > 0).map(|s| format!("{s}s"));
+            match tail {
+                Some(tail) if i == last_i && seg.ends_with(&format!("in {tail}")) => {
+                    let head = seg.len() - tail.len();
+                    spans.push(Span::styled(seg[..head].to_string(), dim));
+                    spans.push(Span::styled(tail, bold));
+                }
+                _ => spans.push(Span::styled(seg, dim)),
+            }
+            Line::from(spans)
+        })
+        .collect()
 }
 
 /// Wrap `text` when the first line has less room than the rest — the width

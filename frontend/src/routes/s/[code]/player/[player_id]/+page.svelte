@@ -1140,6 +1140,10 @@
         {rank}
         {totalTasks}
         similarityAdjustment={liveSnapshot.similarity_adjustment ?? null}
+        {nextProbeAt}
+        {sessionPaused}
+        {agentConnected}
+        {completionStatus}
       />
     {:else}
 

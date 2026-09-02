@@ -61,6 +61,38 @@ pub struct DoneNote {
     pub task_ordinal: Option<i32>,
 }
 
+/// One judge run the server announced, tracked from `JudgeStarted` until
+/// its verdict (`JudgeScored`) or failure (`JudgeFailed`) lands — the
+/// chat's status row names who is still reviewing what.
+#[derive(Debug, Clone)]
+pub struct JudgeRun {
+    pub judge_name: String,
+    pub task_id: Option<Uuid>,
+    /// Ordinal of the task under review, when the task is known.
+    pub task_ordinal: Option<i32>,
+    pub state: JudgeRunState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JudgeRunState {
+    Reviewing,
+    Scored,
+    Failed,
+}
+
+/// What the session is doing right now and what comes next — the chat
+/// pane's bottom row. `None` when nothing is known yet or the transcript's
+/// own closing line already says it all (session complete, cancelled).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StatusLine {
+    pub text: String,
+    /// Something is actively happening (a check running, judges reading):
+    /// the row wears a spinner instead of a still dot.
+    pub busy: bool,
+    /// Seconds until the next probe, when the server told us.
+    pub countdown: Option<u64>,
+}
+
 /// One message of the chat transcript, in render order (oldest first).
 /// Mirrors the web player chat's message kinds: ololo hands out tasks and
 /// runs checks, judges ask for evidence and deliver verdicts, the player
@@ -175,6 +207,14 @@ pub struct TuiApp {
     pub chat_cursor: Option<usize>,
     /// Judge verdicts in arrival order, for the chat view.
     pub judge_verdicts: Vec<JudgeVerdict>,
+    /// Judge runs the server announced, in arrival order — who is still
+    /// reviewing which task, for the chat's status row.
+    pub judge_runs: Vec<JudgeRun>,
+    /// When the scheduler dispatches the next probe, from the last
+    /// `ProbeGraded.next_probe_in_secs`; cleared when a probe arrives.
+    /// Monotonic on purpose — a countdown must not care about wall-clock
+    /// skew between the player and the server.
+    pub next_probe_due: Option<std::time::Instant>,
     /// The player's done-notes in arrival order, for the chat view.
     pub done_notes: Vec<DoneNote>,
     /// The chat compose line: `Some(text)` while the player is typing a
@@ -278,6 +318,8 @@ impl TuiApp {
             chat_scroll: 0,
             chat_cursor: None,
             judge_verdicts: Vec::new(),
+            judge_runs: Vec::new(),
+            next_probe_due: None,
             done_notes: Vec::new(),
             chat_input: None,
             probes: VecDeque::new(),
@@ -342,6 +384,8 @@ impl TuiApp {
                 }
             }
             TuiEvent::ProbeArrived(p) => {
+                // The probe the clock counted down to is here.
+                self.next_probe_due = None;
                 // Track the scheduler's current task position: the highest
                 // ordinal seen in any TestPush. Tasks below it are done.
                 // Ordinal 0 is a real task (projects number tasks from 0);
@@ -535,7 +579,13 @@ impl TuiApp {
                 point_delta,
                 expected,
                 actual,
+                next_probe_in_secs,
             } => {
+                if let Some(secs) = next_probe_in_secs {
+                    self.next_probe_due = Some(
+                        std::time::Instant::now() + std::time::Duration::from_secs(u64::from(secs)),
+                    );
+                }
                 if let Some(p) = self.probes.iter_mut().find(|x| x.probe_id == probe_id) {
                     p.outcome = Some(outcome);
                     p.point_delta = Some(point_delta);
@@ -613,26 +663,62 @@ impl TuiApp {
                 }
             }
             TuiEvent::JudgeScored {
+                task_id,
                 judge_name,
                 point_delta,
                 feedback,
             } => {
-                // Pin to the scheduler's current task; when that is unknown
-                // (reconnect raced the TestPush) fall back to the highest
-                // ordinal already stored — the task being judged.
-                let task_ordinal = self.max_task_ordinal.or_else(|| {
-                    self.probes
-                        .iter()
-                        .filter(|p| p.task_id.is_some())
-                        .map(|p| p.task_ordinal)
-                        .max()
-                });
+                // The frame names its task on current servers; otherwise
+                // pin to the scheduler's current task, and when even that
+                // is unknown (reconnect raced the TestPush) fall back to
+                // the highest ordinal already stored — the task being judged.
+                let task_ordinal = task_id
+                    .and_then(|id| self.task_ordinal_of(id))
+                    .or(self.max_task_ordinal)
+                    .or_else(|| {
+                        self.probes
+                            .iter()
+                            .filter(|p| p.task_id.is_some())
+                            .map(|p| p.task_ordinal)
+                            .max()
+                    });
+                self.settle_judge_run(task_id, &judge_name, JudgeRunState::Scored);
                 self.judge_verdicts.push(JudgeVerdict {
                     judge_name,
                     point_delta,
                     feedback,
                     task_ordinal,
                 });
+            }
+            TuiEvent::JudgeStarted {
+                task_id,
+                judge_name,
+            } => {
+                let task_ordinal = task_id
+                    .and_then(|id| self.task_ordinal_of(id))
+                    .or(self.max_task_ordinal);
+                // A retried run re-announces the same judge on the same task
+                // — one row per (task, judge), back to reviewing.
+                if let Some(run) = self
+                    .judge_runs
+                    .iter_mut()
+                    .find(|r| r.task_id == task_id && r.judge_name == judge_name)
+                {
+                    run.state = JudgeRunState::Reviewing;
+                } else {
+                    self.judge_runs.push(JudgeRun {
+                        judge_name,
+                        task_id,
+                        task_ordinal,
+                        state: JudgeRunState::Reviewing,
+                    });
+                }
+            }
+            TuiEvent::JudgeFailed {
+                task_id,
+                judge_name,
+            } => {
+                self.settle_judge_run(task_id, &judge_name, JudgeRunState::Failed);
             }
             TuiEvent::CompletionFlagPublished { path, text } => {
                 // Pin to the scheduler's current task, same as verdicts.
@@ -1506,12 +1592,178 @@ impl TuiApp {
                 text: "all your tasks are done — the session ends when every player finishes"
                     .to_string(),
             }),
-            _ if self.judging => out.push(ChatMsg::System {
-                text: "the judges are reviewing your delivery…".to_string(),
-            }),
+            // The judge phase and the probe cadence are the status row's
+            // story (`live_status`), not the transcript's.
             _ => {}
         }
         out
+    }
+
+    /// Ordinal of a task the app has seen, by id.
+    fn task_ordinal_of(&self, task_id: Uuid) -> Option<i32> {
+        self.known_tasks
+            .get(&task_id)
+            .map(|t| t.ordinal)
+            .or_else(|| {
+                self.probes
+                    .iter()
+                    .find(|p| p.task_id == Some(task_id))
+                    .map(|p| p.task_ordinal)
+            })
+    }
+
+    /// Close the announced run this verdict/failure belongs to. Without a
+    /// task id (old servers) the oldest still-reviewing run of that judge
+    /// is the one — verdicts land in the order runs began.
+    fn settle_judge_run(&mut self, task_id: Option<Uuid>, judge_name: &str, state: JudgeRunState) {
+        let run = self.judge_runs.iter_mut().find(|r| {
+            r.judge_name == judge_name
+                && r.state == JudgeRunState::Reviewing
+                && (task_id.is_none() || r.task_id == task_id)
+        });
+        if let Some(run) = run {
+            run.state = state;
+        }
+    }
+
+    /// Judges still reviewing, grouped by task in arrival order:
+    /// `[(task ordinal, [judge names])]`.
+    fn reviewing_judges(&self) -> Vec<(Option<i32>, Vec<String>)> {
+        let mut groups: Vec<(Option<i32>, Vec<String>)> = Vec::new();
+        for run in self
+            .judge_runs
+            .iter()
+            .filter(|r| r.state == JudgeRunState::Reviewing)
+        {
+            match groups.iter_mut().find(|(ord, _)| *ord == run.task_ordinal) {
+                Some((_, names)) => names.push(run.judge_name.clone()),
+                None => groups.push((run.task_ordinal, vec![run.judge_name.clone()])),
+            }
+        }
+        groups
+    }
+
+    /// The task whose judges have all reported, when none is still reading
+    /// — "judges are done with task #N" — highest ordinal wins.
+    fn judges_done_with(&self) -> Option<i32> {
+        if self
+            .judge_runs
+            .iter()
+            .any(|r| r.state == JudgeRunState::Reviewing)
+        {
+            return None;
+        }
+        self.judge_runs.iter().filter_map(|r| r.task_ordinal).max()
+    }
+
+    /// What is happening right now and what comes next, for the chat
+    /// pane's status row. Priority: a paused session, then the judge hold
+    /// of a delivered task, then a check in flight, then the countdown to
+    /// the next check — each with the judges' whereabouts alongside.
+    pub fn live_status(&self) -> Option<StatusLine> {
+        use crate::tui::header::Status;
+        let reviewing = self.reviewing_judges();
+        match self.header.status {
+            Status::Paused => {
+                return Some(StatusLine {
+                    text: "session paused — checks and judging resume when the host unpauses"
+                        .to_string(),
+                    busy: false,
+                    countdown: None,
+                });
+            }
+            Status::TasksDone => {
+                if reviewing.is_empty() {
+                    return None;
+                }
+                return Some(StatusLine {
+                    text: format!(
+                        "all your tasks are done — {} — the session ends when every player finishes",
+                        reviewing_phrase(&reviewing)
+                    ),
+                    busy: true,
+                    countdown: None,
+                });
+            }
+            Status::Running => {}
+            Status::Connecting
+            | Status::Lobby
+            | Status::Complete
+            | Status::Cancelled
+            | Status::Error => {
+                return None;
+            }
+        }
+        // The judge hold of a delivered open-ended task: the panel has the
+        // build, and the next brief waits on its word.
+        if self.judging {
+            let who = if reviewing.is_empty() {
+                "the judge panel is reviewing your delivery".to_string()
+            } else {
+                reviewing_phrase(&reviewing)
+            };
+            return Some(StatusLine {
+                text: format!("task delivered — {who}…"),
+                busy: true,
+                countdown: None,
+            });
+        }
+        let lead = if reviewing.is_empty() {
+            self.judges_done_with()
+                .map(|ord| format!("judges are done with task #{ord}"))
+        } else {
+            Some(format!(
+                "evaluation in progress — {}",
+                reviewing_phrase(&reviewing)
+            ))
+        };
+        let with_lead = |now: String| match &lead {
+            Some(l) => format!("{l} · {now}"),
+            None => now,
+        };
+        // A check in flight, or answered and waiting for the server's grade.
+        let live_probe = self
+            .probes
+            .iter()
+            .rev()
+            .find(|p| p.task_id.is_some() && p.outcome.is_none() && p.error.is_none());
+        if let Some(p) = live_probe {
+            let now = if p.exit_code.is_some() {
+                "check answered — ololo is grading it…".to_string()
+            } else if let Some(file) = completion_flag_file(&p.command) {
+                format!("looking for {file}…")
+            } else if p.test_label.is_empty() {
+                "checking your code now…".to_string()
+            } else {
+                format!("checking your code now — {}…", p.test_label)
+            };
+            return Some(StatusLine {
+                text: with_lead(now),
+                busy: true,
+                countdown: None,
+            });
+        }
+        let countdown = self.next_probe_due.map(|due| {
+            due.saturating_duration_since(std::time::Instant::now())
+                .as_secs()
+        });
+        match countdown {
+            Some(secs) if secs > 0 => Some(StatusLine {
+                text: with_lead(format!("next check of your code in {secs}s")),
+                busy: !reviewing.is_empty(),
+                countdown: Some(secs),
+            }),
+            Some(_) => Some(StatusLine {
+                text: with_lead("next check any moment now…".to_string()),
+                busy: true,
+                countdown: Some(0),
+            }),
+            None => lead.map(|text| StatusLine {
+                text,
+                busy: !reviewing.is_empty(),
+                countdown: None,
+            }),
+        }
     }
 
     /// The selectable sidebar rows in display order: each task header,
@@ -1697,6 +1949,30 @@ fn bare_q(command: &str) -> Option<String> {
 /// The completion contract's done file, as its polling probe names it —
 /// `.ololo/<name>done<…>.md` somewhere in the command. Same shape the CLI's
 /// flag watcher matches, so guidance and delivery talk about one file.
+/// `Correctness and Data reviewing task #2, Creativity reviewing task #1`.
+fn reviewing_phrase(groups: &[(Option<i32>, Vec<String>)]) -> String {
+    groups
+        .iter()
+        .map(|(ord, names)| {
+            let who = join_names(names);
+            match ord {
+                Some(o) => format!("{who} reviewing task #{o}"),
+                None => format!("{who} reviewing your code"),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// `A` · `A and B` · `A, B and C`.
+fn join_names(names: &[String]) -> String {
+    match names {
+        [] => String::new(),
+        [one] => one.clone(),
+        [head @ .., last] => format!("{} and {last}", head.join(", ")),
+    }
+}
+
 fn completion_flag_file(command: &str) -> Option<String> {
     for (i, _) in command.match_indices(".ololo/") {
         let rest = &command[i..];

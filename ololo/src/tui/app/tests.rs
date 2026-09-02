@@ -201,6 +201,7 @@ fn popup_p_queues_paste_and_hands_focus_to_agent() {
     let tid = Uuid::new_v4();
     let pid = arrive(&mut app, tid, 0, "Trivia");
     app.on_event(TuiEvent::ProbeGraded {
+        next_probe_in_secs: None,
         probe_id: pid,
         outcome: arena_core::protocol::ProbeOutcome::Error,
         point_delta: -5,
@@ -245,6 +246,7 @@ fn task_group_sums_graded_points() {
         "no points before grading"
     );
     app.on_event(TuiEvent::ProbeGraded {
+        next_probe_in_secs: None,
         probe_id: p1,
         outcome: arena_core::protocol::ProbeOutcome::Error,
         point_delta: -5,
@@ -253,6 +255,7 @@ fn task_group_sums_graded_points() {
     });
     let p2 = arrive(&mut app, tid, 0, "Trivia");
     app.on_event(TuiEvent::ProbeGraded {
+        next_probe_in_secs: None,
         probe_id: p2,
         outcome: arena_core::protocol::ProbeOutcome::Pass,
         point_delta: 10,
@@ -657,6 +660,7 @@ fn viewer_identified_sets_viewer_player_id() {
 /// Grade a probe with the given outcome (server-side judgement).
 fn grade(app: &mut TuiApp, pid: Uuid, outcome: arena_core::protocol::ProbeOutcome) {
     app.on_event(TuiEvent::ProbeGraded {
+        next_probe_in_secs: None,
         probe_id: pid,
         outcome,
         point_delta: if outcome == arena_core::protocol::ProbeOutcome::Pass {
@@ -773,6 +777,7 @@ fn f3_pastes_last_failed_probe_and_focuses_agent() {
     app.has_pty = true;
     let pid = arrive(&mut app, Uuid::new_v4(), 0, "Trivia");
     app.on_event(TuiEvent::ProbeGraded {
+        next_probe_in_secs: None,
         probe_id: pid,
         outcome: arena_core::protocol::ProbeOutcome::Error,
         point_delta: -5,
@@ -1088,6 +1093,7 @@ fn judge_scored_is_stored_with_the_current_task_ordinal() {
     let mut app = fresh_app();
     app.on_event(TuiEvent::ProbeResult(chat_probe(Uuid::new_v4(), 1, 1, "d")));
     app.on_event(TuiEvent::JudgeScored {
+        task_id: None,
         judge_name: "Creativity".to_string(),
         point_delta: 17,
         feedback: "nice".to_string(),
@@ -1108,6 +1114,7 @@ fn chat_transcript_orders_tasks_collapses_reruns_and_pins_verdicts() {
     app.on_event(TuiEvent::ProbeResult(chat_probe(t0, 0, 1, "done-note")));
     app.on_event(TuiEvent::ProbeResult(chat_probe(t0, 0, 1, "done-note")));
     app.on_event(TuiEvent::JudgeScored {
+        task_id: None,
         judge_name: "Data".to_string(),
         point_delta: 19,
         feedback: String::new(),
@@ -1275,6 +1282,7 @@ fn chat_selection_sends_the_bubbles_text_to_the_agent() {
         "brief",
     )));
     app.on_event(TuiEvent::JudgeScored {
+        task_id: None,
         judge_name: "Creativity".to_string(),
         point_delta: 17,
         feedback: "goes well beyond the brief".to_string(),
@@ -1414,6 +1422,7 @@ fn chat_transcript_keeps_orphan_verdicts_at_the_end() {
     let mut app = fresh_app();
     // A verdict before any probe arrived: no task to pin it to.
     app.on_event(TuiEvent::JudgeScored {
+        task_id: None,
         judge_name: "Agentic".to_string(),
         point_delta: 2,
         feedback: String::new(),
@@ -1648,4 +1657,218 @@ fn an_artifact_request_still_leaves_the_brief_out() {
         "waiting-for-file: save the capture into .ololo/artifacts/92afc917/",
     ));
     assert!(!text.contains("A page of scenarios"), "{text}");
+}
+
+// ── The chat's status row: what is happening now, what comes next ────────
+
+fn running(app: &mut TuiApp) {
+    app.header.status = crate::tui::header::Status::Running;
+}
+
+#[test]
+fn live_status_is_silent_until_the_server_says_something() {
+    let mut app = fresh_app();
+    running(&mut app);
+    assert_eq!(app.live_status(), None);
+}
+
+#[test]
+fn live_status_counts_down_to_the_next_check_after_a_grade() {
+    let mut app = fresh_app();
+    running(&mut app);
+    let tid = Uuid::new_v4();
+    let pid = arrive(&mut app, tid, 0, "Setup");
+    let status = app.live_status().expect("a probe in flight is news");
+    assert!(
+        status.text.contains("checking your code now"),
+        "in flight: {status:?}"
+    );
+    assert!(status.busy);
+
+    let mut done = chat_probe(tid, 0, 1, "desc");
+    done.probe_id = pid;
+    done.outcome = None;
+    app.on_event(TuiEvent::ProbeResult(done));
+    let status = app.live_status().expect("answered, ungraded");
+    assert!(
+        status.text.contains("ololo is grading it"),
+        "answered: {status:?}"
+    );
+
+    app.on_event(TuiEvent::ProbeGraded {
+        next_probe_in_secs: Some(30),
+        probe_id: pid,
+        outcome: arena_core::protocol::ProbeOutcome::Pass,
+        point_delta: 5,
+        expected: None,
+        actual: None,
+    });
+    let status = app.live_status().expect("the server named the next check");
+    assert!(
+        status.text.starts_with("next check of your code in "),
+        "countdown: {status:?}"
+    );
+    assert!(matches!(status.countdown, Some(29..=30)), "{status:?}");
+    assert!(!status.busy, "waiting is not working");
+
+    // The awaited probe arrives: the clock is gone, the check is in flight.
+    arrive(&mut app, tid, 0, "Setup");
+    assert_eq!(app.next_probe_due, None);
+    assert!(
+        app.live_status()
+            .expect("in flight again")
+            .text
+            .contains("checking your code now")
+    );
+}
+
+#[test]
+fn live_status_names_the_judges_at_work_until_they_report() {
+    let mut app = fresh_app();
+    running(&mut app);
+    let t0 = Uuid::new_v4();
+    let t1 = Uuid::new_v4();
+    // Task #0 is over; task #1 runs while #0's judges read.
+    app.on_event(TuiEvent::ProbeResult(chat_probe(t0, 0, 1, "a")));
+    app.on_event(TuiEvent::ProbeResult(chat_probe(t1, 1, 1, "b")));
+    app.on_event(TuiEvent::JudgeStarted {
+        task_id: Some(t0),
+        judge_name: "Correctness".to_string(),
+    });
+    app.on_event(TuiEvent::JudgeStarted {
+        task_id: Some(t0),
+        judge_name: "Data".to_string(),
+    });
+    let status = app.live_status().expect("judges at work");
+    assert_eq!(
+        status.text,
+        "evaluation in progress — Correctness and Data reviewing task #0"
+    );
+    assert!(status.busy);
+
+    // One verdict in: the other judge is still reading.
+    app.on_event(TuiEvent::JudgeScored {
+        task_id: Some(t0),
+        judge_name: "Correctness".to_string(),
+        point_delta: 12,
+        feedback: String::new(),
+    });
+    assert_eq!(
+        app.live_status().unwrap().text,
+        "evaluation in progress — Data reviewing task #0"
+    );
+    // A failed run lets go of the judge too — and with every run settled,
+    // the row says so.
+    app.on_event(TuiEvent::JudgeFailed {
+        task_id: Some(t0),
+        judge_name: "Data".to_string(),
+    });
+    let status = app.live_status().expect("judges done");
+    assert_eq!(status.text, "judges are done with task #0");
+    assert!(!status.busy);
+
+    // The countdown joins the judges' whereabouts on one row.
+    app.on_event(TuiEvent::JudgeStarted {
+        task_id: Some(t1),
+        judge_name: "Creativity".to_string(),
+    });
+    app.next_probe_due = Some(std::time::Instant::now() + std::time::Duration::from_secs(20));
+    let status = app.live_status().unwrap();
+    assert!(
+        status.text.starts_with(
+            "evaluation in progress — Creativity reviewing task #1 · next check of your code in "
+        ),
+        "{status:?}"
+    );
+    assert!(status.busy);
+}
+
+#[test]
+fn a_verdict_without_a_task_id_settles_the_oldest_run_of_that_judge() {
+    let mut app = fresh_app();
+    running(&mut app);
+    let t0 = Uuid::new_v4();
+    app.on_event(TuiEvent::ProbeResult(chat_probe(t0, 0, 1, "a")));
+    app.on_event(TuiEvent::JudgeStarted {
+        task_id: Some(t0),
+        judge_name: "Data".to_string(),
+    });
+    // Pre-upgrade servers name no task on the verdict.
+    app.on_event(TuiEvent::JudgeScored {
+        task_id: None,
+        judge_name: "Data".to_string(),
+        point_delta: 1,
+        feedback: String::new(),
+    });
+    assert_eq!(
+        app.live_status().unwrap().text,
+        "judges are done with task #0"
+    );
+    // The verdict is pinned to the task in play, as before.
+    assert_eq!(app.judge_verdicts[0].task_ordinal, Some(0));
+}
+
+#[test]
+fn the_judge_hold_of_a_delivered_task_is_the_status_rows_story() {
+    let mut app = fresh_app();
+    running(&mut app);
+    let t0 = Uuid::new_v4();
+    app.on_event(TuiEvent::ProbeResult(chat_probe(t0, 0, 1, "brief")));
+    app.on_event(TuiEvent::SnapshotRequested {
+        task_id: t0,
+        task_title: "Widget".to_string(),
+        reason: "todo_complete".to_string(),
+    });
+    let status = app.live_status().expect("the panel has the build");
+    assert_eq!(
+        status.text,
+        "task delivered — the judge panel is reviewing your delivery…"
+    );
+    app.on_event(TuiEvent::JudgeStarted {
+        task_id: Some(t0),
+        judge_name: "Architecture".to_string(),
+    });
+    assert_eq!(
+        app.live_status().unwrap().text,
+        "task delivered — Architecture reviewing task #0…"
+    );
+    // The transcript no longer repeats it as a system line.
+    assert!(
+        !app.chat_transcript()
+            .iter()
+            .any(|m| matches!(m, ChatMsg::System { text } if text.contains("reviewing"))),
+        "the status row owns the judge-phase narration"
+    );
+}
+
+#[test]
+fn live_status_pauses_with_the_session_and_ends_with_it() {
+    let mut app = fresh_app();
+    app.header.status = crate::tui::header::Status::Paused;
+    app.next_probe_due = Some(std::time::Instant::now() + std::time::Duration::from_secs(20));
+    assert!(
+        app.live_status()
+            .unwrap()
+            .text
+            .starts_with("session paused")
+    );
+    app.header.status = crate::tui::header::Status::Complete;
+    assert_eq!(
+        app.live_status(),
+        None,
+        "the transcript's closing line says it"
+    );
+    // All tasks done: only worth a row while judges are still reading.
+    app.header.status = crate::tui::header::Status::TasksDone;
+    assert_eq!(app.live_status(), None);
+    app.on_event(TuiEvent::JudgeStarted {
+        task_id: None,
+        judge_name: "Data".to_string(),
+    });
+    let status = app.live_status().unwrap();
+    assert!(
+        status
+            .text
+            .starts_with("all your tasks are done — Data reviewing your code")
+    );
 }

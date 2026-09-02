@@ -44,6 +44,7 @@ fn sidebar_renders_fail_when_server_grades_error() {
         0,
     )));
     app.on_event(crate::tui::event::TuiEvent::ProbeGraded {
+        next_probe_in_secs: None,
         probe_id: pid,
         outcome: arena_core::protocol::ProbeOutcome::Error,
         point_delta: -5,
@@ -83,6 +84,7 @@ fn sidebar_renders_pass_when_server_grades_pass() {
         1,
     )));
     app.on_event(crate::tui::event::TuiEvent::ProbeGraded {
+        next_probe_in_secs: None,
         probe_id: pid,
         outcome: arena_core::protocol::ProbeOutcome::Pass,
         point_delta: 10,
@@ -152,6 +154,7 @@ fn sidebar_collapses_passed_task_and_keeps_active_task_expanded() {
         },
     ));
     app.on_event(crate::tui::event::TuiEvent::ProbeGraded {
+        next_probe_in_secs: None,
         probe_id: pid_a1,
         outcome: arena_core::protocol::ProbeOutcome::Pass,
         point_delta: 10,
@@ -205,6 +208,7 @@ fn sidebar_collapses_passed_task_and_keeps_active_task_expanded() {
         },
     ));
     app.on_event(crate::tui::event::TuiEvent::ProbeGraded {
+        next_probe_in_secs: None,
         probe_id: pid_b1,
         outcome: arena_core::protocol::ProbeOutcome::Error,
         point_delta: -5,
@@ -270,6 +274,7 @@ fn sidebar_folds_task_zero_when_scheduler_advances() {
         },
     ));
     app.on_event(crate::tui::event::TuiEvent::ProbeGraded {
+        next_probe_in_secs: None,
         probe_id: pid0,
         outcome: arena_core::protocol::ProbeOutcome::Pass,
         point_delta: 10,
@@ -368,6 +373,7 @@ fn sidebar_uses_server_total_tasks_in_header() {
         },
     ));
     app.on_event(crate::tui::event::TuiEvent::ProbeGraded {
+        next_probe_in_secs: None,
         probe_id: pid1,
         outcome: arena_core::protocol::ProbeOutcome::Pass,
         point_delta: 10,
@@ -558,6 +564,7 @@ fn probe_popup_renders_details_overlay() {
         },
     ));
     app.on_event(crate::tui::event::TuiEvent::ProbeGraded {
+        next_probe_in_secs: None,
         probe_id: pid,
         outcome: arena_core::protocol::ProbeOutcome::Error,
         point_delta: -5,
@@ -617,6 +624,7 @@ fn sidebar_task_header_shows_total_points() {
         },
     ));
     app.on_event(crate::tui::event::TuiEvent::ProbeGraded {
+        next_probe_in_secs: None,
         probe_id: pid,
         outcome: arena_core::protocol::ProbeOutcome::Pass,
         point_delta: 10,
@@ -657,6 +665,7 @@ fn sidebar_unfold_override_expands_passed_task() {
         },
     ));
     app.on_event(crate::tui::event::TuiEvent::ProbeGraded {
+        next_probe_in_secs: None,
         probe_id: pid,
         outcome: arena_core::protocol::ProbeOutcome::Pass,
         point_delta: 10,

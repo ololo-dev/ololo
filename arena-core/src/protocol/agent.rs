@@ -1,5 +1,6 @@
 //! CLI auth, player-agent, and judge-scored frames.
 
+use super::player::PlayerJudgeStatusPayload;
 use serde::{Deserialize, Serialize};
 
 /// Wire frames for the CLI WebSocket authentication device-flow.
@@ -155,9 +156,26 @@ pub enum PlayerAgentFrame {
         /// `probes.output` for display.
         #[serde(default)]
         actual: Option<String>,
+        /// Seconds until the scheduler dispatches the next probe to this
+        /// player — the same delay the loop sleeps after this grade, so the
+        /// agent can narrate "next check in Ns" without guessing the
+        /// interval. Relative on purpose: an absolute stamp would be at the
+        /// mercy of the player's clock. Absent from pre-upgrade servers.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        next_probe_in_secs: Option<u32>,
     },
     /// Server → player agent: a judge has scored the player's task attempt.
     JudgeScored(JudgeScoredPayload),
+    /// Server → player agent: a judge began evaluating the player's task.
+    /// Same payload the player page receives (`status = "running"`), so the
+    /// CLI can say who is reviewing what. Sent once per judge run, so a
+    /// fielded binary that predates the variant logs one unparseable frame
+    /// per judge and carries on.
+    JudgeStarted(PlayerJudgeStatusPayload),
+    /// Server → player agent: a judge gave up on the player's task
+    /// (`status = "failed"`, `error` carries the generic public message).
+    /// Lets the CLI drop the judge from its "reviewing" line.
+    JudgeFailed(PlayerJudgeStatusPayload),
     /// Server → player agent: commit and push a snapshot of the working tree
     /// now. Open-ended tasks only (never sent for classic tasks, so fielded
     /// binaries that predate the variant never see it). On

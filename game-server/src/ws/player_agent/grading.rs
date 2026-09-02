@@ -639,6 +639,21 @@ pub async fn grade_test_result(
                 }
             }
 
+            // Decide the cadence before telling the agent: the grade frame
+            // carries the delay the loop is about to sleep.
+            if pass {
+                *current_interval_secs = min_interval_secs;
+                *dispatch_next_immediately = true;
+            } else {
+                *current_interval_secs = (*current_interval_secs + interval_increment_secs)
+                    .min(max_interval_secs)
+                    .max(min_interval_secs);
+            }
+            let next_probe_in_secs = crate::ws::player_agent::socket::next_probe_delay_secs(
+                *current_interval_secs,
+                *dispatch_next_immediately,
+            );
+
             let graded = PlayerAgentFrame::ProbeGraded {
                 probe_id,
                 outcome: if pass {
@@ -656,18 +671,10 @@ pub async fn grade_test_result(
                     graded_expected.clone()
                 },
                 actual: display_actual.clone().or(Some(stdout_trimmed.clone())),
+                next_probe_in_secs: u32::try_from(next_probe_in_secs).ok(),
             };
             let graded_json = serde_json::to_string(&graded).unwrap_or_default();
             let _ = socket.send(Message::Text(graded_json)).await;
-
-            if pass {
-                *current_interval_secs = min_interval_secs;
-                *dispatch_next_immediately = true;
-            } else {
-                *current_interval_secs = (*current_interval_secs + interval_increment_secs)
-                    .min(max_interval_secs)
-                    .max(min_interval_secs);
-            }
             false
         }
         Ok(Some(_)) => {

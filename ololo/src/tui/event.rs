@@ -229,6 +229,8 @@ pub enum TuiEvent {
         point_delta: i32,
         expected: Option<String>,
         actual: Option<String>,
+        /// Seconds until the next probe dispatch, when the server says.
+        next_probe_in_secs: Option<u32>,
     },
     LeaderboardUpdate {
         entries: Vec<LeaderboardEntry>,
@@ -237,9 +239,22 @@ pub enum TuiEvent {
     /// chat view of the sidebar (the log line the socket also emits is for
     /// text mode).
     JudgeScored {
+        /// The task the verdict is on; `None` from pre-upgrade servers.
+        task_id: Option<Uuid>,
         judge_name: String,
         point_delta: i32,
         feedback: String,
+    },
+    /// A judge began evaluating the player's task — the chat's status row
+    /// names who is reviewing what until the verdict (or failure) lands.
+    JudgeStarted {
+        task_id: Option<Uuid>,
+        judge_name: String,
+    },
+    /// A judge gave up on the task; drops it from the "reviewing" line.
+    JudgeFailed {
+        task_id: Option<Uuid>,
+        judge_name: String,
     },
     PlayerProgress {
         attempt: u32,

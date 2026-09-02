@@ -85,6 +85,7 @@ pub async fn emit_no_response_grade(
     point_delta: i32,
     expected: &Option<String>,
     secret_expected: bool,
+    next_probe_in_secs: Option<u32>,
 ) {
     let frame = PlayerAgentFrame::ProbeGraded {
         probe_id,
@@ -97,6 +98,7 @@ pub async fn emit_no_response_grade(
             expected.clone()
         },
         actual: None,
+        next_probe_in_secs,
     };
     let json = serde_json::to_string(&frame).unwrap_or_default();
     let _ = socket.send(Message::Text(json)).await;
@@ -143,6 +145,13 @@ pub async fn record_no_response(
         input.no_response_points,
         input.expected_answer_display,
         input.secret_expected,
+        // A no-response never redispatches immediately: the backed-off
+        // interval is the sleep the loop takes next.
+        u32::try_from(crate::ws::player_agent::socket::next_probe_delay_secs(
+            *current_interval_secs,
+            false,
+        ))
+        .ok(),
     )
     .await;
 }

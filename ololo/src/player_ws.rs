@@ -668,6 +668,7 @@ async fn connect_once(
                         point_delta,
                         expected,
                         actual,
+                        next_probe_in_secs,
                     } => {
                         match outcome {
                             arena_core::protocol::ProbeOutcome::Pass => {
@@ -690,6 +691,11 @@ async fn connect_once(
                             if let Some(act) = &actual {
                                 crate::ui::field("actual", act);
                             }
+                            // What happens next, in text mode too: the
+                            // scheduler's own sleep, not a guess.
+                            if let Some(secs) = next_probe_in_secs {
+                                crate::ui::field_dim("next check", format!("in {secs}s"));
+                            }
                         });
                         emit(
                             sink.clone(),
@@ -699,6 +705,7 @@ async fn connect_once(
                                 point_delta,
                                 expected,
                                 actual,
+                                next_probe_in_secs,
                             },
                         );
                     }
@@ -734,6 +741,7 @@ async fn connect_once(
                         }
                     }
                     wire::PlayerAgentFrame::JudgeScored {
+                        task_id,
                         judge_name,
                         point_delta,
                         feedback,
@@ -758,9 +766,43 @@ async fn connect_once(
                         emit(
                             sink.clone(),
                             TuiEvent::JudgeScored {
+                                task_id,
                                 judge_name,
                                 point_delta,
                                 feedback,
+                            },
+                        );
+                    }
+                    wire::PlayerAgentFrame::JudgeStarted {
+                        task_id,
+                        judge_name,
+                    } => {
+                        crate::ui::hint(format!("JUDGE {judge_name} is reviewing your code…"));
+                        emit(
+                            sink.clone(),
+                            TuiEvent::JudgeStarted {
+                                task_id,
+                                judge_name,
+                            },
+                        );
+                    }
+                    wire::PlayerAgentFrame::JudgeFailed {
+                        task_id,
+                        judge_name,
+                        error,
+                    } => {
+                        let why = error
+                            .filter(|e| !e.is_empty())
+                            .map(|e| format!(" — {e}"))
+                            .unwrap_or_default();
+                        crate::ui::warn(format!(
+                            "JUDGE {judge_name} could not score this task{why}"
+                        ));
+                        emit(
+                            sink.clone(),
+                            TuiEvent::JudgeFailed {
+                                task_id,
+                                judge_name,
                             },
                         );
                     }

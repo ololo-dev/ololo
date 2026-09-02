@@ -58,6 +58,10 @@ pub enum PlayerAgentFrame {
         expected: Option<String>,
         #[serde(default)]
         actual: Option<String>,
+        /// Seconds until the scheduler dispatches the next probe — the sleep
+        /// it takes after this grade. Absent from pre-upgrade servers.
+        #[serde(default)]
+        next_probe_in_secs: Option<u32>,
     },
     /// Lobby countdown — forwarded by the game-server during the pre-start phase.
     LobbyCountdown {
@@ -125,10 +129,30 @@ pub enum PlayerAgentFrame {
     /// A judge delivered its verdict on this player's task.
     JudgeScored {
         #[serde(default)]
+        task_id: Option<Uuid>,
+        #[serde(default)]
         judge_name: String,
         point_delta: i32,
         #[serde(default)]
         feedback: String,
+    },
+    /// A judge began evaluating this player's task (the server's
+    /// `status = "running"` lifecycle frame).
+    JudgeStarted {
+        #[serde(default)]
+        task_id: Option<Uuid>,
+        #[serde(default)]
+        judge_name: String,
+    },
+    /// A judge gave up on this player's task; `error` is the generic
+    /// public message.
+    JudgeFailed {
+        #[serde(default)]
+        task_id: Option<Uuid>,
+        #[serde(default)]
+        judge_name: String,
+        #[serde(default)]
+        error: Option<String>,
     },
 }
 

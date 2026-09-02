@@ -161,3 +161,76 @@ async fn connect_loop_reports_exhaustion_against_dead_endpoint() {
     assert!(!completed, "a dead endpoint must exhaust, not complete");
     assert!(backoff_ms > 1, "the backoff schedule must have advanced");
 }
+
+#[test]
+fn decode_probe_graded_with_and_without_the_next_check_hint() {
+    let pid = Uuid::nil();
+    let json = format!(
+        r#"{{"type":"probe_graded","probe_id":"{pid}","outcome":"pass","point_delta":5,"next_probe_in_secs":12}}"#
+    );
+    let frame: PlayerAgentFrame = serde_json::from_str(&json).unwrap();
+    match frame {
+        PlayerAgentFrame::ProbeGraded {
+            next_probe_in_secs, ..
+        } => assert_eq!(next_probe_in_secs, Some(12)),
+        _ => panic!("expected ProbeGraded, got {frame:?}"),
+    }
+    // Pre-upgrade servers send no hint; the frame still decodes.
+    let json = format!(
+        r#"{{"type":"probe_graded","probe_id":"{pid}","outcome":"error","point_delta":-1}}"#
+    );
+    let frame: PlayerAgentFrame = serde_json::from_str(&json).unwrap();
+    match frame {
+        PlayerAgentFrame::ProbeGraded {
+            next_probe_in_secs, ..
+        } => assert_eq!(next_probe_in_secs, None),
+        _ => panic!("expected ProbeGraded, got {frame:?}"),
+    }
+}
+
+#[test]
+fn decode_judge_lifecycle_frames() {
+    let tid = Uuid::nil();
+    // The server sends the player page's status payload verbatim — fields
+    // the CLI does not read (status, updated_at, judge_result_id) pass by.
+    let json = format!(
+        r#"{{"type":"judge_started","task_id":"{tid}","judge_slug":"correctness","judge_name":"Correctness","status":"running","error":null,"updated_at":"2026-01-01T00:00:00Z","judge_result_id":null}}"#
+    );
+    let frame: PlayerAgentFrame = serde_json::from_str(&json).unwrap();
+    match frame {
+        PlayerAgentFrame::JudgeStarted {
+            task_id,
+            judge_name,
+        } => {
+            assert_eq!(task_id, Some(tid));
+            assert_eq!(judge_name, "Correctness");
+        }
+        _ => panic!("expected JudgeStarted, got {frame:?}"),
+    }
+    let json = format!(
+        r#"{{"type":"judge_failed","task_id":"{tid}","judge_slug":"data","judge_name":"Data","status":"failed","error":"The judge could not complete its review."}}"#
+    );
+    let frame: PlayerAgentFrame = serde_json::from_str(&json).unwrap();
+    match frame {
+        PlayerAgentFrame::JudgeFailed {
+            judge_name, error, ..
+        } => {
+            assert_eq!(judge_name, "Data");
+            assert!(error.unwrap().contains("could not complete"));
+        }
+        _ => panic!("expected JudgeFailed, got {frame:?}"),
+    }
+    // A verdict names its task on current servers, and not on old ones.
+    let json = format!(
+        r#"{{"type":"judge_scored","task_id":"{tid}","judge_slug":"data","judge_name":"Data","rating":7.5,"feedback":"ok","point_delta":9,"created_at":"2026-01-01T00:00:00Z"}}"#
+    );
+    match serde_json::from_str::<PlayerAgentFrame>(&json).unwrap() {
+        PlayerAgentFrame::JudgeScored { task_id, .. } => assert_eq!(task_id, Some(tid)),
+        other => panic!("expected JudgeScored, got {other:?}"),
+    }
+    let json = r#"{"type":"judge_scored","judge_name":"Data","point_delta":9}"#;
+    match serde_json::from_str::<PlayerAgentFrame>(json).unwrap() {
+        PlayerAgentFrame::JudgeScored { task_id, .. } => assert_eq!(task_id, None),
+        other => panic!("expected JudgeScored, got {other:?}"),
+    }
+}

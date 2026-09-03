@@ -1,0 +1,11 @@
+{"this is not json
+{"timestamp":1750100000,"params":{"update":{"sessionUpdate":"tool_call","toolCallId":"c1","title":"bash","kind":"execute","rawInput":{"command":"ls"}}}}
+{"timestamp":1750100001,"params":{"update":{"sessionUpdate":"turn_completed"},"_meta":{"eventId":"no-usage"}}}
+{"timestamp":1750100002,"params":{"update":{"sessionUpdate":"turn_completed","usage":{"inputTokens":0,"outputTokens":0,"cachedReadTokens":0,"reasoningTokens":0}},"_meta":{"eventId":"zero"}}}
+{"timestamp":1750100003,"params":{"update":{"sessionUpdate":"turn_completed","usage":{"inputTokens":50,"outputTokens":5,"cachedReadTokens":10,"reasoningTokens":2}},"_meta":{"eventId":"evt-top"}}}
+{"timestamp":1750100003,"params":{"update":{"sessionUpdate":"turn_completed","usage":{"inputTokens":50,"outputTokens":5,"cachedReadTokens":10,"reasoningTokens":2}},"_meta":{"eventId":"evt-top"}}}
+[1,2,3]
+"just a string"
+{"params":null}
+{"params":{"update":"not-an-object"}}
+{"timestamp":"not-a-time","params":{"update":{"sessionUpdate":"turn_completed","usage":{"inputTokens":"7","outputTokens":1.0}},"_meta":{"eventId":"evt-lenient"}}}

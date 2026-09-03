@@ -48,6 +48,27 @@ pub enum AgentId {
     /// Antigravity CLI (`~/.gemini/antigravity-cli/conversations/*.db`).
     #[serde(rename = "antigravity-cli")]
     AntigravityCli,
+    /// Factory Droid CLI (`~/.factory/sessions`).
+    #[serde(rename = "droid")]
+    Droid,
+    /// Codebuff CLI (`~/.config/codebuff/projects`).
+    #[serde(rename = "codebuff")]
+    Codebuff,
+    /// Hermes Agent (`~/.hermes/state.db`).
+    #[serde(rename = "hermes")]
+    Hermes,
+    /// OpenClaw (`~/.openclaw`, formerly clawdbot/moltbot).
+    #[serde(rename = "openclaw")]
+    OpenClaw,
+    /// Kilo CLI (`~/.local/share/kilo`).
+    #[serde(rename = "kilo")]
+    Kilo,
+    /// Grok Build CLI (`~/.grok/sessions`).
+    #[serde(rename = "grok")]
+    Grok,
+    /// ZCode CLI (`~/.zcode/cli/db/db.sqlite`).
+    #[serde(rename = "zcode")]
+    ZCode,
 }
 
 impl AgentId {
@@ -71,6 +92,13 @@ impl AgentId {
             AgentId::Zed => "zed",
             AgentId::Antigravity => "antigravity",
             AgentId::AntigravityCli => "antigravity-cli",
+            AgentId::Droid => "droid",
+            AgentId::Codebuff => "codebuff",
+            AgentId::Hermes => "hermes",
+            AgentId::OpenClaw => "openclaw",
+            AgentId::Kilo => "kilo",
+            AgentId::Grok => "grok",
+            AgentId::ZCode => "zcode",
         }
     }
 }
@@ -228,6 +256,13 @@ mod tests {
             (AgentId::Zed, &["zed"]),
             (AgentId::Antigravity, &["antigravity"]),
             (AgentId::AntigravityCli, &["agy"]),
+            (AgentId::Droid, &["droid"]),
+            (AgentId::Codebuff, &["codebuff"]),
+            (AgentId::Hermes, &["hermes"]),
+            (AgentId::OpenClaw, &["openclaw"]),
+            (AgentId::Kilo, &["kilo"]),
+            (AgentId::Grok, &["grok"]),
+            (AgentId::ZCode, &["zcode"]),
         ];
         for (agent, binaries) in expected {
             assert!(

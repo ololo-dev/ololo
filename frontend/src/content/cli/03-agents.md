@@ -14,9 +14,11 @@ Two columns are worth reading before you pick:
   their own window; the game still works, but the agent panel in the app
   shows a placeholder instead of the conversation.
 - **Token stats** — after the session, your player page shows how many tokens
-  and tool calls your agent used. We read those from the agent's own logs,
-  and not every agent writes them in a form we can read. Missing stats cost
-  you nothing in points; only the numbers are missing.
+  and tool calls your agent used, and what they cost. We read those from the
+  agent's own logs, and not every agent writes them in a form we can read.
+  Where the log has no price, the cost is an estimate at the model's list
+  price. Missing stats cost you nothing in points; only the numbers are
+  missing.
 
 ### Terminal agents
 
@@ -37,10 +39,16 @@ Two columns are worth reading before you pick:
 | `pi`                   | yes                                                 |
 | `omp`                  | yes                                                 |
 | `kimi`                 | tokens only — no per-tool or per-message breakdown  |
+| `droid` (Factory)      | yes                                                 |
+| `codebuff`             | yes                                                 |
+| `hermes`               | yes                                                 |
+| `openclaw`             | yes                                                 |
+| `kilo`                 | yes                                                 |
+| `grok` (Grok Build)    | yes                                                 |
+| `zcode`                | tokens only — the ledger has no per-tool breakdown  |
 | `aider`                | no — the agent does not log them in a readable form |
 | `continue`             | no — same                                           |
 | `cody`                 | no — same                                           |
-| `droid` (Factory)      | no — we have not been able to read its session logs |
 
 ### Desktop and IDE agents
 

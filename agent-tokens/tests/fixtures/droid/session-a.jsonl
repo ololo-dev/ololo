@@ -1,0 +1,8 @@
+{"type":"session_start","id":"session-a","timestamp":"2026-05-01T01:02:03.000Z","cwd":"/home/dev/project","version":"0.30.0","title":"wire the parser"}
+{"type":"message","id":"m1","timestamp":"2026-05-01T01:02:10.000Z","message":{"role":"user","content":[{"type":"text","text":"read the recon skill and then main.rs"}]}}
+{"type":"message","id":"m2","timestamp":"2026-05-01T01:02:20.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Loading the skill first."},{"type":"tool_use","id":"toolu_1","name":"Read","input":{"file_path":"/home/dev/.agents/skills/reconnaissance/SKILL.md"}}]}}
+{"type":"message","id":"m3","timestamp":"2026-05-01T01:02:25.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"# reconnaissance\n..."}]}}
+{"type":"message","id":"m4","timestamp":"2026-05-01T01:02:30.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_2","name":"Read","input":{"file_path":"src/main.rs"}}]}}
+{"type":"message","id":"m5","timestamp":"2026-05-01T01:02:35.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_2","content":"fn main() {}"}]}}
+{"type":"message","id":"m6","timestamp":"2026-05-01T01:04:30.000Z","message":{"role":"user","content":[{"type":"text","text":"now run the tests"}]}}
+{"type":"message","id":"m7","timestamp":"2026-05-01T01:05:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Running them."},{"type":"tool_use","id":"toolu_3","name":"Execute","input":{"command":"cargo test"}}]}}

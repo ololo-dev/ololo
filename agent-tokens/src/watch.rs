@@ -14,7 +14,20 @@ pub fn snapshot(since: Option<i64>) -> Vec<SessionCounts> {
             all.extend(ext.extract(since));
         }
     }
+    fill_estimated_costs(&mut all);
     all
+}
+
+/// Sessions whose store records no cost get a list-price estimate from the
+/// embedded pricing table; a cost the agent wrote itself is left alone.
+pub fn fill_estimated_costs(sessions: &mut [SessionCounts]) {
+    for s in sessions.iter_mut() {
+        if s.cost.is_none()
+            && let Some(model) = s.model.as_deref()
+        {
+            s.cost = crate::pricing::estimate_cost(s.agent, model, &s.counts);
+        }
+    }
 }
 
 /// One-shot scan of behavioural session statistics (message counts, tool

@@ -1,0 +1,10 @@
+{"type":"model_change","modelId":"gpt-5.2","provider":"openai","message":"not-an-object"}
+{"type":"message","message":{"role":"assist
+[1,2,3]
+"just a string"
+
+{"type":"message","message":"not-an-object"}
+{"type":"message","message":{"role":"toolResult","content":[],"usage":{"input":999,"output":999}}}
+{"type":"custom","customType":"other","data":{"modelId":"nope"}}
+{"type":"message","message":{"role":"assistant","content":"a bare string","usage":{"input":"10","output":null,"cacheRead":-4,"cacheWrite":1.5}}}
+{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","name":7}],"usage":{"input":10,"output":20}}}

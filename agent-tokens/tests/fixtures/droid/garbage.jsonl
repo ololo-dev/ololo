@@ -1,0 +1,8 @@
+not json at all
+{"type":"message","timestamp":"bogus","message":{"role":"user","content":"plain string content"}}
+{"type":"message","timestamp":12,"message":{"role":"assistant","content":[{"type":"tool_use","input":"{\"x\":1}"},{"type":"text"},"stray string",42,null]}}
+{"type":"message","message":{"role":"system"}}
+{"message":{"role":"user","content":[{"type":"tool_result"}]}}
+{"role":5}
+[]
+{"type":"message","message":{"role":"assistant","content":"no blocks"}}

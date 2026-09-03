@@ -1,6 +1,7 @@
 pub mod extractors;
 mod jsonl;
 pub mod paths;
+pub mod pricing;
 mod skills;
 mod sqlite;
 mod trait_;
@@ -9,7 +10,7 @@ mod watch;
 
 pub use trait_::TokenExtractor;
 pub use types::{AgentId, SessionCounts, SessionStats, TokenCounts};
-pub use watch::{snapshot, stats_snapshot, watch};
+pub use watch::{fill_estimated_costs, snapshot, stats_snapshot, watch};
 
 /// Hand-maintained list of binary names for PATH-based agent detection.
 /// NOT derived from AgentId variants — these are real binary names (e.g. "opencode" not "open-code",
@@ -48,8 +49,15 @@ pub const AI_AGENT_NAMES: &[&str] = &[
     "antigravity",
     // Zed ships a `zed` launcher on PATH that opens the GUI editor.
     "zed",
-    // Factory's CLI agent. No token extractor yet — `~/.factory/sessions` is
-    // the store, but it was empty everywhere we looked, so the format is
-    // unverified and guessing at it would be worse than reporting nothing.
+    // Factory's CLI agent (`~/.factory/sessions`).
     "droid",
+    "codebuff",
+    "hermes",
+    // OpenClaw was clawdbot, then moltbot; old installs keep the old binary.
+    "openclaw",
+    "clawdbot",
+    "moltbot",
+    "kilo",
+    "grok",
+    "zcode",
 ];

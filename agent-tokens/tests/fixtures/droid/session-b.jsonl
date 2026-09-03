@@ -1,0 +1,3 @@
+{"type":"session_start","id":"session-b","timestamp":"2026-05-02T01:02:03.000Z","cwd":"/home/dev/other"}
+{"type":"message","timestamp":"2026-05-02T01:02:04.000Z","message":{"role":"system","content":"Model: Claude Opus 4.5 Thinking [Anthropic]\nReasoning effort: high"}}
+{"type":"message","timestamp":"2026-05-02T01:02:10.000Z","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}

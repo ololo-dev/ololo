@@ -1,0 +1,4 @@
+[
+  {"variant": "user", "text": "hello"},
+  {"variant": "ai", "text": "hi", "metadata": {"model": "claude-sonnet-4-20250514", "usage": {"inputTokens": 12, "outputTokens": 7}}}
+]

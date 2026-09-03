@@ -135,7 +135,8 @@ fn opencode_extractor_parses_db() {
 #[test]
 fn detect_does_not_panic() {
     use agent_tokens::extractors::{
-        Antigravity, AntigravityCli, Codex, Copilot, Cursor, CursorCli, Kiro, Omp, Pi,
+        Antigravity, AntigravityCli, Codebuff, Codex, Copilot, Cursor, CursorCli, Droid, Grok,
+        Hermes, Kilo, Kiro, Omp, OpenClaw, Pi, ZCode,
     };
     // detect() depends on what agents are installed on the machine — just
     // verify none of them panic.
@@ -148,6 +149,63 @@ fn detect_does_not_panic() {
     let _ = Copilot.detect();
     let _ = Antigravity.detect();
     let _ = AntigravityCli.detect();
+    let _ = Droid.detect();
+    let _ = Codebuff.detect();
+    let _ = Hermes.detect();
+    let _ = OpenClaw.detect();
+    let _ = Kilo.detect();
+    let _ = Grok.detect();
+    let _ = ZCode.detect();
+}
+
+#[test]
+fn snapshot_fills_list_price_cost_for_known_models() {
+    use agent_tokens::{SessionCounts, TokenCounts};
+    let mut sessions = vec![
+        SessionCounts {
+            agent: AgentId::Claude,
+            session_id: "priced".into(),
+            model: Some("claude-opus-5".into()),
+            cwd: None,
+            started_at_ms: None,
+            last_seen_at_ms: None,
+            counts: TokenCounts {
+                input: 1_000_000,
+                ..Default::default()
+            },
+            cost: None,
+            source_file: None,
+        },
+        SessionCounts {
+            agent: AgentId::Claude,
+            session_id: "recorded".into(),
+            model: Some("claude-opus-5".into()),
+            cwd: None,
+            started_at_ms: None,
+            last_seen_at_ms: None,
+            counts: TokenCounts::default(),
+            cost: Some(0.42),
+            source_file: None,
+        },
+        SessionCounts {
+            agent: AgentId::Claude,
+            session_id: "unknown".into(),
+            model: Some("totally-unknown-model-9000".into()),
+            cwd: None,
+            started_at_ms: None,
+            last_seen_at_ms: None,
+            counts: TokenCounts::default(),
+            cost: None,
+            source_file: None,
+        },
+    ];
+    agent_tokens::fill_estimated_costs(&mut sessions);
+    let price = agent_tokens::pricing::lookup("claude-opus-5").unwrap();
+    assert!((sessions[0].cost.unwrap() - price.input).abs() < 1e-9);
+    // A cost the agent recorded itself is never overwritten by the estimate.
+    assert_eq!(sessions[1].cost, Some(0.42));
+    // An unknown model stays unknown instead of reading as free.
+    assert_eq!(sessions[2].cost, None);
 }
 
 fn fixture(name: &str) -> std::path::PathBuf {

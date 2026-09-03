@@ -1,0 +1,12 @@
+[
+  1,
+  "not a message",
+  null,
+  {"role": "assistant"},
+  {"role": "assistant", "metadata": "nope"},
+  {"role": "assistant", "timestamp": true, "metadata": {"usage": {"inputTokens": "12"}}},
+  {"variant": "ai", "metadata": {"usage": {"inputTokens": -5, "outputTokens": 1.5}}},
+  {"role": "assistant", "credits": "1.5", "content": [5, "x", {"type": "text"}]},
+  {"role": "assistant", "metadata": {"runState": {"sessionState": {"mainAgentState": {"messageHistory": "x"}}}}},
+  {"role": "assistant", "metadata": {"runState": {"sessionState": {"fileContext": 7, "mainAgentState": {"messageHistory": [{"role": "assistant", "providerOptions": {"codebuff": {"usage": []}}}]}}}}}
+]

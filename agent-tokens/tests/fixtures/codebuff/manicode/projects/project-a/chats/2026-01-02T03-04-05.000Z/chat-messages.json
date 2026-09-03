@@ -1,0 +1,67 @@
+[
+  {"role": "user", "text": "add a failing test for the parser"},
+  {
+    "id": "msg-a1",
+    "role": "assistant",
+    "timestamp": "2026-01-02T03:04:06.000Z",
+    "text": "On it.",
+    "metadata": {
+      "model": "claude-sonnet-4-20250514",
+      "usage": {"inputTokens": 100, "outputTokens": 50, "cacheCreationInputTokens": 20, "cacheReadInputTokens": 10}
+    },
+    "credits": 1.25
+  },
+  {
+    "id": "msg-a1",
+    "role": "assistant",
+    "timestamp": "2026-01-02T03:04:06.000Z",
+    "text": "On it. Writing the test now.",
+    "metadata": {
+      "model": "claude-sonnet-4-20250514",
+      "usage": {"inputTokens": 100, "outputTokens": 60, "cacheCreationInputTokens": 20, "cacheReadInputTokens": 10}
+    },
+    "credits": 1.4
+  },
+  {"role": "user", "timestamp": "2026-01-02T03:09:00.000Z", "text": "now run it"},
+  {
+    "variant": "agent",
+    "timestamp": 1767323400,
+    "text": "Ran the suite.",
+    "metadata": {
+      "runState": {
+        "sessionState": {
+          "fileContext": {"projectRoot": "/home/dev/project-a", "cwd": "/home/dev/project-a"},
+          "mainAgentState": {
+            "agentId": "base",
+            "messageHistory": [
+              {"role": "user", "content": [{"type": "text", "text": "now run it"}], "providerOptions": {}},
+              {
+                "role": "assistant",
+                "content": [
+                  {"type": "tool-call", "toolCallId": "c1", "toolName": "read_files", "input": {"paths": ["/home/dev/.agents/skills/drill-tdd/SKILL.md"]}}
+                ],
+                "providerOptions": {}
+              },
+              {"role": "tool", "content": [{"type": "tool-result", "toolCallId": "c1", "output": "..."}]},
+              {
+                "role": "assistant",
+                "content": [
+                  {"type": "text", "text": "Running the tests."},
+                  {"type": "tool-call", "toolCallId": "c2", "toolName": "run_terminal_command", "input": {"command": "cargo test"}}
+                ],
+                "providerOptions": {
+                  "codebuff": {
+                    "model": "openai/gpt-5",
+                    "usage": {"prompt_tokens": 300, "completion_tokens": 80, "total_tokens": 380, "prompt_tokens_details": {"cached_tokens": 100}}
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  },
+  {"variant": "ai", "timestamp": "2026-01-02T03:11:00.000Z", "text": "", "metadata": {"model": "openai/gpt-5"}},
+  {"variant": "ai", "timestamp": "2026-01-02T03:12:00.000Z", "text": "All green.", "metadata": {"usage": {"totalTokens": 40}}}
+]

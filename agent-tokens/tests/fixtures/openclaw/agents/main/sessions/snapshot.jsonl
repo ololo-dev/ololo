@@ -1,0 +1,2 @@
+{"type":"custom","id":"c1","parentId":null,"timestamp":"2026-01-30T06:20:00.000Z","customType":"model-snapshot","data":{"provider":"openai","modelId":"gpt-5.2"}}
+{"type":"message","id":"a1","parentId":"c1","timestamp":"2026-01-30T06:20:05.000Z","message":{"role":"assistant","content":[{"type":"text","text":"ok"}],"usage":{"input":10,"output":20,"cacheRead":0,"cacheWrite":0,"totalTokens":30},"stopReason":"stop","timestamp":1769754005000}}

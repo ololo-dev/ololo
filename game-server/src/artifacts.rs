@@ -139,6 +139,37 @@ pub async fn resolve_pending_artifacts(state: &GameServerState) -> Result<(), se
         if listed.is_empty() {
             continue; // not arrived yet — the deadline sweep owns the timeout
         }
+        // A request for N files is delivered when N landed. The participant
+        // pushes each capture as it is saved, so the first sweep after the
+        // first push sees one of four; resolving there handed the judge a
+        // single screenshot (4I2GFR). Wait for the count — or, if the
+        // participant stops short, for the folder to go quiet.
+        let expected = artifact.expected_files.unwrap_or(1).max(1) as usize;
+        if listed.len() < expected {
+            let mut result_json = probe.result_json.clone().unwrap_or(serde_json::json!({}));
+            let first_seen = result_json["artifact_wait"]["first_seen_at"]
+                .as_str()
+                .and_then(|t| t.parse::<chrono::DateTime<Utc>>().ok());
+            match first_seen {
+                Some(t) if (Utc::now() - t).num_seconds() >= ARTIFACT_SETTLE_GRACE_SECS => {
+                    // Quiet long enough: what is there is the delivery.
+                }
+                Some(_) => continue,
+                None => {
+                    result_json["artifact_wait"] = serde_json::json!({
+                        "first_seen_at": Utc::now().to_rfc3339(),
+                        "expected": expected,
+                        "seen": listed.len(),
+                    });
+                    let _ = probes::Entity::update_many()
+                        .col_expr(probes::Column::ResultJson, Expr::value(result_json))
+                        .filter(probes::Column::Id.eq(probe.id))
+                        .exec(&state.db)
+                        .await;
+                    continue;
+                }
+            }
+        }
         // Deterministic order, bounded count: a request delivers up to
         // MAX_ARTIFACT_FILES files; extras are noted, never silently eaten.
         listed.sort_by(|a, b| a.path.cmp(&b.path));
@@ -157,10 +188,15 @@ pub async fn resolve_pending_artifacts(state: &GameServerState) -> Result<(), se
             .unwrap_or_else(|| artifact.content_type.clone());
         // `max_bytes` is a per-file cap.
         let within_cap = files.iter().all(|f| f.size <= artifact.max_bytes);
-        let note = if within_cap {
-            "artifact received"
+        let note = if !within_cap {
+            "artifact exceeds the requested size cap".to_string()
+        } else if files.len() < expected {
+            format!(
+                "artifact received: {} of {expected} requested file(s)",
+                files.len()
+            )
         } else {
-            "artifact exceeds the requested size cap"
+            "artifact received".to_string()
         };
         let now = Utc::now();
         let mut result_json = probe.result_json.clone().unwrap_or(serde_json::json!({}));
@@ -233,6 +269,12 @@ pub async fn resolve_pending_artifacts(state: &GameServerState) -> Result<(), se
     }
     Ok(())
 }
+
+/// How long a partially delivered request waits for the rest before what
+/// landed counts as the delivery. Four screenshots take an agent a minute
+/// or two; a participant that stops at two must not hold the judge for the
+/// whole session.
+pub const ARTIFACT_SETTLE_GRACE_SECS: i64 = 120;
 
 /// Put the delivered artifact on the session activity feed: persist the
 /// `activity_event` row, then publish the ZMQ event the server bridges to

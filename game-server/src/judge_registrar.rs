@@ -481,6 +481,10 @@ impl JudgeProbeRegistrar {
         // is exactly how a participant gets lost. Rewrite every mention to
         // the authoritative one.
         let instruction = rewrite_artifact_paths(&instruction, &artifact_repo_path);
+        // "delivered" means every file the judge named, not the first one
+        // to land: the participant's loop pushes each capture as it is
+        // saved, and a judge resumed on the first of four saw one (4I2GFR).
+        let expected_files = arena_core::evaluation::expected_artifact_files(&instruction);
         let config = ProbeConfig {
             mode: ProbeMode::Interactive,
             executor: None,
@@ -494,6 +498,7 @@ impl JudgeProbeRegistrar {
                 content_type: content_type.clone(),
                 max_bytes,
                 path: Some(artifact_repo_path.clone()),
+                expected_files: Some(expected_files as u32),
             }),
             deadline_secs: Some(deadline_secs),
             capture_memory: None,
@@ -518,10 +523,11 @@ impl JudgeProbeRegistrar {
              them automatically; do NOT run git.\n\
              # If an earlier delivered capture already shows exactly this, copying that \
              file into this folder is a valid delivery.\n\
-             test -n \"$(ls -A {path} 2>/dev/null)\" && echo delivered || echo \"waiting-for-file: save the capture into {path}\"",
+             test \"$(ls -A {path} 2>/dev/null | wc -l | tr -d ' ')\" -ge {expected} && echo delivered || echo \"waiting-for-file: $(ls -A {path} 2>/dev/null | wc -l | tr -d ' ') of {expected} saved into {path}\"",
             judge = self.judge_slug,
             instruction = header_line(&instruction),
             path = artifact_repo_path,
+            expected = expected_files,
         );
         if let Err(e) = (tests::ActiveModel {
             id: Set(test_id),
@@ -708,7 +714,19 @@ impl ProbeRegistrar for JudgeProbeRegistrar {
             })
             .to_string();
         }
-        match args["mode"].as_str() {
+        // The shape says what was meant: a `command` is a deterministic
+        // probe, an `instruction` a capture. A model that omits `mode`
+        // (4I2GFR: test-quality's first call) gets the probe, not a lecture.
+        let mode = args["mode"].as_str().or_else(|| {
+            if args.get("command").is_some() {
+                Some("deterministic")
+            } else if args.get("instruction").is_some() {
+                Some("interactive")
+            } else {
+                None
+            }
+        });
+        match mode {
             Some("interactive") => self.register_interactive(args).await,
             Some("deterministic") => self.register_deterministic(args).await,
             other => serde_json::json!({

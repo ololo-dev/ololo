@@ -290,6 +290,39 @@ pub struct ArtifactSpec {
     /// `.ololo/artifacts/<probe_id>/` at dispatch time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    /// How many files the request names (see [`expected_artifact_files`]).
+    /// The request is delivered once that many landed — not on the first,
+    /// which is what handed a judge one screenshot of the four it asked
+    /// for while the other three were still being pushed (4I2GFR).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_files: Option<u32>,
+}
+
+/// Distinct artifact file names an instruction mentions (`desktop.png`,
+/// `flow.webm`, `notes.md`…), clamped to `1..=MAX_ARTIFACT_FILES`. A judge
+/// that lists four captures is asking for four files; one that says "a
+/// screenshot" is asking for one.
+pub fn expected_artifact_files(instruction: &str) -> usize {
+    const EXTENSIONS: &[&str] = &[
+        "png", "jpg", "jpeg", "webp", "gif", "webm", "mp4", "pdf", "txt", "md", "json", "csv",
+    ];
+    let mut names = std::collections::BTreeSet::new();
+    for raw in instruction.split(|c: char| c.is_whitespace() || "`*\"'()[]<>,;:".contains(c)) {
+        let token = raw.trim_matches(|c: char| !c.is_alphanumeric());
+        let Some((stem, ext)) = token.rsplit_once('.') else {
+            continue;
+        };
+        if stem.is_empty()
+            || !EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str())
+            || !stem
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
+        {
+            continue;
+        }
+        names.insert(token.to_ascii_lowercase());
+    }
+    names.len().clamp(1, MAX_ARTIFACT_FILES)
 }
 
 /// The whole `tests.probe_config` payload. NULL column = legacy probe.
@@ -922,5 +955,37 @@ mod tests {
         );
         assert_eq!(artifact_content_type_for_path("notes.txt"), None);
         assert_eq!(artifact_content_type_for_path("no-extension"), None);
+    }
+}
+
+#[cfg(test)]
+mod expected_files_tests {
+    use super::expected_artifact_files;
+
+    #[test]
+    fn names_are_counted_once_each_and_clamped() {
+        assert_eq!(
+            expected_artifact_files("Capture a screenshot of the page."),
+            1
+        );
+        assert_eq!(
+            expected_artifact_files(
+                "1. **desktop.png** — at 1280px.\n2. **mobile.png** — at 375px.\n\
+                 3. `bangkok-f.png` and 4. unknown-city.png; save the four PNGs (desktop.png again)."
+            ),
+            4
+        );
+        assert_eq!(
+            expected_artifact_files("a.png b.png c.png d.png e.png f.png g.png"),
+            5
+        );
+        assert_eq!(
+            expected_artifact_files("Record flow.webm, then notes.md"),
+            2
+        );
+        assert_eq!(
+            expected_artifact_files("open http://localhost:8000/?city=rome"),
+            1
+        );
     }
 }

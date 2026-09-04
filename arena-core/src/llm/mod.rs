@@ -384,8 +384,34 @@ const TURN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 /// The conversation as a log attachment, or nothing when it would blow
 /// the run log's size cap (the DB row still holds the real transcript).
 fn capped_transcript(history: &[rig::completion::message::Message]) -> Option<serde_json::Value> {
-    let v = serde_json::to_value(history).ok()?;
+    let mut v = serde_json::to_value(history).ok()?;
+    elide_inline_media(&mut v);
     (v.to_string().chars().count() <= TRANSCRIPT_CAP).then_some(v)
+}
+
+/// A screenshot rides in the history as base64 — one capture is more
+/// than the whole trace cap, and it is already in the artifact gallery.
+/// Keep the turn, drop the bytes.
+fn elide_inline_media(v: &mut serde_json::Value) {
+    match v {
+        serde_json::Value::Object(map) => {
+            for (k, val) in map.iter_mut() {
+                if k == "data"
+                    && let serde_json::Value::String(s) = val
+                    && s.len() > 2_000
+                {
+                    *val = serde_json::Value::String(format!(
+                        "<{} bytes of inline media omitted>",
+                        s.len()
+                    ));
+                } else {
+                    elide_inline_media(val);
+                }
+            }
+        }
+        serde_json::Value::Array(items) => items.iter_mut().for_each(elide_inline_media),
+        _ => {}
+    }
 }
 
 /// A user turn: the text plus any screenshot attachments, as one
@@ -923,6 +949,29 @@ fn ollama_model_thinks_in(model: &str, prefixes: &str) -> bool {
         .map(str::trim)
         .filter(|p| !p.is_empty() && !p.eq_ignore_ascii_case("none"))
         .any(|p| name.starts_with(&p.to_ascii_lowercase()))
+}
+
+#[cfg(test)]
+mod transcript_tests {
+    use super::elide_inline_media;
+
+    #[test]
+    fn inline_media_is_elided_and_text_kept() {
+        let mut v = serde_json::json!([
+            {"role": "user", "content": [
+                {"type": "text", "text": "look"},
+                {"type": "image", "data": "A".repeat(5_000), "media_type": "image/png"}
+            ]},
+            {"role": "assistant", "content": {"text": "ok", "data": "short"}}
+        ]);
+        elide_inline_media(&mut v);
+        assert_eq!(v[0]["content"][0]["text"], "look");
+        assert_eq!(
+            v[0]["content"][1]["data"],
+            "<5000 bytes of inline media omitted>"
+        );
+        assert_eq!(v[1]["content"]["data"], "short", "small strings stay");
+    }
 }
 
 #[cfg(test)]

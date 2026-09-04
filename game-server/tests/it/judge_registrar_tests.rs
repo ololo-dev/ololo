@@ -263,6 +263,31 @@ fn registrar(
     )
 }
 
+/// `mode` is redundant with the shape of the call; a model that leaves it
+/// out still gets its probe.
+#[tokio::test]
+async fn the_mode_is_inferred_from_command_or_instruction() {
+    let db = setup_db().await;
+    let state = test_state(db.clone());
+    let seeded = seed(&db).await;
+    let reg = registrar(&state, &seeded, 1);
+    let out = reg
+        .register(&serde_json::json!({
+            "command": "python3 test.py", "validation": "result.includes('ok')",
+            "purpose": "confirm the suite"
+        }))
+        .await;
+    assert!(out.contains("\"queued\""), "deterministic by shape: {out}");
+    let out = reg
+        .register(
+            &serde_json::json!({ "instruction": "Capture the page", "content_type": "image/png" }),
+        )
+        .await;
+    assert!(out.contains("\"queued\""), "interactive by shape: {out}");
+    let out = reg.register(&serde_json::json!({ "purpose": "??" })).await;
+    assert!(out.contains("unknown register_probe mode"), "{out}");
+}
+
 /// A judge re-driven after the queue gave up on its capture finds the
 /// participant on the next task. Nothing registered now would ever be
 /// dispatched; the registrar says so instead of opening a request that
@@ -668,7 +693,7 @@ async fn a_multi_line_instruction_stays_out_of_the_shell() {
     assert!(
         test.command_template
             .lines()
-            .all(|l| l.starts_with('#') || l.starts_with("test -n ")),
+            .all(|l| l.starts_with('#') || l.starts_with("test ")),
         "only comments and the poll may reach the shell:\n{}",
         test.command_template
     );
@@ -697,14 +722,118 @@ async fn a_multi_line_instruction_stays_out_of_the_shell() {
         };
         let (code, stdout, stderr) = sh(&test.command_template);
         assert_eq!(code, Some(0), "stderr: {stderr}");
-        assert!(stdout.starts_with("waiting-for-file"), "{stdout}");
+        assert!(stdout.starts_with("waiting-for-file: 0 of 2"), "{stdout}");
         let dir = parsed["artifact_path"].as_str().unwrap();
         std::fs::create_dir_all(work.path().join(dir)).unwrap();
         std::fs::write(work.path().join(dir).join("rome-desktop.png"), b"png").unwrap();
+        // The ask named two files: one is not a delivery yet.
+        let (code, stdout, _) = sh(&test.command_template);
+        assert_eq!(code, Some(0));
+        assert!(stdout.starts_with("waiting-for-file: 1 of 2"), "{stdout}");
+        std::fs::write(work.path().join(dir).join("bangkok-f-desktop.png"), b"png").unwrap();
         let (code, stdout, _) = sh(&test.command_template);
         assert_eq!(code, Some(0));
         assert_eq!(stdout, "delivered");
     }
+}
+
+/// A request that names several files is delivered when they all landed —
+/// or, if the participant stops short, once the folder has been quiet for
+/// the grace period. Resolving on the first push handed the UX judge one
+/// screenshot of four in 4I2GFR while the other three were on their way.
+#[tokio::test]
+async fn a_request_for_several_files_waits_for_them_or_for_quiet() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let db = setup_db().await;
+    let state = test_state(db.clone());
+    let seeded = seed(&db).await;
+    let reg = registrar(&state, &seeded, 1);
+    let out = reg
+        .register(&serde_json::json!({
+            "mode": "interactive",
+            "instruction": "Capture **desktop.png** at 1280px and **mobile.png** at 375px.",
+            "content_type": "image/png", "max_bytes": 4096, "deadline_secs": 600
+        }))
+        .await;
+    let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let test_id: Uuid = parsed["test_id"].as_str().unwrap().parse().unwrap();
+    let artifact_dir = parsed["artifact_path"].as_str().unwrap().to_string();
+    let probe_id = Uuid::new_v4();
+    probes::ActiveModel {
+        id: Set(probe_id),
+        test_id: Set(test_id),
+        player_id: Set(seeded.player_id),
+        session_id: Set(seeded.session_id),
+        attempt: Set(1),
+        rendered_command: Set(String::new()),
+        fixture_values: Set("{}".to_string()),
+        expected_answer: Set(None),
+        resolved_answer: Set(None),
+        secret_meta: Set(None),
+        outcome: Set(None),
+        dispatched_at: Set(Utc::now()),
+        deadline_at: Set(Utc::now() + Duration::seconds(600)),
+        resolved_at: Set(None),
+        updated_at: Set(Some(Utc::now())),
+        output: Set(None),
+        exit_code: Set(None),
+        duration_ms: Set(None),
+        point_delta: Set(None),
+        result_json: Set(None),
+        artifact_path: Set(None),
+    }
+    .insert(&db)
+    .await
+    .expect("probe row");
+
+    // One of two pushed: the sweep notes when it first saw the folder and
+    // keeps waiting.
+    let repos_base = push_artifact(&seeded, &artifact_dir, "desktop.png", 512);
+    unsafe { std::env::set_var("OLOLO_GIT_REPOS_DIR", repos_base.path()) };
+    game_server::probe_scheduler::tick(&state)
+        .await
+        .expect("tick");
+    let probe = probes::Entity::find_by_id(probe_id)
+        .one(&db)
+        .await
+        .unwrap()
+        .expect("probe");
+    assert_eq!(probe.outcome, None, "one of two is not a delivery");
+    assert!(probe.artifact_path.is_none());
+    let wait = probe.result_json.clone().expect("first sighting recorded");
+    assert_eq!(wait["artifact_wait"]["expected"], 2);
+    assert_eq!(wait["artifact_wait"]["seen"], 1);
+    assert!(wait["artifact_wait"]["first_seen_at"].is_string());
+
+    // Quiet past the grace: what landed is the delivery, and says so.
+    let mut stale = wait.clone();
+    stale["artifact_wait"]["first_seen_at"] =
+        serde_json::json!((Utc::now() - Duration::minutes(5)).to_rfc3339());
+    probes::Entity::update_many()
+        .col_expr(
+            probes::Column::ResultJson,
+            sea_orm::prelude::Expr::value(stale),
+        )
+        .filter(probes::Column::Id.eq(probe_id))
+        .exec(&db)
+        .await
+        .expect("age the sighting");
+    game_server::probe_scheduler::tick(&state)
+        .await
+        .expect("tick");
+    unsafe { std::env::remove_var("OLOLO_GIT_REPOS_DIR") };
+    let probe = probes::Entity::find_by_id(probe_id)
+        .one(&db)
+        .await
+        .unwrap()
+        .expect("probe");
+    assert_eq!(probe.outcome.as_deref(), Some("pass"));
+    let rj = probe.result_json.expect("measurement");
+    assert_eq!(
+        rj["artifact"]["note"],
+        "artifact received: 1 of 2 requested file(s)"
+    );
+    assert_eq!(rj["artifact"]["files"].as_array().map(|f| f.len()), Some(1));
 }
 
 /// The player's repo with the artifact committed at `artifact_dir`, laid

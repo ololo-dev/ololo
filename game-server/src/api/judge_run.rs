@@ -128,15 +128,26 @@ pub async fn post_run(
     State(state): State<GameServerState>,
     Json(req): Json<JudgeRunRequest>,
 ) -> Result<Json<JudgeRunResponse>, JudgeRunApiError> {
-    let out = judge_queue::enqueue_judge_run(
-        &state,
-        &state.db,
-        req.session_id,
-        req.player_id,
-        req.task_id,
-        req.judge_id,
-        req.force,
-    )
-    .await?;
+    // The run outlives the request. hyper drops a handler's future when the
+    // client goes away, and the client here is the main server relaying an
+    // admin's browser call through Cloudflare, which hangs up at 100 s — a
+    // session report takes longer than that, so the re-run died unwritten
+    // (4I2GFR). A detached task keeps running; the response still waits
+    // for it when the connection lasts.
+    let task = tokio::spawn(async move {
+        judge_queue::enqueue_judge_run(
+            &state,
+            &state.db,
+            req.session_id,
+            req.player_id,
+            req.task_id,
+            req.judge_id,
+            req.force,
+        )
+        .await
+    });
+    let out = task
+        .await
+        .map_err(|e| JudgeRunApiError::Judge(JudgeError::Llm(format!("judge run task: {e}"))))??;
     Ok(Json(JudgeRunResponse::from(out)))
 }

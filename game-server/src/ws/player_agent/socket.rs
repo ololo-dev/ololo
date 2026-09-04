@@ -373,8 +373,17 @@ pub async fn handle_player_agent_socket(
                                 &state, task_id, session_id, player_id,
                             )
                             .await;
-                            let capped = since.elapsed().as_secs()
-                                >= crate::ws::player_agent::scheduler::JUDGE_PHASE_MAX_SECS;
+                            // The cap runs from the LATER of the phase start
+                            // and the participant's last delivery: captures
+                            // arriving mean the requests are being worked.
+                            let cap = crate::ws::player_agent::scheduler::JUDGE_PHASE_MAX_SECS;
+                            let quiet_since_delivery =
+                                crate::ws::player_agent::scheduler::last_artifact_at(
+                                    &state, task_id, session_id, player_id,
+                                )
+                                .await
+                                .is_none_or(|t| (Utc::now() - t).num_seconds() >= cap as i64);
+                            let capped = since.elapsed().as_secs() >= cap && quiet_since_delivery;
                             if !settled && !capped {
                                 crate::ws::player_agent::scheduler::mark_scheduler_judging(
                                     &state, session_id, player_id,
@@ -793,6 +802,20 @@ pub async fn handle_player_agent_socket(
         }
 
         if completion_flag_nudge {
+            dispatch_next_immediately = true;
+        }
+        // A judge's ask just went out and other judges' asks have never
+        // been handed over: send those now rather than one per interval, so
+        // the agent sees every open request together (4I2GFR: the second
+        // judge's capture reached the participant a minute and a half after
+        // the first, and the participant worked them one at a time).
+        if adapted_test.registered_by_judge_id.is_some()
+            && crate::ws::player_agent::scheduler::undispatched_judge_requests(
+                &state, task_id, session_id, player_id,
+            )
+            .await
+                > 0
+        {
             dispatch_next_immediately = true;
         }
 

@@ -19,7 +19,7 @@ use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
 use uuid::Uuid;
 
 use crate::state::GameServerState;
-use crate::ws::player_agent::scheduler::judge_phase_expired;
+use crate::ws::player_agent::scheduler::judge_phase_expired_since;
 
 /// Tick cadence. Probes declare their own intervals; this only bounds how
 /// stale a due probe can go unnoticed.
@@ -360,6 +360,13 @@ async fn redrive_waiting_judges(state: &GameServerState) -> Result<(), sea_orm::
         // final word — waiting for a pass would park the judge until the
         // session ended, blind to whatever did arrive.
         let session_running = session.status == SessionStatus::Running;
+        let last_artifact = crate::ws::player_agent::scheduler::last_artifact_at(
+            state,
+            tj.task_id,
+            row.session_id_fk,
+            row.player_id_fk,
+        )
+        .await;
         let mut still_waiting = false;
         let mut any_no_response = false;
         for test in &registered {
@@ -383,7 +390,9 @@ async fn redrive_waiting_judges(state: &GameServerState) -> Result<(), sea_orm::
                 // A run that came back — pass, fail or error — has answered
                 // a "please run this" ask.
                 Some(_) if !interactive => continue,
-                _ if !session_running || judge_phase_expired(test) => any_no_response = true,
+                _ if !session_running || judge_phase_expired_since(test, last_artifact) => {
+                    any_no_response = true
+                }
                 _ => still_waiting = true,
             }
         }

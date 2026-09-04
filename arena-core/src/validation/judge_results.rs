@@ -34,6 +34,11 @@ const EPS: f64 = 1e-6;
 const MAGNITUDE_CAP: f64 = 1_000_000.0;
 pub const MAX_FEEDBACK_LEN: usize = 10_000;
 
+/// The session report is a document, not a verdict: four times the
+/// feedback cap. A report that overran 10k was cut mid-JSON and the page
+/// showed a broken blob (4I2GFR).
+pub const MAX_REPORT_LEN: usize = 40_000;
+
 /// Pull an out-of-range judge rating to the nearest scale bound: -50 on
 /// [-20, 0] becomes -20. Applied at every verdict entry point (model,
 /// review revision, decide program, session-scope pass) BEFORE

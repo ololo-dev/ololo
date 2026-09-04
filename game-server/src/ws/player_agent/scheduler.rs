@@ -117,8 +117,82 @@ pub const JUDGE_PHASE_MAX_SECS: u64 = 300;
 /// never pass (a judge-authored validation that is simply wrong) must stop
 /// holding the task — before this check the queue re-dispatched it forever
 /// and the socket loop's phase cap was unreachable.
-pub(crate) fn judge_phase_expired(test: &tests::Model) -> bool {
-    (Utc::now() - test.created_at).num_seconds() >= JUDGE_PHASE_MAX_SECS as i64
+/// The cap, measured from the LATER of the request's registration and the
+/// participant's last artifact delivery on the task. Several judges asking
+/// for captures add up to more than five minutes of recording; a request
+/// registered first used to expire while the participant was still
+/// delivering the others (4I2GFR: correctness's screencast timed out mid-
+/// queue). A delivery is proof the participant is working the requests —
+/// the clock restarts from it.
+pub(crate) fn judge_phase_expired_since(
+    test: &tests::Model,
+    last_artifact_at: Option<chrono::DateTime<Utc>>,
+) -> bool {
+    let base = match last_artifact_at {
+        Some(t) if t > test.created_at => t,
+        _ => test.created_at,
+    };
+    (Utc::now() - base).num_seconds() >= JUDGE_PHASE_MAX_SECS as i64
+}
+
+/// When the participant last delivered an artifact on this task, if ever
+/// (the `artifact_received` activity row).
+pub async fn last_artifact_at(
+    state: &GameServerState,
+    task_id: Uuid,
+    session_id: Uuid,
+    player_id: Uuid,
+) -> Option<chrono::DateTime<Utc>> {
+    activity_event::Entity::find()
+        .filter(activity_event::Column::SessionIdFk.eq(session_id))
+        .filter(activity_event::Column::PlayerIdFk.eq(player_id))
+        .filter(activity_event::Column::TaskIdFk.eq(task_id))
+        .filter(activity_event::Column::EventKind.eq("artifact_received"))
+        .order_by_desc(activity_event::Column::Timestamp)
+        .one(&state.db)
+        .await
+        .ok()
+        .flatten()
+        .map(|e| e.timestamp)
+}
+
+/// Open judge requests on the task that have never been handed to the
+/// participant. While any exist, the loop dispatches without waiting out
+/// the interval, so every judge's ask reaches the agent within seconds of
+/// the first instead of one per interval.
+pub async fn undispatched_judge_requests(
+    state: &GameServerState,
+    task_id: Uuid,
+    session_id: Uuid,
+    player_id: Uuid,
+) -> usize {
+    use arena_core::entities::probes;
+    let last_artifact = last_artifact_at(state, task_id, session_id, player_id).await;
+    let registered = tests::Entity::find()
+        .filter(tests::Column::TaskId.eq(task_id))
+        .filter(tests::Column::SessionId.eq(session_id))
+        .filter(tests::Column::RegisteredByJudgeId.is_not_null())
+        .all(&state.db)
+        .await
+        .unwrap_or_default();
+    let mut n = 0;
+    for test in registered {
+        if judge_phase_expired_since(&test, last_artifact) {
+            continue;
+        }
+        let dispatched = probes::Entity::find()
+            .filter(probes::Column::TestId.eq(test.id))
+            .filter(probes::Column::PlayerId.eq(player_id))
+            .one(&state.db)
+            .await
+            .ok()
+            .flatten()
+            .is_some();
+        if !dispatched {
+            n += 1;
+        }
+    }
+    n
 }
 
 /// The judge-registered test without a passing probe that has waited
@@ -149,9 +223,10 @@ pub async fn oldest_unpassed_judge_test(
         .all(&state.db)
         .await
         .ok()?;
+    let last_artifact = last_artifact_at(state, task_id, session_id, player_id).await;
     let mut open: Vec<(Option<chrono::DateTime<Utc>>, tests::Model)> = Vec::new();
     for test in registered {
-        if judge_phase_expired(&test) {
+        if judge_phase_expired_since(&test, last_artifact) {
             continue;
         }
         if probes_passed(state, test.id, player_id).await {
@@ -266,8 +341,9 @@ pub async fn judge_probes_settled(
         .all(&state.db)
         .await
         .unwrap_or_default();
+    let last_artifact = last_artifact_at(state, task_id, session_id, player_id).await;
     for test in &registered {
-        if judge_phase_expired(test) {
+        if judge_phase_expired_since(test, last_artifact) {
             continue;
         }
         if !probes_passed(state, test.id, player_id).await {
@@ -1024,6 +1100,92 @@ mod judge_phase_tests {
         assert!(!judge_probes_settled(&state, task_id, fx.session_id, fx.player_id).await);
     }
 
+    async fn insert_artifact_received(
+        db: &sea_orm::DatabaseConnection,
+        fx: &crate::test_fixtures::SessionFixture,
+        task_id: Uuid,
+        at: chrono::DateTime<Utc>,
+    ) {
+        use sea_orm::{ActiveModelTrait, Set};
+        activity_event::ActiveModel {
+            id: Set(Uuid::new_v4()),
+            session_id_fk: Set(fx.session_id),
+            player_id_fk: Set(fx.player_id),
+            task_id_fk: Set(task_id),
+            event_kind: Set("artifact_received".to_string()),
+            task_ordinal: Set(0),
+            task_title: Set("t".to_string()),
+            player_display_name: Set("p".to_string()),
+            judge_name: Set(None),
+            point_delta: Set(None),
+            timestamp: Set(at),
+            version: Set(0),
+            detail: Set(None),
+        }
+        .insert(db)
+        .await
+        .expect("activity row");
+    }
+
+    /// A delivery restarts the phase clock: a request older than the cap
+    /// is still current while the participant is handing captures in.
+    #[tokio::test]
+    async fn a_delivery_keeps_an_aged_request_alive() {
+        let db = mem_db().await;
+        let fx = session_with_player(&db).await;
+        let (task_id, _t) = task_with_test(&db, &fx).await;
+        let (judge, _) = attach_judge(&db, task_id, "correctness", "task").await;
+        let state = test_state(db.clone());
+        let aged =
+            insert_judge_test(&db, &fx, task_id, judge, JUDGE_PHASE_MAX_SECS as i64 + 30).await;
+        insert_probe(&db, &fx, aged, Some("error")).await;
+        assert!(
+            oldest_unpassed_judge_test(&state, task_id, fx.session_id, fx.player_id)
+                .await
+                .is_none(),
+            "past the cap with no delivery: expired"
+        );
+        insert_artifact_received(
+            &db,
+            &fx,
+            task_id,
+            Utc::now() - chrono::Duration::seconds(20),
+        )
+        .await;
+        assert_eq!(
+            oldest_unpassed_judge_test(&state, task_id, fx.session_id, fx.player_id)
+                .await
+                .map(|t| t.id),
+            Some(aged),
+            "a delivery twenty seconds ago restarts the clock"
+        );
+        assert!(
+            !judge_probes_settled(&state, task_id, fx.session_id, fx.player_id).await,
+            "and the task keeps waiting for it"
+        );
+    }
+
+    #[tokio::test]
+    async fn never_dispatched_requests_are_counted_for_the_immediate_follow_up() {
+        let db = mem_db().await;
+        let fx = session_with_player(&db).await;
+        let (task_id, _t) = task_with_test(&db, &fx).await;
+        let (judge, _) = attach_judge(&db, task_id, "correctness", "task").await;
+        let state = test_state(db.clone());
+        let first = insert_judge_test(&db, &fx, task_id, judge, 5).await;
+        let _second = insert_judge_test(&db, &fx, task_id, judge, 0).await;
+        assert_eq!(
+            undispatched_judge_requests(&state, task_id, fx.session_id, fx.player_id).await,
+            2
+        );
+        insert_probe(&db, &fx, first, Some("error")).await;
+        assert_eq!(
+            undispatched_judge_requests(&state, task_id, fx.session_id, fx.player_id).await,
+            1,
+            "one handed over, one still to go"
+        );
+    }
+
     #[tokio::test]
     async fn open_judge_requests_take_turns_at_the_participant() {
         let db = mem_db().await;
@@ -1104,12 +1266,13 @@ mod judge_phase_tests {
         let aged =
             insert_judge_test(&db, &fx, task_id, judge_id, JUDGE_PHASE_MAX_SECS as i64 + 1).await;
         insert_probe(&db, &fx, aged, Some("error")).await;
-        assert!(judge_phase_expired(
+        assert!(judge_phase_expired_since(
             &tests::Entity::find_by_id(aged)
                 .one(&db)
                 .await
                 .expect("query")
-                .expect("test")
+                .expect("test"),
+            None
         ));
     }
 

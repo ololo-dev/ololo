@@ -31,7 +31,7 @@ use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOr
 use uuid::Uuid;
 
 use crate::entities::{judge_results, judges, task_judges, tasks};
-use crate::validation::judge_results::validate_feedback;
+use crate::validation::judge_results::MAX_REPORT_LEN;
 
 use super::dossier::build_session_dossier;
 use super::session::{SessionJudgeOutput, TaskVerdict};
@@ -464,20 +464,33 @@ pub async fn run_session_report(
     // prose anyway keeps its prose: the page falls back to rendering it, and a
     // readable report beats a dropped one.
     let stored = match parse_report_doc(&markdown) {
-        Some(doc) => serde_json::to_string(&doc).unwrap_or(markdown),
+        // A document that fits is stored whole. One that does not is NOT
+        // cut — a truncated JSON is unreadable everywhere — the model's
+        // prose is trimmed and stored instead, which the page renders.
+        Some(doc) => match serde_json::to_string(&doc) {
+            Ok(json) if json.len() <= MAX_REPORT_LEN => json,
+            _ => {
+                tracing::warn!(
+                    session_id = %session_id,
+                    player_id = %player_id,
+                    "session report: document over the report cap; storing trimmed prose"
+                );
+                trim_to_report_limit(markdown)
+            }
+        },
         None => {
             tracing::warn!(
                 session_id = %session_id,
                 player_id = %player_id,
                 "session report: model did not answer with the report document; storing its prose"
             );
-            markdown
+            trim_to_report_limit(markdown)
         }
     };
-    // `judge_results.feedback` is capped. A report that overruns is trimmed
-    // rather than lost: the player would rather read most of it than none.
-    let markdown = trim_to_feedback_limit(stored);
-    validate_feedback(&markdown).map_err(|_| JudgeError::FeedbackTooLong)?;
+    let markdown = stored;
+    if markdown.len() > MAX_REPORT_LEN {
+        return Err(JudgeError::FeedbackTooLong);
+    }
 
     let duration_ms = started.elapsed().as_millis() as i64;
     let mut verdicts = Vec::with_capacity(task_judges.len());
@@ -515,10 +528,10 @@ pub async fn run_session_report(
     })
 }
 
-/// Trim a report to what `judge_results.feedback` accepts, on a line boundary
-/// where possible so the text does not end mid-word.
-fn trim_to_feedback_limit(markdown: String) -> String {
-    const LIMIT: usize = crate::validation::judge_results::MAX_FEEDBACK_LEN;
+/// Trim a report to the report cap, on a line boundary where possible so
+/// the text does not end mid-word.
+fn trim_to_report_limit(markdown: String) -> String {
+    const LIMIT: usize = MAX_REPORT_LEN;
     if markdown.len() <= LIMIT {
         return markdown;
     }
@@ -677,11 +690,19 @@ mod tests {
 
     #[test]
     fn an_overlong_report_is_trimmed_rather_than_rejected() {
-        let long = "a line of the report\n".repeat(2000);
-        assert!(long.len() > crate::validation::judge_results::MAX_FEEDBACK_LEN);
-        let trimmed = trim_to_feedback_limit(long);
-        assert!(validate_feedback(&trimmed).is_ok());
+        let long = "a line of the report\n".repeat(2500);
+        assert!(long.len() > MAX_REPORT_LEN);
+        let trimmed = trim_to_report_limit(long);
+        assert!(trimmed.len() <= MAX_REPORT_LEN);
         assert!(trimmed.ends_with("_(report truncated)_"));
+    }
+
+    #[test]
+    fn a_report_under_the_cap_but_over_the_feedback_cap_is_kept_whole() {
+        let long = "a line of the report\n".repeat(700);
+        assert!(long.len() > crate::validation::judge_results::MAX_FEEDBACK_LEN);
+        assert!(long.len() <= MAX_REPORT_LEN);
+        assert_eq!(trim_to_report_limit(long.clone()), long);
     }
 
     const DOC: &str = r#"{
@@ -840,6 +861,6 @@ mod tests {
     #[test]
     fn a_report_that_fits_is_left_alone() {
         let short = "## What you built\n\nA server.".to_string();
-        assert_eq!(trim_to_feedback_limit(short.clone()), short);
+        assert_eq!(trim_to_report_limit(short.clone()), short);
     }
 }

@@ -117,20 +117,30 @@ pub const JUDGE_PHASE_MAX_SECS: u64 = 300;
 /// never pass (a judge-authored validation that is simply wrong) must stop
 /// holding the task — before this check the queue re-dispatched it forever
 /// and the socket loop's phase cap was unreachable.
-fn judge_phase_expired(test: &tests::Model) -> bool {
+pub(crate) fn judge_phase_expired(test: &tests::Model) -> bool {
     (Utc::now() - test.created_at).num_seconds() >= JUDGE_PHASE_MAX_SECS as i64
 }
 
-/// The oldest judge-registered test without a passing probe for this
-/// player — the "current" judge probe in the regular queue, or `None`
-/// when every judge request is satisfied (or none exist). Requests past
-/// the judge-phase cap no longer count: they are expired, not current.
+/// The judge-registered test without a passing probe that has waited
+/// longest for the participant — the "current" judge probe in the regular
+/// queue, or `None` when every judge request is satisfied (or none exist).
+/// Requests past the judge-phase cap no longer count: they are expired,
+/// not current.
+///
+/// Open requests take turns: the one never dispatched goes first, then the
+/// one asked longest ago. Serving the oldest request until it passed held
+/// every later one back — in ZNQZEB the UX judge's capture reached the
+/// participant two minutes after it was registered, behind another
+/// judge's still-open ask, and expired before it was answered. The
+/// participant's agent handles several asks at once; the queue should
+/// hand them over.
 pub async fn oldest_unpassed_judge_test(
     state: &GameServerState,
     task_id: Uuid,
     session_id: Uuid,
     player_id: Uuid,
 ) -> Option<tests::Model> {
+    use arena_core::entities::probes;
     let registered = tests::Entity::find()
         .filter(tests::Column::TaskId.eq(task_id))
         .filter(tests::Column::SessionId.eq(session_id))
@@ -139,15 +149,29 @@ pub async fn oldest_unpassed_judge_test(
         .all(&state.db)
         .await
         .ok()?;
+    let mut open: Vec<(Option<chrono::DateTime<Utc>>, tests::Model)> = Vec::new();
     for test in registered {
         if judge_phase_expired(&test) {
             continue;
         }
-        if !probes_passed(state, test.id, player_id).await {
-            return Some(test);
+        if probes_passed(state, test.id, player_id).await {
+            continue;
         }
+        let last_dispatch = probes::Entity::find()
+            .filter(probes::Column::TestId.eq(test.id))
+            .filter(probes::Column::PlayerId.eq(player_id))
+            .order_by_desc(probes::Column::DispatchedAt)
+            .one(&state.db)
+            .await
+            .ok()
+            .flatten()
+            .map(|p| p.dispatched_at);
+        open.push((last_dispatch, test));
     }
-    None
+    // `None` sorts first: a request never handed over beats any that was.
+    // Stable sort keeps registration order among equals.
+    open.sort_by_key(|(last, _)| *last);
+    open.into_iter().next().map(|(_, t)| t)
 }
 
 /// Any judge lifecycle row exists for this (task, player) — the finalize
@@ -998,6 +1022,46 @@ mod judge_phase_tests {
         // Still running: same story.
         insert_judge_result(&db, &fx, tj, "running").await;
         assert!(!judge_probes_settled(&state, task_id, fx.session_id, fx.player_id).await);
+    }
+
+    #[tokio::test]
+    async fn open_judge_requests_take_turns_at_the_participant() {
+        let db = mem_db().await;
+        let fx = session_with_player(&db).await;
+        let (task_id, _t) = task_with_test(&db, &fx).await;
+        let (judge, _) = attach_judge(&db, task_id, "correctness", "task").await;
+        let state = test_state(db.clone());
+
+        // The first request was registered earlier and has been handed over
+        // once (still failing); the second has never reached the participant.
+        let first = insert_judge_test(&db, &fx, task_id, judge, 10).await;
+        insert_probe(&db, &fx, first, Some("error")).await;
+        let second = insert_judge_test(&db, &fx, task_id, judge, 0).await;
+        assert_eq!(
+            oldest_unpassed_judge_test(&state, task_id, fx.session_id, fx.player_id)
+                .await
+                .map(|t| t.id),
+            Some(second),
+            "the request never dispatched goes next, not the oldest"
+        );
+
+        // Both handed over: the one asked longest ago comes round again.
+        insert_probe(&db, &fx, second, Some("error")).await;
+        assert_eq!(
+            oldest_unpassed_judge_test(&state, task_id, fx.session_id, fx.player_id)
+                .await
+                .map(|t| t.id),
+            Some(first)
+        );
+
+        // A pass retires a request for good.
+        insert_probe(&db, &fx, first, Some("pass")).await;
+        assert_eq!(
+            oldest_unpassed_judge_test(&state, task_id, fx.session_id, fx.player_id)
+                .await
+                .map(|t| t.id),
+            Some(second)
+        );
     }
 
     #[tokio::test]

@@ -63,23 +63,121 @@ struct LegacyJson {
 /// Parse either verdict shape out of a model's final text (fences and leaked
 /// prose tolerated, same as the legacy parser).
 pub fn parse_any_verdict(raw: &str) -> Result<AnyVerdict, String> {
-    let trimmed = raw.trim();
-    let candidate = match (trimmed.find('{'), trimmed.rfind('}')) {
-        (Some(start), Some(end)) if start < end => &trimmed[start..=end],
-        _ => return Err("no JSON object in verdict".into()),
-    };
-    if let Ok(v) = serde_json::from_str::<CriteriaVerdict>(candidate)
-        && !v.criteria.is_empty()
-    {
-        return Ok(AnyVerdict::Criteria(v));
+    let candidates = json_object_candidates(raw);
+    if candidates.is_empty() {
+        return Err("no JSON object in verdict".into());
     }
-    match serde_json::from_str::<LegacyJson>(candidate) {
-        Ok(v) => Ok(AnyVerdict::Legacy {
-            rating: v.rating,
-            feedback: v.feedback,
-        }),
-        Err(e) => Err(format!("verdict parse: {e}")),
+    let mut last_err = String::new();
+    for candidate in candidates {
+        if let Ok(v) = serde_json::from_str::<CriteriaVerdict>(candidate)
+            && !v.criteria.is_empty()
+        {
+            return Ok(AnyVerdict::Criteria(v));
+        }
+        match serde_json::from_str::<LegacyJson>(candidate) {
+            Ok(v) => {
+                return Ok(AnyVerdict::Legacy {
+                    rating: v.rating,
+                    feedback: v.feedback,
+                });
+            }
+            Err(e) => last_err = format!("verdict parse: {e}"),
+        }
     }
+    Err(last_err)
+}
+
+/// Where a verdict may sit in a model's final message, most likely first.
+///
+/// Models end on prose more often than not, and the prose quotes code —
+/// `${city || ""}`, a `{ label }` destructuring — so the old "first `{` to
+/// last `}`" slice was garbage exactly when the analysis was thorough,
+/// while a perfectly good sheet sat in a ```json fence at the bottom
+/// (JFV7O5: every nudge round in the session traced to one such brace).
+/// Fenced blocks come first, last fence first; then every balanced
+/// top-level `{…}` in the text, last first — the verdict is the closing
+/// word, and a leaked reasoning block before it is not.
+pub fn json_object_candidates(raw: &str) -> Vec<&str> {
+    let mut out: Vec<&str> = Vec::new();
+    for block in fenced_blocks(raw).into_iter().rev() {
+        for span in balanced_objects(block).into_iter().rev() {
+            out.push(span);
+        }
+    }
+    for span in balanced_objects(raw).into_iter().rev() {
+        if !out
+            .iter()
+            .any(|c| std::ptr::eq(c.as_ptr(), span.as_ptr()) && c.len() == span.len())
+        {
+            out.push(span);
+        }
+    }
+    out
+}
+
+/// The bodies of every ``` fence in `raw`, in order, language tag dropped.
+fn fenced_blocks(raw: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut rest = raw;
+    while let Some(open) = rest.find("```") {
+        let after_open = &rest[open + 3..];
+        // The language tag is whatever follows the fence on its own line.
+        let body_start = match after_open.find('\n') {
+            Some(nl) if after_open[..nl].trim().chars().all(|c| c.is_alphanumeric()) => nl + 1,
+            _ => 0,
+        };
+        let body = &after_open[body_start..];
+        match body.find("```") {
+            Some(close) => {
+                out.push(&body[..close]);
+                rest = &body[close + 3..];
+            }
+            None => {
+                out.push(body);
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// Every balanced top-level `{…}` in `text`, in order. String-aware, so a
+/// brace inside a quoted rationale neither opens nor closes an object.
+fn balanced_objects(text: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut depth = 0usize;
+    let mut start = None;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (i, ch) in text.char_indices() {
+        if in_string {
+            match ch {
+                '\\' if !escaped => escaped = true,
+                '"' if !escaped => in_string = false,
+                _ => escaped = false,
+            }
+            continue;
+        }
+        match ch {
+            '"' if depth > 0 => in_string = true,
+            '{' => {
+                if depth == 0 {
+                    start = Some(i);
+                }
+                depth += 1;
+            }
+            '}' if depth > 0 => {
+                depth -= 1;
+                if depth == 0
+                    && let Some(s) = start.take()
+                {
+                    out.push(&text[s..=i]);
+                }
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 /// Validate a criteria sheet against the keys this judge declared and the
@@ -220,6 +318,61 @@ mod tests {
             }
             other => panic!("wrong shape: {other:?}"),
         }
+    }
+
+    /// The tail of a real glm-5.3-flash final (JFV7O5, Architecture on
+    /// task 0): a page of analysis quoting template literals, then the
+    /// sheet in a fence. The first `{` in the text belongs to `${city}`.
+    const PROSE_THEN_SHEET: &str = "Also app.js interpolates user-provided `city` into HTML \
+        via template strings without escaping (`value=\"${city || \"\"}\"` and `unknown \
+        city: \"${city}\"`) — that's an XSS concern.\n\nScore: 8.5.\n\n```json\n\
+        {\"criteria\": [{\"key\": \"architecture\", \"score\": 8.5, \"rationale\": \
+        \"Clean layering {data} vs {view}\", \"evidence\": [\"file:weather.js:3\"]}], \
+        \"feedback\": \"tidy\"}\n```";
+
+    #[test]
+    fn a_sheet_fenced_after_prose_with_braces_is_found() {
+        match parse_any_verdict(PROSE_THEN_SHEET).unwrap() {
+            AnyVerdict::Criteria(v) => {
+                assert_eq!(v.criteria[0].key, "architecture");
+                assert_eq!(v.criteria[0].score, Some(8.5));
+                assert_eq!(v.feedback, "tidy");
+            }
+            other => panic!("wrong shape: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn without_a_fence_the_last_balanced_object_wins() {
+        let raw = "Reasoning: the map { a: 1 } is fine.\nDraft {\"rating\": 3.0, \
+                   \"feedback\": \"draft\"}\nFinal answer:\n{\"rating\": 7.0, \
+                   \"feedback\": \"final {with} braces\"}";
+        assert_eq!(
+            parse_any_verdict(raw).unwrap(),
+            AnyVerdict::Legacy {
+                rating: 7.0,
+                feedback: "final {with} braces".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn a_fenced_sheet_beats_a_later_stray_object() {
+        let raw = "```json\n{\"rating\": 6.0, \"feedback\": \"fenced\"}\n```\n\
+                   P.S. the config {\"debug\": true} is unrelated.";
+        assert_eq!(
+            parse_any_verdict(raw).unwrap(),
+            AnyVerdict::Legacy {
+                rating: 6.0,
+                feedback: "fenced".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn prose_alone_is_not_a_verdict() {
+        assert!(parse_any_verdict("I think the code is great").is_err());
+        assert!(parse_any_verdict("see { and } scattered } {").is_err());
     }
 
     #[test]

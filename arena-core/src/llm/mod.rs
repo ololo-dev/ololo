@@ -21,7 +21,8 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::judging::{
-    AgentResponse, JudgeError, JudgeLlm, JudgeLogEvent, JudgeRunRecorder, ToolDef, log_now_ms,
+    AgentResponse, JudgeError, JudgeLlm, JudgeLogEvent, JudgeRunRecorder, ResumeFrom, ToolDef,
+    TurnsOutcome, log_now_ms,
 };
 
 /// Resolved LLM config — a plain bag, server-side only.
@@ -264,6 +265,13 @@ impl ModelConfig {
         // always carry tools, so send exactly that for these models.
         let additional_params = if model.starts_with("gpt-5.6") {
             Some(serde_json::json!({ "reasoning_effort": "none" }))
+        } else if spec.kind == ProviderKind::Ollama && ollama_model_thinks(&model) {
+            // A thinking model asked NOT to think (rig's default `think:
+            // false`) reasons inline instead: pages of "let me consider…"
+            // in the answer text, the verdict somewhere inside. With
+            // thinking on, Ollama returns the reasoning in its own field —
+            // which rig drops — and the text is the answer alone.
+            Some(serde_json::json!({ "think": true }))
         } else {
             None
         };
@@ -368,6 +376,50 @@ const LLM_TEXT_CAP: usize = 16_000;
 const TOOL_OUTPUT_CAP: usize = 4_000;
 const TRANSCRIPT_CAP: usize = 64_000;
 
+/// Wall-clock budget for ONE model completion in the owned turn loop. A
+/// hosted thinking model with a 60k-token context answers in one to three
+/// minutes; the loop's overall budget is `judging::LOOP_TIMEOUT`.
+const TURN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// The conversation as a log attachment, or nothing when it would blow
+/// the run log's size cap (the DB row still holds the real transcript).
+fn capped_transcript(history: &[rig::completion::message::Message]) -> Option<serde_json::Value> {
+    let v = serde_json::to_value(history).ok()?;
+    (v.to_string().chars().count() <= TRANSCRIPT_CAP).then_some(v)
+}
+
+/// A user turn: the text plus any screenshot attachments, as one
+/// multimodal message. Providers that cannot take images reject the
+/// request, which the ordinary retry/failover path handles.
+fn user_turn(
+    text: &str,
+    images: &[crate::judging::JudgeImage],
+) -> rig::completion::message::Message {
+    use rig::completion::message::{ImageDetail, ImageMediaType, Message, UserContent};
+    let mut parts: Vec<UserContent> = vec![UserContent::text(text.to_string())];
+    for image in images {
+        let media_type = match image.media_type.as_str() {
+            "image/png" => Some(ImageMediaType::PNG),
+            "image/jpeg" | "image/jpg" => Some(ImageMediaType::JPEG),
+            "image/gif" => Some(ImageMediaType::GIF),
+            "image/webp" => Some(ImageMediaType::WEBP),
+            _ => None,
+        };
+        // OpenAI-compatible conversion REJECTS an image without a detail
+        // level; these are UI screenshots, and the judge reads small text
+        // and spacing off them.
+        parts.push(UserContent::image_base64(
+            image.base64.clone(),
+            media_type,
+            Some(ImageDetail::High),
+        ));
+    }
+    Message::User {
+        content: rig::OneOrMany::many(parts)
+            .unwrap_or_else(|_| rig::OneOrMany::one(UserContent::text(text.to_string()))),
+    }
+}
+
 /// Generic rig-backed `JudgeLlm`. `M` is the provider's concrete completion
 /// model type; `AgentBuilder` is uniform across providers, so the agent/tool
 /// loop lives here once.
@@ -401,6 +453,298 @@ where
     ) -> Result<AgentResponse, JudgeError> {
         self.run_agent_with_images(system, user, tools, prior_tool_result, &[])
             .await
+    }
+
+    fn supports_turns(&self) -> bool {
+        true
+    }
+
+    /// The owned turn loop. rig's `Agent::prompt` runs tools to completion
+    /// and hands back only the final text; here every completion is one
+    /// call on the model with the history so far, every tool call is
+    /// executed by the same `JudgeTool`, and the loop can stop between
+    /// turns — which is what a participant request needs: the run pauses
+    /// after the tool result that registered it, the transcript is handed
+    /// back for safekeeping, and a resume replays it with the answer as
+    /// the next user turn.
+    async fn run_turns(
+        &self,
+        system: &str,
+        user: &str,
+        tools: Vec<ToolDef>,
+        images: &[crate::judging::JudgeImage],
+        resume: Option<ResumeFrom>,
+    ) -> Result<TurnsOutcome, JudgeError> {
+        use rig::completion::message::{AssistantContent, Message, ToolResultContent, UserContent};
+
+        let judge_tools: Vec<JudgeTool> = tools
+            .iter()
+            .map(|td| JudgeTool {
+                def: td.clone(),
+                repo_dir: self.repo_dir.clone(),
+                task_commit_sha: self.task_commit_sha.clone(),
+                task_stats_json: self.task_stats_json.clone(),
+                recorder: self.recorder.clone(),
+                registrar: self.registrar.clone(),
+            })
+            .collect();
+        let mut defs = Vec::with_capacity(judge_tools.len());
+        for t in &judge_tools {
+            defs.push(Tool::definition(t, String::new()).await);
+        }
+
+        // The conversation: a resumed run's transcript plus the update as
+        // the newest user turn, or the user prompt alone for a fresh run.
+        // Images ride on whichever turn is newest — a fresh run's prompt,
+        // a resume's update (that is what was delivered).
+        let mut history: Vec<Message> = match &resume {
+            Some(r) => serde_json::from_value(r.transcript.clone())
+                .map_err(|e| JudgeError::Llm(format!("suspended transcript unreadable: {e}")))?,
+            None => Vec::new(),
+        };
+        let opening = match &resume {
+            Some(r) => user_turn(&r.update, images),
+            None => user_turn(user, images),
+        };
+        if let (Some(rec), Some(_)) = (&self.recorder, &resume) {
+            rec.record(JudgeLogEvent {
+                at_ms: log_now_ms(),
+                kind: "resume".to_string(),
+                name: None,
+                args: None,
+                output_chars: None,
+                duration_ms: 0,
+                tokens_input: None,
+                tokens_output: None,
+                tokens_cache_read: None,
+                tokens_cache_write: None,
+                model: Some(self.model_name.clone()),
+                input: None,
+                output: Some(format!(
+                    "resumed the paused conversation ({} message(s) replayed) with the \
+                     request's fate as the next user turn",
+                    history.len()
+                )),
+                messages: capped_transcript(&history),
+                error: None,
+            });
+        }
+        history.push(opening);
+
+        for _turn in 0..crate::judging::MAX_TOOL_CALLS {
+            let (prompt, prior) = history
+                .split_last()
+                .map(|(p, rest)| (p.clone(), rest.to_vec()))
+                .ok_or_else(|| JudgeError::Llm("empty conversation".to_string()))?;
+            let mut builder = self
+                .model
+                .completion_request(prompt.clone())
+                .preamble(system.to_string())
+                .messages(prior)
+                .tools(defs.clone());
+            if let Some(params) = &self.additional_params {
+                builder = builder.additional_params(params.clone());
+            }
+            let started_at = log_now_ms();
+            let started = std::time::Instant::now();
+            let sent = tokio::time::timeout(TURN_TIMEOUT, builder.send()).await;
+            let duration_ms = started.elapsed().as_millis() as i64;
+            let prompt_text = match &prompt {
+                Message::User { content } => content
+                    .iter()
+                    .filter_map(|c| match c {
+                        UserContent::Text(t) => Some(t.text.as_str()),
+                        UserContent::ToolResult(r) => r.content.iter().find_map(|x| match x {
+                            ToolResultContent::Text(t) => Some(t.text.as_str()),
+                            _ => None,
+                        }),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                _ => String::new(),
+            };
+            let telemetry_input = || {
+                Some(crate::judging::truncate_chars(
+                    &format!("[system]\n{system}\n\n[user]\n{prompt_text}"),
+                    LLM_TEXT_CAP,
+                ))
+            };
+            let resp = match sent {
+                Ok(Ok(r)) => r,
+                Ok(Err(e)) => {
+                    if let Some(rec) = &self.recorder {
+                        rec.record(JudgeLogEvent {
+                            at_ms: started_at,
+                            kind: "llm".to_string(),
+                            name: None,
+                            args: None,
+                            output_chars: None,
+                            duration_ms,
+                            tokens_input: None,
+                            tokens_output: None,
+                            tokens_cache_read: None,
+                            tokens_cache_write: None,
+                            model: Some(self.model_name.clone()),
+                            input: telemetry_input(),
+                            output: None,
+                            messages: None,
+                            error: Some(e.to_string()),
+                        });
+                    }
+                    return Err(JudgeError::Llm(format!("turn: {e}")));
+                }
+                Err(_) => return Err(JudgeError::AiTimeout),
+            };
+
+            let texts: Vec<&str> = resp
+                .choice
+                .iter()
+                .filter_map(|c| match c {
+                    AssistantContent::Text(t) => Some(t.text.as_str()),
+                    _ => None,
+                })
+                .collect();
+            let text = texts.join("\n");
+            let tool_calls: Vec<_> = resp
+                .choice
+                .iter()
+                .filter_map(|c| match c {
+                    AssistantContent::ToolCall(call) => Some(call.clone()),
+                    _ => None,
+                })
+                .collect();
+            if let Some(rec) = &self.recorder {
+                let calls = tool_calls
+                    .iter()
+                    .map(|c| c.function.name.clone())
+                    .collect::<Vec<_>>();
+                let output = if calls.is_empty() {
+                    text.clone()
+                } else {
+                    format!("{text}\n[tool calls: {}]", calls.join(", "))
+                };
+                rec.record(JudgeLogEvent {
+                    at_ms: started_at,
+                    kind: "llm".to_string(),
+                    name: None,
+                    args: None,
+                    output_chars: Some(text.chars().count() as u64),
+                    duration_ms,
+                    tokens_input: Some(resp.usage.input_tokens),
+                    tokens_output: Some(resp.usage.output_tokens),
+                    tokens_cache_read: Some(resp.usage.cached_input_tokens),
+                    tokens_cache_write: Some(resp.usage.cache_creation_input_tokens),
+                    model: Some(self.model_name.clone()),
+                    input: telemetry_input(),
+                    output: Some(crate::judging::truncate_chars(&output, LLM_TEXT_CAP)),
+                    messages: None,
+                    error: None,
+                });
+            }
+
+            // A textless terminal turn arrives as one empty text item on
+            // some providers; keep it out of the history.
+            let empty_turn = resp.choice.len() == 1
+                && matches!(resp.choice.first_ref(), AssistantContent::Text(t) if t.text.is_empty());
+            if !empty_turn {
+                history.push(Message::Assistant {
+                    id: resp.message_id.clone(),
+                    content: resp.choice.clone(),
+                });
+            }
+            if tool_calls.is_empty() {
+                // The whole conversation, once, on the closing event — the
+                // admin trace shows it as the turn transcript.
+                if let Some(rec) = &self.recorder {
+                    rec.record(JudgeLogEvent {
+                        at_ms: log_now_ms(),
+                        kind: "transcript".to_string(),
+                        name: None,
+                        args: None,
+                        output_chars: None,
+                        duration_ms: 0,
+                        tokens_input: None,
+                        tokens_output: None,
+                        tokens_cache_read: None,
+                        tokens_cache_write: None,
+                        model: Some(self.model_name.clone()),
+                        input: None,
+                        output: Some(format!("{} message(s)", history.len())),
+                        messages: capped_transcript(&history),
+                        error: None,
+                    });
+                }
+                return Ok(TurnsOutcome::Final { text });
+            }
+
+            let mut results: Vec<UserContent> = Vec::with_capacity(tool_calls.len());
+            for call in &tool_calls {
+                let output = match judge_tools
+                    .iter()
+                    .find(|t| t.def.name == call.function.name)
+                {
+                    Some(tool) => match Tool::call(tool, call.function.arguments.clone()).await {
+                        Ok(out) => out,
+                        Err(never) => match never {},
+                    },
+                    None => serde_json::json!({
+                        "error": format!("unknown tool `{}`", call.function.name)
+                    })
+                    .to_string(),
+                };
+                let content = ToolResultContent::from_tool_output(output);
+                results.push(match &call.call_id {
+                    Some(call_id) => UserContent::tool_result_with_call_id(
+                        call.id.clone(),
+                        call_id.clone(),
+                        content,
+                    ),
+                    None => UserContent::tool_result(call.id.clone(), content),
+                });
+            }
+            history.push(Message::User {
+                content: rig::OneOrMany::many(results)
+                    .map_err(|_| JudgeError::Llm("tool turn produced no results".to_string()))?,
+            });
+
+            // A request went out to the participant: stop here. The
+            // transcript ends on the tool result that registered it; the
+            // resume appends what became of it.
+            if self
+                .registrar
+                .as_ref()
+                .is_some_and(|r| r.interactive_pending())
+            {
+                let transcript = serde_json::to_value(&history)
+                    .map_err(|e| JudgeError::Llm(format!("transcript: {e}")))?;
+                if let Some(rec) = &self.recorder {
+                    rec.record(JudgeLogEvent {
+                        at_ms: log_now_ms(),
+                        kind: "pause".to_string(),
+                        name: None,
+                        args: None,
+                        output_chars: None,
+                        duration_ms: 0,
+                        tokens_input: None,
+                        tokens_output: None,
+                        tokens_cache_read: None,
+                        tokens_cache_write: None,
+                        model: Some(self.model_name.clone()),
+                        input: None,
+                        output: Some(
+                            "paused: a request went out to the participant; this run resumes \
+                             from this transcript when it is answered or expires"
+                                .to_string(),
+                        ),
+                        messages: capped_transcript(&history),
+                        error: None,
+                    });
+                }
+                return Ok(TurnsOutcome::Suspended { transcript });
+            }
+        }
+        Err(JudgeError::TooManyToolCalls)
     }
 
     async fn run_agent_with_images(
@@ -555,6 +899,62 @@ where
 struct ToolCallShape {
     tool: String,
     input: serde_json::Value,
+}
+
+/// Ollama model families that reason before answering, by name prefix
+/// (case-insensitive). Overridable with `ARENA_OLLAMA_THINK_MODELS`, a
+/// comma-separated prefix list; `none` turns thinking off for every model.
+/// Kept as a list because Ollama refuses `think: true` for a model that
+/// cannot think, and a judge that cannot be asked is worse than one that
+/// reasons out loud.
+const OLLAMA_THINKING_PREFIXES: &str = "glm-,deepseek-r1,deepseek-v3.1,deepseek-v3.2,gpt-oss,\
+                                        magistral,kimi-k2-thinking,minimax-m2,qwen3.5,qwen3-vl";
+
+fn ollama_model_thinks(model: &str) -> bool {
+    let list = std::env::var("ARENA_OLLAMA_THINK_MODELS")
+        .unwrap_or_else(|_| OLLAMA_THINKING_PREFIXES.to_string());
+    ollama_model_thinks_in(model, &list)
+}
+
+fn ollama_model_thinks_in(model: &str, prefixes: &str) -> bool {
+    let name = model.trim().to_ascii_lowercase();
+    prefixes
+        .split(',')
+        .map(str::trim)
+        .filter(|p| !p.is_empty() && !p.eq_ignore_ascii_case("none"))
+        .any(|p| name.starts_with(&p.to_ascii_lowercase()))
+}
+
+#[cfg(test)]
+mod thinking_tests {
+    use super::{OLLAMA_THINKING_PREFIXES, ollama_model_thinks_in};
+
+    #[test]
+    fn thinking_families_are_recognised_by_prefix() {
+        for m in [
+            "glm-5.3-flash:cloud",
+            "GLM-4.7",
+            "deepseek-r1:8b",
+            "gpt-oss:120b-cloud",
+        ] {
+            assert!(ollama_model_thinks_in(m, OLLAMA_THINKING_PREFIXES), "{m}");
+        }
+        for m in [
+            "llama3.2",
+            "qwen3-coder:480b-cloud",
+            "gemma3:12b",
+            "mistral",
+        ] {
+            assert!(!ollama_model_thinks_in(m, OLLAMA_THINKING_PREFIXES), "{m}");
+        }
+    }
+
+    #[test]
+    fn the_override_replaces_the_list_and_none_disables() {
+        assert!(ollama_model_thinks_in("llama3.2", "llama3, glm-"));
+        assert!(!ollama_model_thinks_in("glm-5.3-flash:cloud", "none"));
+        assert!(!ollama_model_thinks_in("glm-5.3-flash:cloud", ""));
+    }
 }
 
 /// rig-core `Tool` wrapping one arena-core judge tool def. Dispatches to

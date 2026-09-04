@@ -1342,6 +1342,165 @@ async fn a_waiting_judge_of_an_ended_session_is_redriven() {
     assert_ne!(status, "waiting");
 }
 
+/// The judge phase gave up on a request: past the cap the queue stops
+/// re-dispatching it and the task advances. A judge still `waiting` on it
+/// has nothing left to wait for — its latest poll came back failing and no
+/// later one will run — so it re-drives (partial) now, not at session end.
+/// Before this rule only an unresolved row got expired at advance time; a
+/// request whose every attempt had been graded left the judge parked for
+/// the rest of the session (JFV7O5).
+#[tokio::test]
+async fn a_judge_waiting_past_the_judge_phase_cap_is_redriven() {
+    let db = setup_db().await;
+    let gs_id = Uuid::new_v4();
+    let seeded = seed(&db, Some(gs_id)).await;
+    let mut state = test_state(db.clone());
+    state.server_id = gs_id;
+
+    let judge = arena_core::entities::judges::ActiveModel {
+        id: Set(Uuid::new_v4()),
+        slug: Set(format!("capped-{}", Uuid::new_v4())),
+        name: Set("Judge".to_string()),
+        description: Set(String::new()),
+        prompt: Set("Evaluate.".to_string()),
+        rating_scale: Set(serde_json::json!({"min": 0.0, "max": 10.0, "step": 0.5})),
+        kind: Set("llm".to_string()),
+        scope: Set("task".to_string()),
+        evidence_mode: Set("tools".to_string()),
+        evidence_needs: Set(None),
+        created_at: Set(Utc::now()),
+        updated_at: Set(Utc::now()),
+        llm_provider_id_fk: Set(None),
+        llm_model: Set(None),
+        llm_pool_id_fk: Set(None),
+        llm_source_order: Set(arena_core::llm::resolve::SOURCE_ORDER_POOL_FIRST.to_string()),
+        criteria: Set(None),
+        max_interactive: Set(Some(1)),
+        avatar_url: Set(None),
+        probes_config: Set(None),
+        ignore_paths: Set(None),
+    }
+    .insert(&db)
+    .await
+    .expect("judge");
+    let tj = arena_core::entities::task_judges::ActiveModel {
+        id: Set(Uuid::new_v4()),
+        task_id: Set(seeded.task.id),
+        judge_id: Set(judge.id),
+        ordinal: Set(0),
+        created_at: Set(Utc::now()),
+        updated_at: Set(Utc::now()),
+        rating_scale_override: Set(None),
+        weight: Set(None),
+    }
+    .insert(&db)
+    .await
+    .expect("task judge");
+    arena_core::entities::judge_results::ActiveModel {
+        id: Set(Uuid::new_v4()),
+        session_id_fk: Set(seeded.session_id),
+        player_id_fk: Set(seeded.player_id),
+        task_judge_id: Set(tj.id),
+        rating: Set(serde_json::json!(0.0)),
+        point_delta: Set(0),
+        feedback: Set(String::new()),
+        model: Set("m".to_string()),
+        provider: Set("p".to_string()),
+        raw_output: Set(String::new()),
+        duration_ms: Set(None),
+        run_log: Set(None),
+        tokens_input: Set(None),
+        tokens_output: Set(None),
+        tokens_cache_read: Set(None),
+        tokens_cache_write: Set(None),
+        status: Set("waiting".to_string()),
+        error: Set(Some("waiting for a participant artifact".to_string())),
+        created_at: Set(Utc::now()),
+        updated_at: Set(Utc::now()),
+        verdict_kind: Set(None),
+    }
+    .insert(&db)
+    .await
+    .expect("waiting row");
+
+    // Registered longer ago than the judge phase allows; its only attempt
+    // was graded (the poll failed), so nothing is unresolved for the
+    // deadline sweep and nothing is left for the queue to re-ask.
+    let cap = game_server::ws::player_agent::scheduler::JUDGE_PHASE_MAX_SECS as i64;
+    let interactive = serde_json::json!({
+        "mode": "interactive",
+        "instruction": "capture",
+        "artifact": { "content_type": "image/png", "max_bytes": 1000000 }
+    });
+    let test = tests::ActiveModel {
+        id: Set(Uuid::new_v4()),
+        command_template: Set(String::new()),
+        answer_template: Set(String::new()),
+        fixture_definitions: Set(r#"{"kind":"js","script":"({})"}"#.to_string()),
+        created_at: Set(Utc::now() - Duration::seconds(cap + 5)),
+        session_id: Set(seeded.session_id),
+        task_id: Set(seeded.task.id),
+        ordinal: Set(10),
+        prompt: Set(String::new()),
+        description: Set(None),
+        probe_config: Set(Some(interactive)),
+        initiator: Set("judge".to_string()),
+        registered_by_judge_id: Set(Some(judge.id)),
+    }
+    .insert(&db)
+    .await
+    .expect("interactive test");
+    probes::ActiveModel {
+        id: Set(Uuid::new_v4()),
+        test_id: Set(test.id),
+        player_id: Set(seeded.player_id),
+        session_id: Set(seeded.session_id),
+        attempt: Set(1),
+        rendered_command: Set(String::new()),
+        fixture_values: Set("{}".to_string()),
+        expected_answer: Set(None),
+        resolved_answer: Set(None),
+        secret_meta: Set(None),
+        outcome: Set(Some("error".to_string())),
+        dispatched_at: Set(Utc::now() - Duration::seconds(cap)),
+        deadline_at: Set(Utc::now() + Duration::hours(1)),
+        resolved_at: Set(Some(Utc::now() - Duration::seconds(cap))),
+        updated_at: Set(Some(Utc::now())),
+        output: Set(Some(String::new())),
+        exit_code: Set(Some(2)),
+        duration_ms: Set(Some(100)),
+        point_delta: Set(Some(0)),
+        result_json: Set(None),
+        artifact_path: Set(None),
+    }
+    .insert(&db)
+    .await
+    .expect("probe row");
+
+    game_server::probe_scheduler::tick(&state)
+        .await
+        .expect("tick");
+
+    let left_waiting = async {
+        loop {
+            let row = arena_core::entities::judge_results::Entity::find()
+                .filter(arena_core::entities::judge_results::Column::TaskJudgeId.eq(tj.id))
+                .one(&db)
+                .await
+                .expect("query")
+                .expect("row");
+            if row.status != "waiting" {
+                return row.status;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    };
+    let status = tokio::time::timeout(std::time::Duration::from_secs(15), left_waiting)
+        .await
+        .expect("a judge whose request outlived the judge phase must be re-driven");
+    assert_ne!(status, "waiting");
+}
+
 /// A deterministic probe that names no side belongs to the player: their
 /// machine has the toolchain, the dependencies and the process the command
 /// talks to. The scheduler's server sweep must leave it alone — before this,

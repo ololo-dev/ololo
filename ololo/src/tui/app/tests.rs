@@ -1649,6 +1649,29 @@ fn a_probe_result_carries_the_task_brief() {
 }
 
 #[test]
+fn an_artifact_request_hands_the_agent_the_full_instruction() {
+    // The command's header folds the ask onto one shell-safe line; the
+    // description is the judge's text as written. The agent reads the
+    // latter — the file list, one per line, is the whole point.
+    let mut p = probe_result(
+        ARTIFACT_COMMAND,
+        "waiting-for-file: save the capture into .ololo/artifacts/92afc917/",
+    );
+    p.test_description = "Capture the ledger page:\n\n1. **desktop.png** at 1280px.\n2. \
+                          **mobile.png** at 375px, Bangkok's card visible."
+        .to_string();
+    let text = crate::tui::app::probe_paste_text(&p);
+    assert!(
+        text.contains("1. **desktop.png** at 1280px.\n2. **mobile.png** at 375px"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("Capture the ledger page at 1280px as"),
+        "{text}"
+    );
+}
+
+#[test]
 fn an_artifact_request_still_leaves_the_brief_out() {
     // The one paste where the brief buried the content: the request itself
     // is the instruction, and it names everything the agent must do.

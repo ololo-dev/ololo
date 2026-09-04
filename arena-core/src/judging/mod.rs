@@ -12,6 +12,7 @@ pub mod criteria;
 pub mod dossier;
 pub mod evidence;
 pub mod execution;
+pub mod extract;
 pub mod programs;
 pub mod report;
 pub mod session;
@@ -66,8 +67,16 @@ pub const EVIDENCE_MODE_TOOLS: &str = "tools";
 /// and answers in a single completion, with no tools offered.
 pub const EVIDENCE_MODE_DOSSIER: &str = "dossier";
 
-/// Total wall-clock budget for the agent loop (FR-006).
-pub const LOOP_TIMEOUT: Duration = Duration::from_secs(180);
+/// Wall-clock budget for one model call. A call is a whole rig run — the
+/// model's tool turns included — and a hosted thinking model with a
+/// twenty-turn investigation spends minutes in it; the old 180-second
+/// budget for the ENTIRE loop timed such runs out mid-investigation and
+/// then paid for them again on retry.
+pub const CALL_TIMEOUT: Duration = Duration::from_secs(420);
+
+/// Total wall-clock budget for the agent loop (FR-006): the investigation,
+/// plus the extractor call when the final message needs one.
+pub const LOOP_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Abstraction over the rig-core agent-loop API (Constitution Commandment 5).
 ///
@@ -101,6 +110,52 @@ pub trait JudgeLlm: Send + Sync {
     ) -> Result<AgentResponse, JudgeError> {
         self.run_agent(system, user, tools, prior_tool_result).await
     }
+
+    /// Whether this implementation drives the tool loop turn by turn and
+    /// can pause it (see [`JudgeLlm::run_turns`]). Fakes and legacy
+    /// implementations say no and `run_judge` drives them through
+    /// [`JudgeLlm::run_agent`] as before.
+    fn supports_turns(&self) -> bool {
+        false
+    }
+
+    /// The whole investigation as one owned conversation: the model is
+    /// called turn by turn, its tool calls are executed here, and the run
+    /// ends on a final text — or PAUSES the moment a tool call registered a
+    /// participant request, handing back the transcript so far. A later
+    /// call with [`ResumeFrom`] continues that conversation from its
+    /// transcript with the answer appended as a new user turn.
+    async fn run_turns(
+        &self,
+        _system: &str,
+        _user: &str,
+        _tools: Vec<ToolDef>,
+        _images: &[JudgeImage],
+        _resume: Option<ResumeFrom>,
+    ) -> Result<TurnsOutcome, JudgeError> {
+        Err(JudgeError::Llm(
+            "this JudgeLlm does not drive the turn loop".to_string(),
+        ))
+    }
+}
+
+/// How a turn-driven run ended.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TurnsOutcome {
+    /// The model wrote its final message.
+    Final { text: String },
+    /// A tool call registered a participant request; the run stops here
+    /// and the re-drive resumes it. `transcript` is the conversation so far.
+    Suspended { transcript: serde_json::Value },
+}
+
+/// Where a resumed run picks up: the paused conversation and the message
+/// that reopens it (what became of the request, with any delivered
+/// artifacts attached by the caller).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResumeFrom {
+    pub transcript: serde_json::Value,
+    pub update: String,
 }
 
 /// One screenshot artifact attached to a judge's user turn.
@@ -292,6 +347,11 @@ pub enum JudgeError {
     FeedbackTooLong,
     #[error("too_many_tool_calls")]
     TooManyToolCalls,
+    /// Not a failure: the run paused on a participant request. Carries the
+    /// conversation so far; the queue stores it against the `waiting` row
+    /// and the re-drive resumes from it.
+    #[error("suspended")]
+    Suspended(Box<serde_json::Value>),
     #[error("db error: {0}")]
     Db(#[from] sea_orm::DbErr),
     #[error("llm error: {0}")]
@@ -440,6 +500,38 @@ pub fn rating_scalar(rating: &serde_json::Value) -> f64 {
 pub struct PriorJudgeResult {
     pub rating: f64,
     pub feedback: String,
+    /// What became of the probes this judge registered on the task (its
+    /// own and the ones it attached to). A re-driven run that does not
+    /// know its capture expired asks for it again — after the participant
+    /// has moved on, into a queue nobody dispatches (ZNQZEB: five dead
+    /// minutes and a third full run).
+    pub requests: Vec<PriorRequest>,
+    /// The conversation of this judge's run that paused on those requests,
+    /// when the earlier run was suspended rather than concluded. Present
+    /// ⇒ the new run RESUMES it instead of investigating again.
+    pub transcript: Option<serde_json::Value>,
+}
+
+/// One earlier request of this judge on this task, and its fate.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PriorRequest {
+    /// The judge's own instruction (or the command it asked to run).
+    pub instruction: String,
+    pub fate: RequestFate,
+}
+
+/// How a judge-registered probe ended, as the re-driven judge must read it.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RequestFate {
+    /// The capture arrived: `files` artifacts, attached to this run when
+    /// the judge can see images.
+    Delivered { files: usize },
+    /// The command ran and came back with this outcome and answer.
+    Ran { outcome: String, answer: String },
+    /// Nothing arrived before the request expired.
+    Expired,
+    /// Still open — this run was started for another reason.
+    Open,
 }
 
 /// This judge's own verdict on an EARLIER task of the same session, for the
@@ -699,20 +791,67 @@ pub async fn run_judge(
     }
 
     let run_started = std::time::Instant::now();
-    let raw_output = tokio::time::timeout(LOOP_TIMEOUT, async {
+    let parses = |text: &str| match criteria_ctx {
+        None => parse_verdict(text).is_ok(),
+        Some(ctx) => parse_and_score_criteria(text, ctx, &scale).is_ok(),
+    };
+    let raw_output = if judge_llm.supports_turns() {
+        // One owned conversation. A tool call that registers a participant
+        // request pauses it (`Suspended`: the caller stores the transcript
+        // against the waiting row); a prior transcript on this judge's
+        // waiting row means this run RESUMES that conversation with the
+        // request's fate as the next user turn, artifacts attached — no
+        // provisional verdict, no second investigation.
+        let resume = prior_judge_result
+            .and_then(|p| p.transcript.clone())
+            .map(|transcript| ResumeFrom {
+                transcript,
+                update: resume_update(
+                    prior_judge_result
+                        .map(|p| p.requests.as_slice())
+                        .unwrap_or(&[]),
+                ),
+            });
+        let outcome = tokio::time::timeout(
+            LOOP_TIMEOUT,
+            judge_llm.run_turns(&system, &user, tools.clone(), images, resume),
+        )
+        .await
+        .map_err(|_| JudgeError::AiTimeout)??;
+        let text = match outcome {
+            TurnsOutcome::Suspended { transcript } => {
+                return Err(JudgeError::Suspended(Box::new(transcript)));
+            }
+            TurnsOutcome::Final { text } => text,
+        };
+        if parses(&text) {
+            text
+        } else {
+            let extracted =
+                extract::extract_verdict(judge_llm, &text, criteria_ctx.map(|c| c.keys.as_slice()))
+                    .await?;
+            if !parses(&extracted) {
+                tracing::warn!(analysis = %text, extracted = %extracted, "judge verdict extraction failed");
+                return Err(JudgeError::AiParseError);
+            }
+            extracted
+        }
+    } else {
+        tokio::time::timeout(LOOP_TIMEOUT, async {
         let mut prior_tool_result: Option<String> = None;
-        let mut verdict_retries = 0;
-        let mut round_tools = tools.clone();
         for _round in 0..MAX_TOOL_CALLS {
-            let resp = judge_llm
-                .run_agent_with_images(
+            let resp = tokio::time::timeout(
+                CALL_TIMEOUT,
+                judge_llm.run_agent_with_images(
                     &system,
                     &user,
-                    round_tools.clone(),
+                    tools.clone(),
                     prior_tool_result.as_deref(),
                     images,
-                )
-                .await?;
+                ),
+            )
+            .await
+            .map_err(|_| JudgeError::AiTimeout)??;
             match resp {
                 AgentResponse::ToolCall { name, args } => {
                     let result = match (&name[..], registrar) {
@@ -732,33 +871,32 @@ pub async fn run_judge(
                     prior_tool_result = Some(result);
                 }
                 AgentResponse::Final { text } => {
-                    // Models sometimes end on prose instead of the JSON verdict.
-                    // Nudge up to twice before giving up with the raw text. The
-                    // nudge round runs WITHOUT tools: each run_agent call is
-                    // stateless, so with tools available the model restarts its
-                    // investigation instead of answering. Its prior analysis is
-                    // fed back in the prompt, so it must only convert it to JSON.
-                    let parses = match criteria_ctx {
-                        None => parse_verdict(&text).is_ok(),
-                        Some(ctx) => parse_and_score_criteria(&text, ctx, &scale).is_ok(),
-                    };
-                    if parses || verdict_retries >= 2 {
+                    if parses(&text) {
                         return Ok(text);
                     }
-                    verdict_retries += 1;
-                    round_tools = Vec::new();
-                    prior_tool_result = Some(format!(
-                        "Your analysis so far:\n{text}\n\nBased on this analysis, respond \
-                         now with ONLY the JSON verdict object, no other text: \
-                         {{\"rating\": <number>, \"feedback\": \"<text>\"}}"
-                    ));
+                    // Prose instead of the sheet. The investigation is done
+                    // and its conclusions are in the text; the only work
+                    // left is transcription, which is a separate, cheap
+                    // call — not a re-run of the judge (see `extract`).
+                    let extracted = extract::extract_verdict(
+                        judge_llm,
+                        &text,
+                        criteria_ctx.map(|c| c.keys.as_slice()),
+                    )
+                    .await?;
+                    if parses(&extracted) {
+                        return Ok(extracted);
+                    }
+                    tracing::warn!(analysis = %text, extracted = %extracted, "judge verdict extraction failed");
+                    return Err(JudgeError::AiParseError);
                 }
             }
         }
         Err(JudgeError::TooManyToolCalls)
-    })
-    .await
-    .map_err(|_| JudgeError::AiTimeout)??;
+        })
+        .await
+        .map_err(|_| JudgeError::AiTimeout)??
+    };
 
     // FR-008: parse JSON, strip markdown fences, retain raw regardless.
     // Criteria judges answer with a score sheet; the sheet is kept whole for
@@ -1159,10 +1297,74 @@ fn build_user_prompt(
             "Prior rating: {}\nPrior feedback: {}\n",
             p.rating, p.feedback
         ));
+        s.push_str(&render_prior_requests(&p.requests));
     }
 
     s.push_str(&render_prior_session_verdicts(prior_session_verdicts));
 
+    s
+}
+
+/// The fate of the probes this judge registered earlier on this task. A
+/// re-driven run reads this before it reaches for `register_probe` again:
+/// what arrived is attached, what expired is gone for good.
+fn render_prior_requests(requests: &[PriorRequest]) -> String {
+    if requests.is_empty() {
+        return String::new();
+    }
+    let mut s = String::from(
+        "\nYour earlier requests on this task, and what became of them. This run \
+         exists because they settled; do NOT register the same request again — \
+         judge from what is here, and where nothing arrived say so in the \
+         rationale rather than asking twice.\n",
+    );
+    for r in requests {
+        s.push_str(&render_request_line(r));
+    }
+    s
+}
+
+fn render_request_line(r: &PriorRequest) -> String {
+    let instruction = truncate_chars(r.instruction.trim(), 300);
+    let fate = match &r.fate {
+        RequestFate::Delivered { files } => {
+            format!("DELIVERED — {files} file(s), attached to this message when you can see images")
+        }
+        RequestFate::Ran { outcome, answer } => {
+            format!(
+                "RAN — outcome {outcome}: {}",
+                truncate_chars(answer.trim(), 300)
+            )
+        }
+        RequestFate::Expired => {
+            "EXPIRED — nothing arrived and the participant has moved on; it cannot be re-asked"
+                .to_string()
+        }
+        RequestFate::Open => "still open".to_string(),
+    };
+    format!("- \"{instruction}\" → {fate}\n")
+}
+
+/// The user turn that reopens a paused conversation: what became of the
+/// request(s) the run stopped on, and what to do now. The delivered
+/// artifacts ride on the same turn as attachments (the caller adds them).
+pub(crate) fn resume_update(requests: &[PriorRequest]) -> String {
+    let mut s = String::from(
+        "Your run paused when you registered the request(s) below. The participant \
+         has answered, or the request expired; this message resumes your run exactly \
+         where it stopped. What became of them:\n",
+    );
+    if requests.is_empty() {
+        s.push_str("- (no request is on record — nothing further will arrive)\n");
+    }
+    for r in requests {
+        s.push_str(&render_request_line(r));
+    }
+    s.push_str(
+        "\nContinue from your earlier analysis: judge what arrived, read more with \
+         your tools only if you must, do NOT register the same request again, and \
+         finish with the JSON verdict.",
+    );
     s
 }
 
@@ -1460,13 +1662,13 @@ pub(crate) fn parse_verdict(raw: &str) -> Result<VerdictJson, JudgeError> {
     if let Ok(v) = serde_json::from_str::<VerdictJson>(stripped) {
         return Ok(v);
     }
-    // Models sometimes prefix the verdict with leaked reasoning (e.g.
-    // "…</think>{\"rating\": …}"). Fall back to the outermost {…} slice.
-    if let (Some(start), Some(end)) = (stripped.find('{'), stripped.rfind('}'))
-        && start < end
-        && let Ok(v) = serde_json::from_str::<VerdictJson>(&stripped[start..=end])
-    {
-        return Ok(v);
+    // Models end on prose with the verdict somewhere in it — a fenced
+    // block at the bottom, or "…</think>{\"rating\": …}". The candidates
+    // are ranked so the closing word wins over a brace quoted earlier.
+    for candidate in criteria::json_object_candidates(raw) {
+        if let Ok(v) = serde_json::from_str::<VerdictJson>(candidate) {
+            return Ok(v);
+        }
     }
     tracing::warn!(raw_output = %raw, "judge verdict parse failed");
     Err(JudgeError::AiParseError)
@@ -1492,6 +1694,57 @@ fn strip_code_fences(s: &str) -> &str {
 #[cfg(test)]
 mod prompt_tests {
     use super::*;
+
+    #[test]
+    fn a_redriven_judge_reads_the_fate_of_its_requests() {
+        let prior = PriorJudgeResult {
+            rating: 0.0,
+            feedback: "provisional".into(),
+            transcript: None,
+            requests: vec![
+                PriorRequest {
+                    instruction: "Capture rome.png at 1280px".into(),
+                    fate: RequestFate::Delivered { files: 4 },
+                },
+                PriorRequest {
+                    instruction: "Capture mobile.png".into(),
+                    fate: RequestFate::Expired,
+                },
+                PriorRequest {
+                    instruction: "node test.js".into(),
+                    fate: RequestFate::Ran {
+                        outcome: "error".into(),
+                        answer: "1 failing".into(),
+                    },
+                },
+            ],
+        };
+        let s = render_prior_requests(&prior.requests);
+        assert!(s.contains("do NOT register the same request again"), "{s}");
+        assert!(
+            s.contains("\"Capture rome.png at 1280px\" → DELIVERED — 4 file(s)"),
+            "{s}"
+        );
+        assert!(s.contains("\"Capture mobile.png\" → EXPIRED"), "{s}");
+        assert!(
+            s.contains("\"node test.js\" → RAN — outcome error: 1 failing"),
+            "{s}"
+        );
+        assert_eq!(
+            render_prior_requests(&[]),
+            "",
+            "no heading without requests"
+        );
+
+        let update = resume_update(&prior.requests);
+        assert!(update.starts_with("Your run paused"), "{update}");
+        assert!(
+            update.contains("\"Capture mobile.png\" → EXPIRED"),
+            "{update}"
+        );
+        assert!(update.contains("finish with the JSON verdict"), "{update}");
+        assert!(resume_update(&[]).contains("no request is on record"));
+    }
 
     fn task_row(evaluation: Option<serde_json::Value>) -> TaskRow {
         TaskRow {

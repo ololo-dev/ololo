@@ -263,6 +263,96 @@ fn registrar(
     )
 }
 
+/// A judge re-driven after the queue gave up on its capture finds the
+/// participant on the next task. Nothing registered now would ever be
+/// dispatched; the registrar says so instead of opening a request that
+/// holds the judge for another whole cap (ZNQZEB).
+#[tokio::test]
+async fn registration_refuses_once_the_participant_moved_on() {
+    use arena_core::entities::session_scheduler_state;
+    let db = setup_db().await;
+    let state = test_state(db.clone());
+    let seeded = seed(&db).await;
+    let reg = registrar(&state, &seeded, 2);
+
+    let this_task = tasks::Entity::find_by_id(seeded.task_id)
+        .one(&db)
+        .await
+        .unwrap()
+        .expect("task");
+    let next_task = tasks::ActiveModel {
+        id: Set(Uuid::new_v4()),
+        project_id_fk: Set(this_task.project_id_fk),
+        ordinal: Set(this_task.ordinal + 1),
+        title: Set("Next".to_string()),
+        content: Set(String::new()),
+        test_template: Set(serde_json::json!({"kind":"shell","command_template":"## Y\n"})),
+        created_at: Set(Utc::now()),
+        tags: Set(String::new()),
+        point_value: Set(100),
+        deadline_secs: Set(None),
+        min_interval_secs: Set(None),
+        interval_increment_secs: Set(None),
+        max_interval_secs: Set(None),
+        fail_points: Set(0),
+        no_response_points: Set(0),
+        completion_bonus_points: Set(0),
+        evaluation: Set(None),
+    }
+    .insert(&db)
+    .await
+    .expect("next task");
+    let cursor = session_scheduler_state::ActiveModel {
+        id: Set(Uuid::new_v4()),
+        session_id_fk: Set(seeded.session_id),
+        player_id_fk: Set(seeded.player_id),
+        task_id: Set(Some(next_task.id)),
+        state: Set("running".to_string()),
+        next_probe_at: Set(None),
+        created_at: Set(Utc::now()),
+        updated_at: Set(Utc::now()),
+    }
+    .insert(&db)
+    .await
+    .expect("cursor");
+
+    let ask = serde_json::json!({
+        "mode": "interactive", "instruction": "Screenshot the forecast",
+        "content_type": "image/png", "deadline_secs": 300
+    });
+    let out = reg.register(&ask).await;
+    let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert!(
+        parsed["error"].as_str().unwrap_or("").contains("moved on"),
+        "{out}"
+    );
+    let run = serde_json::json!({
+        "mode": "deterministic", "command": "node test.js", "validation": "result.includes('ok')"
+    });
+    let out = reg.register(&run).await;
+    assert!(
+        out.contains("moved on"),
+        "deterministic asks are refused too: {out}"
+    );
+    assert!(
+        tests::Entity::find()
+            .filter(tests::Column::RegisteredByJudgeId.eq(seeded.judge_id))
+            .all(&db)
+            .await
+            .unwrap()
+            .is_empty(),
+        "nothing was registered"
+    );
+
+    // Cursor back on this task: the same ask is welcome.
+    let mut back: session_scheduler_state::ActiveModel = cursor.into();
+    back.task_id = Set(Some(seeded.task_id));
+    back.update(&db).await.expect("cursor back");
+    let out = reg.register(&ask).await;
+    let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(parsed["status"], "queued", "{out}");
+}
+
 #[tokio::test]
 async fn a_request_runs_on_the_session_clock_not_the_judges_number() {
     // The judge's own window is what lost session TJQJPJ its ux-review
@@ -535,6 +625,209 @@ async fn ticker_times_out_interactive_probes_to_no_response() {
         probe.point_delta,
         Some(0),
         "silence is never a penalty here"
+    );
+}
+
+/// A judge writes prose: a numbered file list, blank lines, "Bangkok's".
+/// The request travels as a shell script whose last line polls for the
+/// file — so every instruction line past the first used to RUN as shell,
+/// and an apostrophe was a syntax error that killed the script before the
+/// poll ever printed `delivered` (JFV7O5: the screenshot landed, the judge
+/// waited for the whole session). The header is one comment line now; the
+/// full text lives in the description.
+#[tokio::test]
+async fn a_multi_line_instruction_stays_out_of_the_shell() {
+    let db = setup_db().await;
+    let state = test_state(db.clone());
+    let seeded = seed(&db).await;
+    let reg = registrar(&state, &seeded, 1);
+    let instruction = "Run the widget and capture four screenshots.\n\n\
+        1. **rome-desktop.png** — open `http://localhost:8000/?city=rome` at ~1280x800.\n\
+        2. **bangkok-f-desktop.png** — must show Bangkok's card reading 91°F.\n\n\
+        Each file should be a genuine browser screenshot.";
+    let out = reg
+        .register(&serde_json::json!({
+            "mode": "interactive", "instruction": instruction,
+            "content_type": "image/png", "deadline_secs": 300
+        }))
+        .await;
+    let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let test_id: Uuid = parsed["test_id"].as_str().unwrap().parse().unwrap();
+    let test = tests::Entity::find_by_id(test_id)
+        .one(&db)
+        .await
+        .unwrap()
+        .expect("tests row");
+
+    let header = test.command_template.lines().next().unwrap();
+    assert!(header.starts_with("# ARTIFACT REQUEST from "), "{header}");
+    assert!(
+        header.contains("Bangkok's card reading 91°F") && header.contains("rome-desktop.png"),
+        "the whole ask is on the comment line: {header}"
+    );
+    assert!(
+        test.command_template
+            .lines()
+            .all(|l| l.starts_with('#') || l.starts_with("test -n ")),
+        "only comments and the poll may reach the shell:\n{}",
+        test.command_template
+    );
+    assert_eq!(
+        test.description.as_deref(),
+        Some(instruction),
+        "the description keeps the line breaks"
+    );
+
+    // The poll runs — and says the file is not there yet.
+    #[cfg(unix)]
+    {
+        let work = tempfile::tempdir().unwrap();
+        let sh = |cmd: &str| {
+            let outp = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(cmd)
+                .current_dir(work.path())
+                .output()
+                .expect("sh");
+            (
+                outp.status.code(),
+                String::from_utf8_lossy(&outp.stdout).trim().to_string(),
+                String::from_utf8_lossy(&outp.stderr).to_string(),
+            )
+        };
+        let (code, stdout, stderr) = sh(&test.command_template);
+        assert_eq!(code, Some(0), "stderr: {stderr}");
+        assert!(stdout.starts_with("waiting-for-file"), "{stdout}");
+        let dir = parsed["artifact_path"].as_str().unwrap();
+        std::fs::create_dir_all(work.path().join(dir)).unwrap();
+        std::fs::write(work.path().join(dir).join("rome-desktop.png"), b"png").unwrap();
+        let (code, stdout, _) = sh(&test.command_template);
+        assert_eq!(code, Some(0));
+        assert_eq!(stdout, "delivered");
+    }
+}
+
+/// The player's repo with the artifact committed at `artifact_dir`, laid
+/// out the way `git_store` expects (`<base>/<session>/<player>.git`).
+fn push_artifact(
+    seeded: &Seeded,
+    artifact_dir: &str,
+    file: &str,
+    bytes: usize,
+) -> tempfile::TempDir {
+    let repos_base = tempfile::tempdir().unwrap();
+    let work = repos_base.path().join("work");
+    let dir = work.join(artifact_dir.trim_end_matches('/'));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(file), vec![0u8; bytes]).unwrap();
+    let git = |args: &[&str]| {
+        let outp = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&work)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            .output()
+            .expect("git");
+        assert!(
+            outp.status.success(),
+            "{}",
+            String::from_utf8_lossy(&outp.stderr)
+        );
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "artifact: sync"]);
+    let bare = repos_base
+        .path()
+        .join(seeded.session_id.to_string())
+        .join(format!("{}.git", seeded.player_id));
+    std::fs::create_dir_all(bare.parent().unwrap()).unwrap();
+    let outp = std::process::Command::new("git")
+        .args(["clone", "-q", "--bare"])
+        .arg(&work)
+        .arg(&bare)
+        .output()
+        .unwrap();
+    assert!(outp.status.success());
+    repos_base
+}
+
+/// The poll ran before the file landed (or choked) and graded `error`;
+/// the next sweep finds the file in the pushed tree. That IS the delivery:
+/// the row turns `pass` so the waiting judge re-drives and the queue stops
+/// re-asking — instead of both hanging on a re-dispatch that may never
+/// print `delivered`.
+#[tokio::test]
+async fn an_artifact_arriving_after_a_failed_poll_passes_the_probe() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let db = setup_db().await;
+    let state = test_state(db.clone());
+    let seeded = seed(&db).await;
+    let reg = registrar(&state, &seeded, 1);
+    let out = reg
+        .register(&serde_json::json!({
+            "mode": "interactive", "instruction": "screenshot",
+            "content_type": "image/png", "max_bytes": 1024, "deadline_secs": 600
+        }))
+        .await;
+    let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let test_id: Uuid = parsed["test_id"].as_str().unwrap().parse().unwrap();
+    let artifact_dir = parsed["artifact_path"].as_str().unwrap().to_string();
+    let probe_id = Uuid::new_v4();
+    probes::ActiveModel {
+        id: Set(probe_id),
+        test_id: Set(test_id),
+        player_id: Set(seeded.player_id),
+        session_id: Set(seeded.session_id),
+        attempt: Set(1),
+        rendered_command: Set(String::new()),
+        fixture_values: Set("{}".to_string()),
+        expected_answer: Set(None),
+        resolved_answer: Set(None),
+        secret_meta: Set(None),
+        outcome: Set(Some("error".to_string())),
+        dispatched_at: Set(Utc::now() - Duration::seconds(30)),
+        deadline_at: Set(Utc::now() + Duration::seconds(600)),
+        resolved_at: Set(Some(Utc::now() - Duration::seconds(29))),
+        updated_at: Set(Some(Utc::now())),
+        output: Set(Some(String::new())),
+        exit_code: Set(Some(2)),
+        duration_ms: Set(Some(100)),
+        point_delta: Set(Some(0)),
+        result_json: Set(None),
+        artifact_path: Set(None),
+    }
+    .insert(&db)
+    .await
+    .expect("probe row");
+
+    let repos_base = push_artifact(&seeded, &artifact_dir, "shot.png", 512);
+    // safety: serialized by ENV_LOCK; this is the only env var touched.
+    unsafe { std::env::set_var("OLOLO_GIT_REPOS_DIR", repos_base.path()) };
+    game_server::probe_scheduler::tick(&state)
+        .await
+        .expect("tick");
+    unsafe { std::env::remove_var("OLOLO_GIT_REPOS_DIR") };
+
+    let probe = probes::Entity::find_by_id(probe_id)
+        .one(&db)
+        .await
+        .unwrap()
+        .expect("probe");
+    assert_eq!(probe.outcome.as_deref(), Some("pass"));
+    assert_eq!(probe.exit_code, Some(0));
+    assert!(probe.artifact_path.is_some(), "blob reference recorded");
+    assert!(
+        probe
+            .output
+            .as_deref()
+            .unwrap_or("")
+            .starts_with("delivered: 1 file(s)"),
+        "{:?}",
+        probe.output
     );
 }
 

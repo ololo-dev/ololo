@@ -129,6 +129,22 @@ impl JudgeProbeRegistrar {
     }
 
     /// All interactive tests rows registered on this task (any judge).
+    /// The participant's scheduler cursor points at a later task than the
+    /// one this judge is judging. No cursor row (a run outside the socket
+    /// loop, e.g. an admin re-run) is not "moved on".
+    async fn participant_moved_on(&self) -> bool {
+        use arena_core::entities::session_scheduler_state;
+        session_scheduler_state::Entity::find()
+            .filter(session_scheduler_state::Column::SessionIdFk.eq(self.session_id))
+            .filter(session_scheduler_state::Column::PlayerIdFk.eq(self.player_id))
+            .one(&self.state.db)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|row| row.task_id)
+            .is_some_and(|current| current != self.task_id)
+    }
+
     async fn interactive_tests(&self) -> Vec<tests::Model> {
         tests::Entity::find()
             .filter(tests::Column::SessionId.eq(self.session_id))
@@ -504,7 +520,7 @@ impl JudgeProbeRegistrar {
              file into this folder is a valid delivery.\n\
              test -n \"$(ls -A {path} 2>/dev/null)\" && echo delivered || echo \"waiting-for-file: save the capture into {path}\"",
             judge = self.judge_slug,
-            instruction = instruction,
+            instruction = header_line(&instruction),
             path = artifact_repo_path,
         );
         if let Err(e) = (tests::ActiveModel {
@@ -551,9 +567,9 @@ impl JudgeProbeRegistrar {
             "test_id": test_id,
             "status": "queued",
             "artifact_path": artifact_repo_path,
-            "note": "registered as a regular probe; the participant's loop will dispatch it — \
-                     give your best verdict from current evidence, this run is revisited when \
-                     the artifact arrives or the request expires",
+            "note": "registered; the participant's loop will dispatch it. Your run pauses \
+                     here and resumes with what became of the request (the capture \
+                     attached, or word that it expired) — do not write a verdict now",
         })
         .to_string()
     }
@@ -665,9 +681,9 @@ impl JudgeProbeRegistrar {
         serde_json::json!({
             "test_id": test_row.id,
             "status": "queued",
-            "note": "registered as a regular probe; the participant's loop runs it on THEIR \
-                     machine and reports back — give your best verdict from current evidence, \
-                     this run is revisited when the probe resolves or the session ends",
+            "note": "registered; the participant's loop runs it on THEIR machine and \
+                     reports back. Your run pauses here and resumes with the result — do \
+                     not write a verdict now",
         })
         .to_string()
     }
@@ -676,6 +692,22 @@ impl JudgeProbeRegistrar {
 #[async_trait]
 impl ProbeRegistrar for JudgeProbeRegistrar {
     async fn register(&self, args: &serde_json::Value) -> String {
+        // The queue dispatches probes for the participant's CURRENT task
+        // only. A judge re-driven after the judge phase gave up on its
+        // capture — the participant already on the next task — used to
+        // register a fresh one that nobody would ever hand over, and then
+        // wait its whole cap for it (ZNQZEB: five dead minutes, a third
+        // full run). Once the participant has moved on, the evidence at
+        // hand is all there will be.
+        if self.participant_moved_on().await {
+            return serde_json::json!({
+                "error": "the participant has already moved on to the next task — nothing \
+                          registered now can be dispatched to them; give your verdict from \
+                          the evidence you have (null with a rationale where you genuinely \
+                          cannot assess)"
+            })
+            .to_string();
+        }
         match args["mode"].as_str() {
             Some("interactive") => self.register_interactive(args).await,
             Some("deterministic") => self.register_deterministic(args).await,
@@ -689,6 +721,17 @@ impl ProbeRegistrar for JudgeProbeRegistrar {
     fn interactive_pending(&self) -> bool {
         self.interactive_pending.load(Ordering::SeqCst)
     }
+}
+
+/// The instruction as the ONE comment line the request's shell command
+/// opens with. A judge writes prose — a numbered list, blank lines, an
+/// apostrophe in "Bangkok's" — and every line of it past the first would
+/// run as shell: `1. **rome.png** ...` is a command, an unmatched quote is
+/// a syntax error that kills the script before the availability check at
+/// the bottom ever prints `delivered`. The full text, line breaks intact,
+/// travels as the tests row's description; the shell sees one `#` line.
+fn header_line(instruction: &str) -> String {
+    instruction.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Rewrite every `.ololo/artifacts/<segment>/` (or a bare
@@ -721,7 +764,21 @@ fn rewrite_artifact_paths(instruction: &str, real_path: &str) -> String {
 
 #[cfg(test)]
 mod instruction_tests {
-    use super::rewrite_artifact_paths;
+    use super::{header_line, rewrite_artifact_paths};
+
+    #[test]
+    fn a_multi_line_instruction_folds_into_one_comment_line() {
+        let got = header_line(
+            "Capture four screenshots.\n\n1. **rome.png** — open `/?city=rome`.\n2. \
+             **bangkok.png** — must show Bangkok's card reading 91°F.\n",
+        );
+        assert!(!got.contains('\n'), "{got}");
+        assert_eq!(
+            got,
+            "Capture four screenshots. 1. **rome.png** — open `/?city=rome`. 2. \
+             **bangkok.png** — must show Bangkok's card reading 91°F."
+        );
+    }
 
     const REAL: &str = ".ololo/artifacts/785c412c-d73f-4cb8-beab-c4a26f035472/";
 

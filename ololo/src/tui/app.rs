@@ -1484,7 +1484,7 @@ impl TuiApp {
                 if let Some(req) = parse_artifact_request(&latest.command) {
                     out.push(ChatMsg::Request {
                         judge: req.judge.to_string(),
-                        instruction: req.instruction.to_string(),
+                        instruction: request_instruction(&latest.test_description, req.instruction),
                         path: req.path.clone(),
                         delivered: matches!(
                             latest.outcome,
@@ -1855,6 +1855,19 @@ struct ArtifactRequest<'a> {
     path: String,
 }
 
+/// What the judge asked for, in full. The command's header carries the
+/// instruction folded onto one line (shell-safe); the test description
+/// carries it as written — line breaks, numbered files — so it wins when
+/// the server sent one.
+fn request_instruction(description: &str, header: &str) -> String {
+    let full = description.trim();
+    if full.is_empty() {
+        header.to_string()
+    } else {
+        full.to_string()
+    }
+}
+
 fn parse_artifact_request(command: &str) -> Option<ArtifactRequest<'_>> {
     let header = command
         .lines()
@@ -2075,7 +2088,10 @@ pub fn probe_paste_text(p: &ProbeResultInfo) -> String {
                 secs.div_euclid(60).max(1)
             ));
         }
-        out.push_str(&format!("What to capture: {}\n", req.instruction));
+        out.push_str(&format!(
+            "What to capture: {}\n",
+            request_instruction(&p.test_description, req.instruction)
+        ));
         if !req.path.is_empty() {
             out.push_str(&format!(
                 "Where: save up to 5 files into {} — the ololo CLI commits and pushes them, do NOT run git.\n",

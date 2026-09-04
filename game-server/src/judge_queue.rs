@@ -280,10 +280,29 @@ pub async fn resolve_judge_run(
         .filter(judge_results::Column::PlayerIdFk.eq(player_id))
         .one(db)
         .await?;
-    let prior_judge_result = prior_judge.as_ref().map(|r| PriorJudgeResult {
-        rating: judging::rating_scalar(&r.rating),
-        feedback: r.feedback.clone(),
-    });
+    let prior_judge_result = match prior_judge.as_ref() {
+        Some(r) => {
+            // A waiting row may hold the paused conversation of the run
+            // that registered the request; the new run resumes it rather
+            // than investigating again. Any other status starts fresh — an
+            // admin re-run of a scored judge is a new opinion.
+            let transcript = if r.status == "waiting" {
+                arena_core::entities::judge_run_transcripts::Entity::find_by_id(r.id)
+                    .one(db)
+                    .await?
+                    .map(|t| t.transcript)
+            } else {
+                None
+            };
+            Some(PriorJudgeResult {
+                rating: judging::rating_scalar(&r.rating),
+                feedback: r.feedback.clone(),
+                requests: load_prior_requests(db, session_id, player_id, task_id, judge_id).await?,
+                transcript,
+            })
+        }
+        None => None,
+    };
 
     // 5b. What THIS judge already said about this player's earlier tasks in
     // this session. A project's tasks build on one another, so a verdict
@@ -1247,7 +1266,10 @@ pub async fn execute_judge_run(
     // run the judge pipeline — execution judges run the committed code
     // server-side; LLM judges drive the tool-calling model loop.
     let execution = judge_row.kind == "execution";
-    let out = if execution {
+    // Set when the model's run paused on a participant request: the
+    // conversation so far, to be stored against the waiting row.
+    let mut suspended_transcript: Option<serde_json::Value> = None;
+    let mut out = if execution {
         let out = if declared_test_ids.is_empty() {
             crate::judge_exec::run_execution_judge(
                 db,
@@ -1377,14 +1399,34 @@ pub async fn execute_judge_run(
             )
             .await;
         }
-        attempt?
+        match attempt {
+            // Not a failure: the run paused on a participant request. No
+            // verdict exists yet — the row below is `waiting`, and the
+            // re-drive resumes the stored conversation.
+            Err(JudgeError::Suspended(transcript)) => {
+                suspended_transcript = Some(*transcript);
+                JudgeRunOutput {
+                    rating: 0.0,
+                    point_delta: 0,
+                    feedback: String::new(),
+                    raw_output: String::new(),
+                    model: model_cfg.model.clone(),
+                    judge_result_id: Uuid::nil(),
+                    duration_ms: 0,
+                }
+            }
+            other => other?,
+        }
     };
 
     // A judge that asked the participant for an artifact ends this run
-    // `waiting` — the provisional verdict's points are cleared, the settle
-    // poll keeps the session open, and the probe ticker re-drives the judge
-    // when the artifact lands or its deadline passes.
-    let ended_waiting = registrar.as_ref().is_some_and(|r| r.interactive_pending());
+    // `waiting` — no points stand, the settle poll keeps the session open,
+    // and the probe ticker re-drives the judge when the artifact lands or
+    // its deadline passes. A turn-driven run paused mid-conversation and
+    // stores its transcript; a legacy run wrote a provisional verdict
+    // whose points are cleared here.
+    let ended_waiting = suspended_transcript.is_some()
+        || registrar.as_ref().is_some_and(|r| r.interactive_pending());
     if ended_waiting
         && let Err(e) = judging::record_judge_run_status(
             db,
@@ -1400,6 +1442,26 @@ pub async fn execute_judge_run(
         .await
     {
         tracing::warn!(error = %e, "judge_queue: failed to persist waiting status");
+    }
+    match suspended_transcript.take() {
+        Some(transcript) => {
+            match store_suspended_transcript(db, task_judge_row.id, player_id, transcript).await {
+                Ok(id) => out.judge_result_id = id,
+                Err(e) => {
+                    tracing::warn!(error = %e, "judge_queue: failed to store the paused transcript")
+                }
+            }
+        }
+        // A concluded run owes no resume: drop the transcript it may have
+        // resumed from, so a later re-run starts fresh.
+        None if !ended_waiting => {
+            let _ = arena_core::entities::judge_run_transcripts::Entity::delete_by_id(
+                out.judge_result_id,
+            )
+            .exec(db)
+            .await;
+        }
+        None => {}
     }
 
     // Unified LLM telemetry: one `llm_requests` row per concluded run.
@@ -1982,6 +2044,42 @@ impl LlmPacer {
     }
 }
 
+/// Keep the paused conversation against the judge's `waiting` row (upsert:
+/// a run may pause more than once). Returns the row's id.
+async fn store_suspended_transcript(
+    db: &DatabaseConnection,
+    task_judge_id: Uuid,
+    player_id: Uuid,
+    transcript: serde_json::Value,
+) -> Result<Uuid, sea_orm::DbErr> {
+    use arena_core::entities::judge_run_transcripts;
+    use sea_orm::sea_query::OnConflict;
+    let row = judge_results::Entity::find()
+        .filter(judge_results::Column::TaskJudgeId.eq(task_judge_id))
+        .filter(judge_results::Column::PlayerIdFk.eq(player_id))
+        .one(db)
+        .await?
+        .ok_or_else(|| sea_orm::DbErr::Custom("waiting row missing".to_string()))?;
+    let now = Utc::now();
+    judge_run_transcripts::Entity::insert(judge_run_transcripts::ActiveModel {
+        judge_result_id: sea_orm::Set(row.id),
+        transcript: sea_orm::Set(transcript),
+        created_at: sea_orm::Set(now),
+        updated_at: sea_orm::Set(now),
+    })
+    .on_conflict(
+        OnConflict::column(judge_run_transcripts::Column::JudgeResultId)
+            .update_columns([
+                judge_run_transcripts::Column::Transcript,
+                judge_run_transcripts::Column::UpdatedAt,
+            ])
+            .to_owned(),
+    )
+    .exec_without_returning(db)
+    .await?;
+    Ok(row.id)
+}
+
 /// Decorator that routes every `run_agent` call through the global
 /// [`LlmPacer`] before hitting the provider.
 struct PacedJudgeLlm<'a> {
@@ -2019,6 +2117,24 @@ impl JudgeLlm for PacedJudgeLlm<'_> {
             .run_agent_with_images(system, user, tools, prior_tool_result, images)
             .await
     }
+
+    fn supports_turns(&self) -> bool {
+        self.inner.supports_turns()
+    }
+
+    async fn run_turns(
+        &self,
+        system: &str,
+        user: &str,
+        tools: Vec<ToolDef>,
+        images: &[arena_core::judging::JudgeImage],
+        resume: Option<arena_core::judging::ResumeFrom>,
+    ) -> Result<arena_core::judging::TurnsOutcome, JudgeError> {
+        LlmPacer::for_provider(&self.provider).wait_turn().await;
+        self.inner
+            .run_turns(system, user, tools, images, resume)
+            .await
+    }
 }
 
 /// How many AI-behavior failures a judge run tolerates before it is marked
@@ -2043,6 +2159,91 @@ fn judge_rate_limit_attempts() -> u32 {
         .and_then(|v| v.parse::<u32>().ok())
         .map(|n| n.clamp(1, 20))
         .unwrap_or(6)
+}
+
+/// The probes this judge registered on the task — its own rows plus the
+/// requests it attached to as a watcher — each with the fate its latest
+/// probe row spells out, oldest request first.
+async fn load_prior_requests(
+    db: &DatabaseConnection,
+    session_id: Uuid,
+    player_id: Uuid,
+    task_id: Uuid,
+    judge_id: Uuid,
+) -> Result<Vec<judging::PriorRequest>, JudgeError> {
+    use arena_core::entities::{artifact_request_watchers, probes, tests};
+    use arena_core::evaluation::{ProbeConfig, ProbeMode};
+    use arena_core::judging::RequestFate;
+    use sea_orm::QueryOrder;
+
+    let watched: Vec<Uuid> = artifact_request_watchers::Entity::find()
+        .filter(artifact_request_watchers::Column::JudgeId.eq(judge_id))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|w| w.test_id)
+        .collect();
+    let mut rows = tests::Entity::find()
+        .filter(tests::Column::SessionId.eq(session_id))
+        .filter(tests::Column::TaskId.eq(task_id))
+        .filter(
+            sea_orm::Condition::any()
+                .add(tests::Column::RegisteredByJudgeId.eq(judge_id))
+                .add(tests::Column::Id.is_in(watched)),
+        )
+        .order_by_asc(tests::Column::CreatedAt)
+        .all(db)
+        .await?;
+    rows.dedup_by_key(|t| t.id);
+
+    let mut out = Vec::with_capacity(rows.len());
+    for test in rows {
+        let config = test
+            .probe_config
+            .as_ref()
+            .and_then(|c| ProbeConfig::from_json(c).ok());
+        let interactive = config
+            .as_ref()
+            .is_some_and(|c| c.mode == ProbeMode::Interactive);
+        let instruction = config
+            .as_ref()
+            .and_then(|c| c.instruction.clone())
+            .or_else(|| test.description.clone())
+            .unwrap_or_else(|| test.command_template.clone());
+        let latest = probes::Entity::find()
+            .filter(probes::Column::TestId.eq(test.id))
+            .filter(probes::Column::PlayerId.eq(player_id))
+            .order_by_desc(probes::Column::DispatchedAt)
+            .all(db)
+            .await?;
+        let delivered = latest
+            .iter()
+            .find(|p| p.outcome.as_deref() == Some("pass") || p.artifact_path.is_some());
+        let fate = match (interactive, delivered, latest.first()) {
+            (true, Some(p), _) => RequestFate::Delivered {
+                files: p
+                    .result_json
+                    .as_ref()
+                    .and_then(|j| j["artifact"]["files"].as_array().map(|f| f.len()))
+                    .unwrap_or(1),
+            },
+            (true, None, Some(p)) if p.outcome.as_deref() == Some("no_response") => {
+                RequestFate::Expired
+            }
+            (true, None, _) => RequestFate::Open,
+            (false, _, Some(p)) => match p.outcome.as_deref() {
+                Some("no_response") => RequestFate::Expired,
+                Some(outcome) => RequestFate::Ran {
+                    outcome: outcome.to_string(),
+                    answer: p.output.clone().unwrap_or_default(),
+                },
+                None => RequestFate::Open,
+            },
+            (false, _, None) => RequestFate::Open,
+        };
+        out.push(judging::PriorRequest { instruction, fate });
+    }
+    Ok(out)
 }
 
 /// Whether a failed judge run is worth re-attempting. AI-behavior errors

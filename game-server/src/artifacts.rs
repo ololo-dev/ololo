@@ -185,13 +185,21 @@ pub async fn resolve_pending_artifacts(state: &GameServerState) -> Result<(), se
             )
             .col_expr(probes::Column::ResultJson, Expr::value(result_json));
         // A probe still unresolved (e.g. registered before the check ever
-        // ran) resolves by arrival; a graded probe keeps its grade.
-        if probe.outcome.is_none() {
+        // ran) resolves by arrival. So does one the availability check
+        // graded `error`: that grade only ever said "not there yet" — the
+        // poll ran before the file landed, or the shell choked on the
+        // request text — and the file in the pushed tree is the answer.
+        // Without this the judge waits for a PASS that only a later
+        // re-dispatch could print, and a re-dispatch that cannot print it
+        // holds the judge until the session ends. Other grades stand.
+        let polled_early = probe.outcome.as_deref() == Some("error") && within_cap;
+        if probe.outcome.is_none() || polled_early {
             let outcome = if within_cap { "pass" } else { "error" };
             update = update
                 .col_expr(probes::Column::Outcome, Expr::value(outcome))
                 .col_expr(probes::Column::ResolvedAt, Expr::value(now))
                 .col_expr(probes::Column::PointDelta, Expr::value(0))
+                .col_expr(probes::Column::ExitCode, Expr::value(0))
                 .col_expr(
                     probes::Column::Output,
                     Expr::value(format!(

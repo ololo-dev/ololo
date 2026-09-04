@@ -72,6 +72,11 @@ impl IntoResponse for JudgeRunApiError {
             JudgeRunApiError::Judge(JudgeError::TooManyToolCalls) => {
                 (StatusCode::BAD_GATEWAY, "too_many_tool_calls")
             }
+            // The queue converts a pause into a `waiting` row before it
+            // reaches an API caller; kept for exhaustiveness.
+            JudgeRunApiError::Judge(JudgeError::Suspended(_)) => {
+                (StatusCode::ACCEPTED, "waiting_for_participant")
+            }
             JudgeRunApiError::Judge(JudgeError::Db(_)) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "database_error")
             }

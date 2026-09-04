@@ -131,7 +131,13 @@ pub async fn run_session_appraisal(
 
     // No tools: everything the judge was promised is in the pack, and a
     // session run has no per-task retry budget to spend on an investigation.
-    let raw = ask(judge_llm, &system, &user).await?;
+    let raw = ask(
+        judge_llm,
+        &system,
+        &user,
+        inputs.criteria.map(|c| c.keys.as_slice()),
+    )
+    .await?;
 
     let (rating_json, rating, feedback) = match inputs.criteria {
         Some(ctx) => {
@@ -257,13 +263,15 @@ pub async fn run_session_appraisal(
     })
 }
 
-/// One completion, with the same "answer in JSON now" nudge the task path
-/// uses: models end on prose often enough that one retry is cheaper than a
-/// failed run, and the nudge carries their own analysis back to them.
+/// One completion, then — when the model ends on prose — the extractor
+/// call the task path uses: the analysis is done, only its transcription
+/// into JSON is missing, and that is a separate small task rather than a
+/// second full run (see `super::extract`).
 async fn ask(
     judge_llm: &dyn super::JudgeLlm,
     system: &str,
     user: &str,
+    keys: Option<&[String]>,
 ) -> Result<String, JudgeError> {
     let first = match judge_llm.run_agent(system, user, Vec::new(), None).await? {
         AgentResponse::Final { text } => text,
@@ -276,19 +284,7 @@ async fn ask(
     if super::criteria::parse_any_verdict(&first).is_ok() {
         return Ok(first);
     }
-    let nudge = format!(
-        "Your analysis so far:\n{first}\n\nBased on this analysis, respond now with ONLY \
-         the JSON verdict object and no other text."
-    );
-    match judge_llm
-        .run_agent(system, user, Vec::new(), Some(&nudge))
-        .await?
-    {
-        AgentResponse::Final { text } => Ok(text),
-        AgentResponse::ToolCall { name, .. } => Err(JudgeError::Llm(format!(
-            "session appraisal received an unexpected tool call '{name}'"
-        ))),
-    }
+    super::extract::extract_verdict(judge_llm, &first, keys).await
 }
 
 /// The evidence as stored on the run: the dossier plus, when it was gathered,

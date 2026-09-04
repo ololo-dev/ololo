@@ -9,6 +9,7 @@ pub mod email_templates;
 pub mod game_servers;
 pub mod judge_results;
 pub mod judge_run_ledger;
+pub mod judge_run_transcripts;
 pub mod judges;
 pub mod llm_pool_members;
 pub mod llm_pools;

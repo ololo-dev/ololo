@@ -19,6 +19,7 @@ use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
 use uuid::Uuid;
 
 use crate::state::GameServerState;
+use crate::ws::player_agent::scheduler::judge_phase_expired;
 
 /// Tick cadence. Probes declare their own intervals; this only bounds how
 /// stale a due probe can go unnoticed.
@@ -353,7 +354,11 @@ async fn redrive_waiting_judges(state: &GameServerState) -> Result<(), sea_orm::
         //
         // Once the session is no longer running nobody will dispatch or
         // deliver anything, so an unanswered probe counts as expired: the
-        // judge verdicts (partial) instead of waiting for ever.
+        // judge verdicts (partial) instead of waiting for ever. The same
+        // holds for a request past the judge-phase cap: the queue stopped
+        // re-dispatching it and the task moved on, so a failed poll is the
+        // final word — waiting for a pass would park the judge until the
+        // session ended, blind to whatever did arrive.
         let session_running = session.status == SessionStatus::Running;
         let mut still_waiting = false;
         let mut any_no_response = false;
@@ -378,7 +383,7 @@ async fn redrive_waiting_judges(state: &GameServerState) -> Result<(), sea_orm::
                 // A run that came back — pass, fail or error — has answered
                 // a "please run this" ask.
                 Some(_) if !interactive => continue,
-                _ if !session_running => any_no_response = true,
+                _ if !session_running || judge_phase_expired(test) => any_no_response = true,
                 _ => still_waiting = true,
             }
         }

@@ -310,6 +310,8 @@ async fn run_judge_rerun_replaces_row() {
         Some(&PriorJudgeResult {
             rating: 5.0,
             feedback: "first".to_string(),
+            requests: vec![],
+            transcript: None,
         }),
         &[],
         "m2",

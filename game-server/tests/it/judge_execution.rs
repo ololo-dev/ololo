@@ -20,7 +20,7 @@ use uuid::Uuid;
 use arena_core::entities::{
     judge_results, judges, players, projects, sessions, task_judges, tasks, users,
 };
-use arena_core::judging::{AgentResponse, JudgeError, JudgeLlm, ToolDef};
+use arena_core::judging::{AgentResponse, JudgeError, JudgeLlm, ResumeFrom, ToolDef, TurnsOutcome};
 use arena_core::session_status::SessionStatus;
 use game_server::judge_queue::{enqueue_judge_run, execute_judge_run, resolve_judge_run};
 use game_server::state::GameServerState;
@@ -2909,5 +2909,159 @@ async fn the_reporter_waits_until_the_panel_is_terminal() {
             .await
             .expect("check"),
         "a pair on a task the player never reached does not hold the report"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Suspend / resume: a run that pauses on a participant request leaves a
+// `waiting` row with its transcript; the re-drive resumes it.
+// ---------------------------------------------------------------------------
+
+struct PausingJudgeLlm {
+    resumes: std::sync::Mutex<Vec<Option<ResumeFrom>>>,
+}
+
+#[async_trait]
+impl JudgeLlm for PausingJudgeLlm {
+    async fn run_agent(
+        &self,
+        _system: &str,
+        _user: &str,
+        _tools: Vec<ToolDef>,
+        _prior_tool_result: Option<&str>,
+    ) -> Result<AgentResponse, JudgeError> {
+        panic!("driven through run_turns");
+    }
+
+    fn supports_turns(&self) -> bool {
+        true
+    }
+
+    async fn run_turns(
+        &self,
+        _system: &str,
+        _user: &str,
+        _tools: Vec<ToolDef>,
+        _images: &[arena_core::judging::JudgeImage],
+        resume: Option<ResumeFrom>,
+    ) -> Result<TurnsOutcome, JudgeError> {
+        let resumed = resume.is_some();
+        self.resumes.lock().unwrap().push(resume);
+        Ok(if resumed {
+            TurnsOutcome::Final {
+                text: r#"{"rating": 7.0, "feedback": "resumed"}"#.to_string(),
+            }
+        } else {
+            TurnsOutcome::Suspended {
+                transcript: json!([{"role": "user", "content": "turn-1"}]),
+            }
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_paused_run_waits_with_its_transcript_and_resumes_into_a_verdict() {
+    use arena_core::entities::judge_run_transcripts;
+
+    let db = setup_db().await;
+    let owner = insert_user(&db).await;
+    let project = insert_project(&db, owner).await;
+    let session = insert_session(&db, project).await;
+    let player = insert_player(&db, session).await;
+    let (task_id, judge_id, _) = insert_chain(&db, project).await;
+
+    let repos_root = tempfile::tempdir().expect("repos tempdir");
+    unsafe {
+        std::env::set_var("OLOLO_GIT_REPOS_DIR", repos_root.path());
+    }
+    let base = arena_core::git_store::repos_base_dir().expect("base dir");
+    let repo_dir = arena_core::git_store::player_repo_path(&base, session, player);
+    std::fs::create_dir_all(&repo_dir).expect("mkdir repo");
+    make_repo(&repo_dir);
+    write_file(&repo_dir, "a.txt", "x");
+    commit(&repo_dir, "init");
+
+    let state = make_state(db.clone(), 3);
+    let llm = PausingJudgeLlm {
+        resumes: std::sync::Mutex::new(Vec::new()),
+    };
+
+    // First pass: the run pauses. The row is `waiting`, no points, and the
+    // transcript is kept against it.
+    let resolved = resolve_judge_run(&state, &db, session, player, task_id, judge_id)
+        .await
+        .expect("resolve");
+    let out = execute_judge_run(
+        &state,
+        &db,
+        resolved,
+        &llm,
+        &test_model_cfg(),
+        session,
+        player,
+        task_id,
+        None,
+        None,
+    )
+    .await
+    .expect("a pause is not an error");
+    let row = judge_results::Entity::find_by_id(out.judge_result_id)
+        .one(&db)
+        .await
+        .expect("query")
+        .expect("the waiting row is the run's result");
+    assert_eq!(row.status, "waiting");
+    assert_eq!(row.point_delta, 0);
+    let kept = judge_run_transcripts::Entity::find_by_id(row.id)
+        .one(&db)
+        .await
+        .expect("query")
+        .expect("the transcript is kept");
+    assert_eq!(kept.transcript[0]["content"], "turn-1");
+
+    // The re-drive: same conversation, the answer appended, a verdict.
+    let resolved = resolve_judge_run(&state, &db, session, player, task_id, judge_id)
+        .await
+        .expect("resolve again");
+    let out = execute_judge_run(
+        &state,
+        &db,
+        resolved,
+        &llm,
+        &test_model_cfg(),
+        session,
+        player,
+        task_id,
+        None,
+        None,
+    )
+    .await
+    .expect("the resumed run scores");
+    unsafe {
+        std::env::remove_var("OLOLO_GIT_REPOS_DIR");
+    }
+    assert_eq!(out.rating, 7.0);
+    let row = judge_results::Entity::find_by_id(out.judge_result_id)
+        .one(&db)
+        .await
+        .expect("query")
+        .expect("row");
+    assert_eq!(row.status, "scored");
+    assert!(
+        judge_run_transcripts::Entity::find_by_id(row.id)
+            .one(&db)
+            .await
+            .expect("query")
+            .is_none(),
+        "a concluded run drops its transcript"
+    );
+    let resumes = llm.resumes.lock().unwrap();
+    assert!(resumes[0].is_none());
+    let resumed = resumes[1].as_ref().expect("resumed with the transcript");
+    assert_eq!(resumed.transcript[0]["content"], "turn-1");
+    assert!(
+        resumed.update.starts_with("Your run paused"),
+        "{}",
+        resumed.update
     );
 }

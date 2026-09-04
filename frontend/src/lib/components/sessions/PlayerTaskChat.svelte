@@ -386,11 +386,13 @@
           requestAt.set(testId, at)
           const dedupeKey = `${req[1]}:${req[2].trim()}`
           const prev = requestRows.get(dedupeKey)
+          // The header folds the ask onto one line for the shell; the
+          // description is the judge's text as written.
           const row: RequestRow = {
             id: testId,
             at,
             judgeSlug: req[1],
-            instruction: req[2].trim(),
+            instruction: latest.description?.trim() || req[2].trim(),
             path: `.ololo/artifacts/${testId}/`,
             delivered: deliveredByRequest.has(testId),
             deadlineAt: deadlineByRequest.get(testId) ?? null,

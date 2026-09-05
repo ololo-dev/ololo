@@ -127,12 +127,88 @@ pub const JUDGE_PHASE_MAX_SECS: u64 = 300;
 pub(crate) fn judge_phase_expired_since(
     test: &tests::Model,
     last_artifact_at: Option<chrono::DateTime<Utc>>,
+    cap_secs: u64,
 ) -> bool {
     let base = match last_artifact_at {
         Some(t) if t > test.created_at => t,
         _ => test.created_at,
     };
-    (Utc::now() - base).num_seconds() >= JUDGE_PHASE_MAX_SECS as i64
+    (Utc::now() - base).num_seconds() >= cap_secs as i64
+}
+
+/// The phase cap when an open request is a screencast: recording a flow
+/// means starting the app, driving it and encoding — five minutes was
+/// gone before the first frame landed (ZO34ZG).
+pub const JUDGE_PHASE_VIDEO_MAX_SECS: u64 = 600;
+
+/// The phase cap on the project's LAST task. Holding it delays nothing —
+/// there is no next task to start — while ending it early ends the whole
+/// session with the judges' asks unanswered (ZO34ZG: closed 29 minutes
+/// before the clock with a screencast still being recorded). Bounded by
+/// the session clock either way.
+pub const JUDGE_PHASE_LAST_TASK_MAX_SECS: u64 = 900;
+
+/// The judge phase's budget for this task, in seconds: the base cap, more
+/// when a screencast is asked for or the task is the project's last, never
+/// past the session clock (which ends the phase on its own).
+pub async fn judge_phase_cap_secs(state: &GameServerState, task_id: Uuid, session_id: Uuid) -> u64 {
+    use arena_core::entities::{projects, sessions};
+    use arena_core::evaluation::{ProbeConfig, ProbeMode};
+    let mut cap = JUDGE_PHASE_MAX_SECS;
+    let registered = tests::Entity::find()
+        .filter(tests::Column::TaskId.eq(task_id))
+        .filter(tests::Column::SessionId.eq(session_id))
+        .filter(tests::Column::RegisteredByJudgeId.is_not_null())
+        .all(&state.db)
+        .await
+        .unwrap_or_default();
+    let asks_video = registered.iter().any(|t| {
+        t.probe_config
+            .as_ref()
+            .and_then(|c| ProbeConfig::from_json(c).ok())
+            .is_some_and(|c| {
+                c.mode == ProbeMode::Interactive
+                    && c.artifact
+                        .as_ref()
+                        .is_some_and(|a| a.content_type.starts_with("video/"))
+            })
+    });
+    if asks_video {
+        cap = cap.max(JUDGE_PHASE_VIDEO_MAX_SECS);
+    }
+    if let Ok(Some(task)) = tasks::Entity::find_by_id(task_id).one(&state.db).await {
+        let later = tasks::Entity::find()
+            .filter(tasks::Column::ProjectIdFk.eq(task.project_id_fk))
+            .filter(tasks::Column::Ordinal.gt(task.ordinal))
+            .one(&state.db)
+            .await
+            .ok()
+            .flatten();
+        if later.is_none() {
+            cap = cap.max(JUDGE_PHASE_LAST_TASK_MAX_SECS);
+        }
+    }
+    if let Ok(Some(session)) = sessions::Entity::find_by_id(session_id)
+        .one(&state.db)
+        .await
+        && let Some(started_at) = session.started_at
+        && let Ok(Some(project)) = projects::Entity::find_by_id(session.project_id_fk)
+            .one(&state.db)
+            .await
+    {
+        let remaining = crate::state::compute_remaining(
+            project.default_session_duration_secs.max(0) as u64,
+            started_at,
+            Utc::now(),
+            session.paused_duration_secs,
+        )
+        .max(0) as u64;
+        // The clock bounds the extensions, never the base: a request in
+        // the session's last minutes keeps its floor, and the session's
+        // end resolves it either way.
+        cap = cap.min(remaining.max(JUDGE_PHASE_MAX_SECS));
+    }
+    cap
 }
 
 /// When the participant last delivered an artifact on this task, if ever
@@ -168,6 +244,7 @@ pub async fn undispatched_judge_requests(
 ) -> usize {
     use arena_core::entities::probes;
     let last_artifact = last_artifact_at(state, task_id, session_id, player_id).await;
+    let cap = judge_phase_cap_secs(state, task_id, session_id).await;
     let registered = tests::Entity::find()
         .filter(tests::Column::TaskId.eq(task_id))
         .filter(tests::Column::SessionId.eq(session_id))
@@ -177,7 +254,7 @@ pub async fn undispatched_judge_requests(
         .unwrap_or_default();
     let mut n = 0;
     for test in registered {
-        if judge_phase_expired_since(&test, last_artifact) {
+        if judge_phase_expired_since(&test, last_artifact, cap) {
             continue;
         }
         let dispatched = probes::Entity::find()
@@ -224,9 +301,10 @@ pub async fn oldest_unpassed_judge_test(
         .await
         .ok()?;
     let last_artifact = last_artifact_at(state, task_id, session_id, player_id).await;
+    let cap = judge_phase_cap_secs(state, task_id, session_id).await;
     let mut open: Vec<(Option<chrono::DateTime<Utc>>, tests::Model)> = Vec::new();
     for test in registered {
-        if judge_phase_expired_since(&test, last_artifact) {
+        if judge_phase_expired_since(&test, last_artifact, cap) {
             continue;
         }
         if probes_passed(state, test.id, player_id).await {
@@ -342,8 +420,9 @@ pub async fn judge_probes_settled(
         .await
         .unwrap_or_default();
     let last_artifact = last_artifact_at(state, task_id, session_id, player_id).await;
+    let cap = judge_phase_cap_secs(state, task_id, session_id).await;
     for test in &registered {
-        if judge_phase_expired_since(test, last_artifact) {
+        if judge_phase_expired_since(test, last_artifact, cap) {
             continue;
         }
         if !probes_passed(state, test.id, player_id).await {
@@ -1134,6 +1213,8 @@ mod judge_phase_tests {
         let db = mem_db().await;
         let fx = session_with_player(&db).await;
         let (task_id, _t) = task_with_test(&db, &fx).await;
+        // Not the last task: the base cap applies.
+        extra_task(&db, &fx, 9).await;
         let (judge, _) = attach_judge(&db, task_id, "correctness", "task").await;
         let state = test_state(db.clone());
         let aged =
@@ -1162,6 +1243,59 @@ mod judge_phase_tests {
         assert!(
             !judge_probes_settled(&state, task_id, fx.session_id, fx.player_id).await,
             "and the task keeps waiting for it"
+        );
+    }
+
+    /// The last task of a project holds for the judges longer: nothing
+    /// waits behind it, and ending it early ends the session with the
+    /// asks unanswered. A screencast ask stretches the base cap too. The
+    /// session clock bounds both.
+    #[tokio::test]
+    async fn the_last_task_and_a_screencast_ask_get_a_longer_phase() {
+        let db = mem_db().await;
+        let fx = session_with_player(&db).await;
+        let (task_id, _t) = task_with_test(&db, &fx).await;
+        let (judge, _) = attach_judge(&db, task_id, "correctness", "task").await;
+        let state = test_state(db.clone());
+
+        // Sole task ⇒ last task: 15 minutes.
+        assert_eq!(
+            judge_phase_cap_secs(&state, task_id, fx.session_id).await,
+            JUDGE_PHASE_LAST_TASK_MAX_SECS
+        );
+        let aged =
+            insert_judge_test(&db, &fx, task_id, judge, JUDGE_PHASE_MAX_SECS as i64 + 60).await;
+        insert_probe(&db, &fx, aged, Some("error")).await;
+        assert_eq!(
+            oldest_unpassed_judge_test(&state, task_id, fx.session_id, fx.player_id)
+                .await
+                .map(|t| t.id),
+            Some(aged),
+            "six minutes in, the last task still waits"
+        );
+
+        // A later task exists ⇒ base cap, unless a screencast is asked for.
+        extra_task(&db, &fx, 9).await;
+        assert_eq!(
+            judge_phase_cap_secs(&state, task_id, fx.session_id).await,
+            JUDGE_PHASE_MAX_SECS
+        );
+        let video = insert_judge_test(&db, &fx, task_id, judge, 0).await;
+        let mut row: tests::ActiveModel = tests::Entity::find_by_id(video)
+            .one(&db)
+            .await
+            .expect("query")
+            .expect("test")
+            .into();
+        row.probe_config = Set(Some(serde_json::json!({
+            "mode": "interactive",
+            "instruction": "record",
+            "artifact": { "content_type": "video/webm", "max_bytes": 1 }
+        })));
+        row.update(&db).await.expect("video ask");
+        assert_eq!(
+            judge_phase_cap_secs(&state, task_id, fx.session_id).await,
+            JUDGE_PHASE_VIDEO_MAX_SECS
         );
     }
 
@@ -1272,7 +1406,8 @@ mod judge_phase_tests {
                 .await
                 .expect("query")
                 .expect("test"),
-            None
+            None,
+            JUDGE_PHASE_MAX_SECS
         ));
     }
 

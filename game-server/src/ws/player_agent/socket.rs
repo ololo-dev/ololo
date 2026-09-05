@@ -376,7 +376,10 @@ pub async fn handle_player_agent_socket(
                             // The cap runs from the LATER of the phase start
                             // and the participant's last delivery: captures
                             // arriving mean the requests are being worked.
-                            let cap = crate::ws::player_agent::scheduler::JUDGE_PHASE_MAX_SECS;
+                            let cap = crate::ws::player_agent::scheduler::judge_phase_cap_secs(
+                                &state, task_id, session_id,
+                            )
+                            .await;
                             let quiet_since_delivery =
                                 crate::ws::player_agent::scheduler::last_artifact_at(
                                     &state, task_id, session_id, player_id,

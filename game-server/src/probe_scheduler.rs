@@ -367,6 +367,12 @@ async fn redrive_waiting_judges(state: &GameServerState) -> Result<(), sea_orm::
             row.player_id_fk,
         )
         .await;
+        let cap = crate::ws::player_agent::scheduler::judge_phase_cap_secs(
+            state,
+            tj.task_id,
+            row.session_id_fk,
+        )
+        .await;
         let mut still_waiting = false;
         let mut any_no_response = false;
         for test in &registered {
@@ -390,7 +396,7 @@ async fn redrive_waiting_judges(state: &GameServerState) -> Result<(), sea_orm::
                 // A run that came back — pass, fail or error — has answered
                 // a "please run this" ask.
                 Some(_) if !interactive => continue,
-                _ if !session_running || judge_phase_expired_since(test, last_artifact) => {
+                _ if !session_running || judge_phase_expired_since(test, last_artifact, cap) => {
                     any_no_response = true
                 }
                 _ => still_waiting = true,

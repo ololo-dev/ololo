@@ -1425,7 +1425,30 @@ async fn a_judge_waiting_past_the_judge_phase_cap_is_redriven() {
 
     // Registered longer ago than the judge phase allows; its only attempt
     // was graded (the poll failed), so nothing is unresolved for the
-    // deadline sweep and nothing is left for the queue to re-ask.
+    // deadline sweep and nothing is left for the queue to re-ask. A later
+    // task exists, so the base cap applies (the last task holds longer).
+    tasks::ActiveModel {
+        id: Set(Uuid::new_v4()),
+        project_id_fk: Set(seeded.task.project_id_fk),
+        ordinal: Set(seeded.task.ordinal + 1),
+        title: Set("Later".to_string()),
+        content: Set(String::new()),
+        test_template: Set(serde_json::json!({"kind":"shell","command_template":"## Y\n"})),
+        created_at: Set(Utc::now()),
+        tags: Set(String::new()),
+        point_value: Set(10),
+        deadline_secs: Set(None),
+        min_interval_secs: Set(None),
+        interval_increment_secs: Set(None),
+        max_interval_secs: Set(None),
+        fail_points: Set(0),
+        no_response_points: Set(0),
+        completion_bonus_points: Set(0),
+        evaluation: Set(None),
+    }
+    .insert(&db)
+    .await
+    .expect("later task");
     let cap = game_server::ws::player_agent::scheduler::JUDGE_PHASE_MAX_SECS as i64;
     let interactive = serde_json::json!({
         "mode": "interactive",

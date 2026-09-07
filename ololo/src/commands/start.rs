@@ -46,6 +46,7 @@ pub async fn run_start(
     debug: bool,
     tui: bool,
     agent: Option<String>,
+    allow_all: bool,
     fresh: bool,
 ) -> Result<()> {
     let cfg = load_credentials(profile)?;
@@ -216,6 +217,9 @@ pub async fn run_start(
     // baseline snapshot contains the imported codebase rather than an empty
     // tree followed by a mystery bulk commit.
     crate::campaign::prepare_part_workspace(&client, &base, &cfg.token, &project, fresh).await?;
+    // Only now: the rule file would otherwise count as work and skip the
+    // carry-over above.
+    crate::prepare_probe_permissions(tui, allow_all);
 
     if tui {
         return run_tui_start(
@@ -296,6 +300,7 @@ pub async fn run_join(
     debug: bool,
     tui: bool,
     agent: Option<String>,
+    allow_all: bool,
     fresh: bool,
 ) -> Result<()> {
     let cfg = load_credentials(profile)?;
@@ -336,6 +341,8 @@ pub async fn run_join(
         crate::campaign::prepare_part_workspace(&client, &base, &cfg.token, &project, fresh)
             .await?;
     }
+    // After the carry-over, for the same reason as in `run_start`.
+    crate::prepare_probe_permissions(tui, allow_all);
 
     let ws_base = util::ws_base_url(&base);
 

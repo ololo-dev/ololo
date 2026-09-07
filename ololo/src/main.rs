@@ -93,12 +93,17 @@ pub(crate) fn resolve_tui_agent(agent: Option<String>, tui: bool) -> Result<Opti
     }
 }
 
-/// Set up probe permissions before any session exists. `--allow-all` writes
+/// Set up probe permissions before any probe runs. `--allow-all` writes
 /// the run-everything rule into `.ololo/settings.json`; otherwise a headless
 /// run that could not approve anything gets warned here — at the start, with
 /// the fix spelled out — instead of discovering it as a stack of `-5`
 /// declines once probes begin. TUI mode always has its own prompt.
-fn prepare_probe_permissions(tui: bool, allow_all: bool) {
+///
+/// `start` and `join` call this AFTER the campaign carry-over: the rule file
+/// is real state to that check ("is the folder empty?"), so writing it first
+/// made `ololo start <part> --allow-all` in a blank folder skip the import of
+/// the previous part and open onto nothing.
+pub(crate) fn prepare_probe_permissions(tui: bool, allow_all: bool) {
     if allow_all {
         if let Err(e) = permissions::record_allow_all() {
             ui::fatal(format!("--allow-all could not write the rule: {e:#}"));
@@ -183,7 +188,6 @@ async fn main() {
             if tui && !std::io::stdout().is_terminal() {
                 ui::fatal("--tui requires a TTY on stdout; re-run interactively or drop --tui");
             }
-            prepare_probe_permissions(tui, allow_all);
             commands::run_start(
                 &cli.profile,
                 slug,
@@ -192,6 +196,7 @@ async fn main() {
                 cli.debug,
                 tui,
                 agent,
+                allow_all,
                 fresh,
             )
             .await
@@ -209,8 +214,17 @@ async fn main() {
             if tui && !std::io::stdout().is_terminal() {
                 ui::fatal("--tui requires a TTY on stdout; re-run interactively or drop --tui");
             }
-            prepare_probe_permissions(tui, allow_all);
-            commands::run_join(&cli.profile, code, launch, cli.debug, tui, agent, fresh).await
+            commands::run_join(
+                &cli.profile,
+                code,
+                launch,
+                cli.debug,
+                tui,
+                agent,
+                allow_all,
+                fresh,
+            )
+            .await
         }
         Commands::Whoami => commands::run_whoami(&cli.profile).await,
         Commands::Update { check } => commands::run_update(check).await,

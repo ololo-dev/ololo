@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/svelte";
 import ScoreChart from "./ScoreChart.svelte";
 import type { LeaderboardEntry, MemberInfo, ScoreHistoryPoint } from "$lib/types/arena";
@@ -24,6 +24,38 @@ const ALICE_ENTRY: LeaderboardEntry = {
 };
 
 describe("ScoreChart", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  // Regression: buildChart defers its width read to requestAnimationFrame.
+  // A component unmounted while that frame was pending (a test tearing the
+  // session page down, a fast navigation) left `chartEl` null, and the
+  // callback threw "Cannot read properties of null (reading 'clientWidth')"
+  // as an uncaught exception outside any await — vitest reported it as an
+  // unhandled error and the whole frontend CI job went red.
+  it("survives unmounting before the layout frame fires", async () => {
+    const frames: FrameRequestCallback[] = [];
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb) => {
+      frames.push(cb);
+      return frames.length;
+    });
+
+    const { unmount } = render(ScoreChart, {
+      phase: "active",
+      leaderboard: [ALICE_ENTRY],
+      reportMembers: [],
+      sessionReport: null,
+      scoreHistory: [{ t: 0, scores: { p1: 5 } }],
+    });
+
+    // buildChart awaits the uPlot import before it schedules the frame.
+    await vi.waitFor(() => expect(frames.length).toBeGreaterThan(0));
+
+    unmount();
+    expect(() => frames.forEach((cb) => cb(performance.now()))).not.toThrow();
+  });
+
   it("finished phase with populated scoreHistory shows no empty message", () => {
     const scoreHistory: ScoreHistoryPoint[] = [
       { t: 0, scores: { p1: 0 } },

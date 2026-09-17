@@ -1864,6 +1864,89 @@ fn the_judge_hold_of_a_delivered_task_is_the_status_rows_story() {
     );
 }
 
+/// A judge-registered check of `task_id` in its latest state.
+fn judge_check(task_id: Uuid, ordinal: i32, test_ordinal: i32, slug: &str) -> ProbeResultInfo {
+    let mut p = chat_probe(task_id, ordinal, test_ordinal, "brief");
+    p.test_label = format!("registered: {slug}");
+    p.outcome = Some(arena_core::protocol::ProbeOutcome::Error);
+    p.exit_code = Some(1);
+    p.stdout = "✖ tests/routes/api.test.ts".to_string();
+    p
+}
+
+#[test]
+fn a_failing_judge_check_tells_the_player_to_fix_it_instead_of_reviewing() {
+    // RI3V6G: test-quality's `npm test` failed six times over twelve
+    // minutes while the row said the judge was reviewing.
+    let mut app = fresh_app();
+    running(&mut app);
+    let t0 = Uuid::new_v4();
+    app.on_event(TuiEvent::ProbeResult(chat_probe(t0, 0, 1, "brief")));
+    app.on_event(TuiEvent::SnapshotRequested {
+        task_id: t0,
+        task_title: "Ledger".to_string(),
+        reason: "todo_complete".to_string(),
+    });
+    app.on_event(TuiEvent::JudgeStarted {
+        task_id: Some(t0),
+        judge_name: "Test Quality".to_string(),
+    });
+    // The judge's check runs and fails; the server names the re-run.
+    app.on_event(TuiEvent::ProbeResult(judge_check(t0, 0, 7, "test-quality")));
+    app.next_probe_due = Some(std::time::Instant::now() + std::time::Duration::from_secs(118));
+    let status = app.live_status().expect("a failing judge check is news");
+    assert!(
+        status.text.starts_with(
+            "the test-quality judge is waiting on your code — its extra check is failing · fix it; ololo re-runs it in "
+        ),
+        "{status:?}"
+    );
+    assert!(matches!(status.countdown, Some(117..=118)), "{status:?}");
+    assert!(!status.text.contains("reviewing"), "{status:?}");
+    assert!(!status.busy, "waiting on the player is not working");
+
+    // Without a known re-run time the row still says it is re-run to pass.
+    app.next_probe_due = None;
+    assert_eq!(
+        app.live_status().unwrap().text,
+        "the test-quality judge is waiting on your code — its extra check is failing · fix it; ololo re-runs it until it passes"
+    );
+
+    // Two failing checks from one judge: one wait, counted.
+    app.on_event(TuiEvent::ProbeResult(judge_check(t0, 0, 8, "test-quality")));
+    assert!(
+        app.live_status().unwrap().text.starts_with(
+            "the test-quality judge is waiting on your code — 2 extra checks are failing"
+        ),
+        "{:?}",
+        app.live_status()
+    );
+
+    // The re-run passes: the wait is over and the judges' story returns.
+    let mut fixed = judge_check(t0, 0, 7, "test-quality");
+    fixed.outcome = Some(arena_core::protocol::ProbeOutcome::Pass);
+    app.on_event(TuiEvent::ProbeResult(fixed));
+    let mut fixed = judge_check(t0, 0, 8, "test-quality");
+    fixed.outcome = Some(arena_core::protocol::ProbeOutcome::Pass);
+    app.on_event(TuiEvent::ProbeResult(fixed));
+    assert_eq!(
+        app.live_status().unwrap().text,
+        "evaluation in progress — Test Quality reviewing task #0"
+    );
+}
+
+#[test]
+fn an_expired_judge_check_is_not_a_wait_on_the_player() {
+    let mut app = fresh_app();
+    running(&mut app);
+    let t0 = Uuid::new_v4();
+    app.on_event(TuiEvent::ProbeResult(chat_probe(t0, 0, 1, "brief")));
+    let mut gone = judge_check(t0, 0, 7, "correctness");
+    gone.outcome = Some(arena_core::protocol::ProbeOutcome::NoResponse);
+    app.on_event(TuiEvent::ProbeResult(gone));
+    assert!(app.failing_judge_checks().is_empty());
+}
+
 #[test]
 fn live_status_pauses_with_the_session_and_ends_with_it() {
     let mut app = fresh_app();

@@ -621,12 +621,18 @@ fn expected_of(p: &crate::tui::event::ProbeResultInfo) -> Option<&str> {
 
 /// Judge-registered checks carry a machine label (`registered: <slug>`) —
 /// say who asked instead, the way the web chat does.
-fn check_label(label: &str) -> Option<String> {
+fn check_label(label: &str, failed: bool) -> Option<String> {
     let t = label.trim();
     if t.is_empty() {
         return None;
     }
     match t.strip_prefix("registered:") {
+        // A failing judge check is a request to the player, not a report:
+        // it is re-run until it passes, and only a fix makes it pass.
+        Some(slug) if failed => Some(format!(
+            "extra check from the {} judge — failing; fix it and ololo re-runs it until it passes",
+            slug.trim()
+        )),
         Some(slug) => Some(format!("extra check from the {} judge", slug.trim())),
         None => Some(t.to_string()),
     }
@@ -654,7 +660,13 @@ fn check_lines(
             Some(arena_core::protocol::ProbeOutcome::Error)
                 | Some(arena_core::protocol::ProbeOutcome::NoResponse)
         );
-    let label = check_label(&p.test_label);
+    // An expired check (`NoResponse`) let go of the task — nothing to fix.
+    let still_failing = failed
+        && !matches!(
+            p.outcome,
+            Some(arena_core::protocol::ProbeOutcome::NoResponse)
+        );
+    let label = check_label(&p.test_label, still_failing);
     // The bubble's main text: the question, else the test's own label,
     // else the answer, else status.
     let heading = question.map(str::to_string).or(label);

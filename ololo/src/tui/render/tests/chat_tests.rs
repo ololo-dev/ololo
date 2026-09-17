@@ -132,6 +132,31 @@ fn a_judge_registered_check_names_the_judge_instead_of_the_machine_label() {
 }
 
 #[test]
+fn a_failing_judge_registered_check_asks_for_a_fix() {
+    // Wide enough that the label sits on one row (the pane wraps at spaces).
+    let mut app = fresh_app(240, 40);
+    app.sidebar_view = SidebarView::Chat;
+    let mut p = task_probe(0, "Wx", "brief");
+    p.test_label = "registered: test-quality".to_string();
+    p.stdout = "✖ tests/routes/api.test.ts".to_string();
+    p.exit_code = Some(1);
+    p.outcome = Some(arena_core::protocol::ProbeOutcome::Error);
+    app.on_event(crate::tui::event::TuiEvent::ProbeResult(p));
+
+    let flat = header_flat(&app, 240, 40);
+    assert!(
+        flat.contains(
+            "extra check from the test-quality judge — failing; fix it and ololo re-runs it until it passes"
+        ),
+        "a failing judge check is a request, not a report: {flat}"
+    );
+    assert!(
+        flat.contains("✖ tests/routes/api.test.ts"),
+        "the failing output stays: {flat}"
+    );
+}
+
+#[test]
 fn a_click_selects_a_bubble_and_a_second_click_sends_it() {
     use crate::tui::render::chat::{bubble_at, chat_area, compose_bar_row};
     let mut app = fresh_app(120, 40);

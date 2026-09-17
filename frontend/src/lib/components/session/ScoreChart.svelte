@@ -64,9 +64,12 @@
     }
 
     // Defer to next animation frame so the container has been laid out and
-    // clientWidth reflects the actual rendered width (not 0).
+    // clientWidth reflects the actual rendered width (not 0). The component
+    // may unmount before the frame fires (bind:this clears chartEl), so read
+    // it defensively — a throw here escapes every await and surfaces as an
+    // uncaught exception; the guard below then bails out of the build.
     const width = await new Promise<number>((resolve) => {
-      requestAnimationFrame(() => resolve(chartEl!.clientWidth || 600));
+      requestAnimationFrame(() => resolve(chartEl?.clientWidth || 600));
     });
 
     if (!chartEl) {

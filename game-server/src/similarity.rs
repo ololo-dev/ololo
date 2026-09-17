@@ -290,6 +290,26 @@ async fn export_head(repo: &Path, dst: &Path) -> bool {
     .unwrap_or(false)
 }
 
+/// Mirror `src` into `dst` as a real directory tree of hard links (a copy
+/// when linking fails, e.g. across filesystems). Symlinks are skipped: an
+/// exported snapshot may carry one pointing anywhere, and the mirror must
+/// never reach outside the corpus.
+pub fn mirror_tree(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let kind = entry.file_type()?;
+        let target = dst.join(entry.file_name());
+        if kind.is_dir() {
+            mirror_tree(&entry.path(), &target)?;
+        } else if kind.is_file() && std::fs::hard_link(entry.path(), &target).is_err() {
+            std::fs::copy(entry.path(), &target)?;
+        }
+        // Symlinks (and anything else) are left out on purpose.
+    }
+    Ok(())
+}
+
 /// Run jscpd over the candidate and corpus dirs; parsed JSON report or None.
 async fn run_jscpd(root: &Path) -> Option<serde_json::Value> {
     let root = root.to_path_buf();
@@ -584,14 +604,22 @@ async fn scan_one(
     if !export_head(repo, &candidate).await {
         return None;
     }
-    // The shared corpus is linked (or copied) under this scan's root so
-    // jscpd sees exactly two top-level dirs with stable relative names.
-    let corpus_link = root.join("corpus");
-    #[cfg(unix)]
-    let linked = std::os::unix::fs::symlink(corpus_root, &corpus_link).is_ok();
-    #[cfg(not(unix))]
-    let linked = false;
-    if !linked {
+    // The shared corpus is mirrored under this scan's root as a real
+    // directory of hard links, so jscpd sees exactly two top-level dirs
+    // with stable relative names and never walks through a symlink. A
+    // symlinked corpus is fragile: jscpd 5 skips symlinked directories
+    // unless `--follow-symlinks` is passed (a flag v4 rejects), and up to
+    // 5.2.0 that flag named linked files by their resolved absolute path,
+    // which lost the `corpus/<label>/` prefix the parser keys on — the
+    // corpus silently vanished from the scan (kucherenko/jscpd#1059, fixed
+    // in 5.2.1). The mirror sidesteps the whole question on every version.
+    let mirrored = {
+        let (src, dst) = (corpus_root.to_path_buf(), root.join("corpus"));
+        tokio::task::spawn_blocking(move || mirror_tree(&src, &dst).is_ok())
+            .await
+            .unwrap_or(false)
+    };
+    if !mirrored {
         return None;
     }
     let total_lines = {
@@ -709,6 +737,72 @@ mod tests {
         assert_eq!(merged_line_count(vec![(1, 3), (10, 12)]), 6);
         // Adjacent ranges merge; inverted ranges are dropped.
         assert_eq!(merged_line_count(vec![(1, 3), (4, 6), (9, 2)]), 6);
+    }
+
+    #[test]
+    fn mirror_tree_links_files_and_skips_symlinks() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("shared-corpus");
+        std::fs::create_dir_all(src.join("r0/src")).unwrap();
+        std::fs::write(src.join("r0/src/app.js"), "console.log(1);\n").unwrap();
+        std::fs::write(src.join("r0/README.md"), "# r0\n").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("/etc", src.join("r0/escape")).unwrap();
+
+        let dst = tmp.path().join("scan-p/corpus");
+        mirror_tree(&src, &dst).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(dst.join("r0/src/app.js")).unwrap(),
+            "console.log(1);\n"
+        );
+        assert!(dst.join("r0/README.md").is_file());
+        assert!(
+            std::fs::symlink_metadata(dst.join("r0/escape")).is_err(),
+            "a symlink in the corpus must not be mirrored"
+        );
+    }
+
+    /// The real scanner over the mirrored layout. Runs only where a jscpd
+    /// binary is on PATH (the game-server image pins 5.2.0; CI has none),
+    /// and proves the corpus is reachable and keeps its `corpus/<label>/`
+    /// names — the regression a symlinked corpus hit on jscpd 5.
+    #[tokio::test]
+    async fn real_jscpd_scans_the_mirrored_corpus() {
+        if which::which("jscpd").is_err() {
+            eprintln!("jscpd is not on PATH; skipping the real-scanner check");
+            return;
+        }
+        const APP: &str = "function loadUsers(db, page, size) {\n  const offset = page * size;\n  const rows = db.query(\"select * from users limit ? offset ?\", [size, offset]);\n  const result = [];\n  for (const row of rows) {\n    if (row.deleted_at) continue;\n    result.push({ id: row.id, name: row.name, email: row.email, createdAt: row.created_at });\n  }\n  return { items: result, page, size, total: db.count(\"users\") };\n}\nmodule.exports = { loadUsers };\n";
+        let tmp = tempfile::tempdir().unwrap();
+        // Same layout as run_similarity_checks: the corpus lives OUTSIDE the
+        // per-player scan root and is reachable only through the mirror.
+        let corpus_root = tmp.path().join("shared-corpus");
+        std::fs::create_dir_all(corpus_root.join("r0/src")).unwrap();
+        std::fs::write(corpus_root.join("r0/src/app.js"), APP).unwrap();
+        let root = tmp.path().join("scan-p1");
+        std::fs::create_dir_all(root.join("candidate/src")).unwrap();
+        std::fs::write(root.join("candidate/src/app.js"), APP).unwrap();
+        mirror_tree(&corpus_root, &root.join("corpus")).unwrap();
+
+        let report = run_jscpd(&root).await.expect("jscpd produced a report");
+        let labels = |name: &str| -> Option<(String, String)> {
+            let rest = name.split("corpus/").nth(1)?;
+            (rest.split('/').next()? == "r0").then(|| ("CODE00".to_string(), "alice".to_string()))
+        };
+        let total = count_text_lines(&root.join("candidate"));
+        let parsed = parse_report(
+            &report,
+            "candidate/",
+            "corpus/",
+            &labels,
+            &|_| false,
+            1,
+            total,
+        );
+        assert!(parsed.duplicated_lines >= 10, "{parsed:?}");
+        assert_eq!(parsed.sources.len(), 1, "{parsed:?}");
+        assert_eq!(parsed.sources[0].join_code, "CODE00");
     }
 
     #[test]

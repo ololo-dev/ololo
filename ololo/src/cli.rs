@@ -124,6 +124,9 @@ pub enum Commands {
     /// Show the active profile's server and token fingerprint
     Whoami,
 
+    /// Read and drive a running session (the TUI publishes a local service)
+    Session(SessionArgs),
+
     /// Update ololo to the latest release
     Update {
         /// Only check whether a newer release exists; don't install it.
@@ -133,6 +136,44 @@ pub enum Commands {
 
     /// Manage credential profiles
     Profile(ProfileArgs),
+}
+
+#[derive(Parser)]
+pub struct SessionArgs {
+    /// Join code of the session (default: $OLOLO_SESSION, or the only live one)
+    #[arg(long, global = true)]
+    pub code: Option<String>,
+    #[command(subcommand)]
+    pub command: SessionCommands,
+}
+
+#[derive(Subcommand)]
+pub enum SessionCommands {
+    /// List sessions with a running service
+    List,
+    /// The session as the TUI sees it: tasks, checks, judges, prompts
+    Status {
+        /// Print the raw JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// The hosted agent's screen as text
+    Screen,
+    /// Type a message into the hosted agent and submit it
+    Send {
+        /// The message (several words are joined with spaces)
+        #[arg(required = true, num_args = 1..)]
+        text: Vec<String>,
+    },
+    /// Send keystrokes to the hosted agent: Enter, Esc, Up, Down, Tab, C-c, or literal text
+    Keys {
+        #[arg(required = true, num_args = 1..)]
+        keys: Vec<String>,
+    },
+    /// Answer the hosted agent's own dialog: allow (Enter), deny (Esc), or an option number
+    Agent { answer: String },
+    /// Answer ololo's probe-permission prompt: allow, always, session or deny
+    Permission { decision: String },
 }
 
 #[derive(Parser)]

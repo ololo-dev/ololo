@@ -81,6 +81,7 @@ pub async fn run_headless(
         })
     };
     let loop_started = std::time::Instant::now();
+    let mut control_req_rx = control.as_mut().and_then(|c| c.req_rx.take());
     let outcome: (i32, Option<QuitReason>) = loop {
         alive.store(
             loop_started.elapsed().as_secs() as i64,
@@ -121,6 +122,14 @@ pub async fn run_headless(
                         "control message dropped: no agent hosted (pass --agent)",
                     ),
                 }
+            }
+            Some(req) = async {
+                match control_req_rx.as_mut() {
+                    Some(rx) => rx.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                handle_control_request(&mut app, pty.as_mut(), req).await;
             }
             ev = rx.recv() => {
                 match ev {
@@ -166,6 +175,50 @@ pub async fn run_headless(
         exit_code: outcome.0,
         quit_reason: outcome.1,
         final_status: app.header.status,
+    }
+}
+
+/// Answer one request of the session service (`ololo session …`): the
+/// run loop is the only place that both sees the app state and owns the
+/// PTY, so the HTTP task hands its questions here.
+async fn handle_control_request(
+    app: &mut TuiApp,
+    pty: Option<&mut PtyHost>,
+    req: crate::control::ControlRequest,
+) {
+    use crate::control::ControlRequest;
+    match req {
+        ControlRequest::Status(reply) => {
+            let _ = reply.send(app.control_snapshot());
+        }
+        ControlRequest::Screen(reply) => {
+            let _ = reply.send(app.pty_parser.screen().contents());
+        }
+        ControlRequest::Message(text, reply) => match pty {
+            Some(pty) => {
+                deliver_control_message(app, pty, &text).await;
+                let _ = reply.send(Ok(()));
+            }
+            None => {
+                let _ = reply.send(Err("no agent hosted (pass --agent)".to_string()));
+            }
+        },
+        ControlRequest::Keys(bytes, reply) => match pty {
+            Some(pty) => {
+                app.pty_parser.screen_mut().set_scrollback(0);
+                let _ = reply.send(pty.write_input(&bytes).map_err(|e| e.to_string()));
+            }
+            None => {
+                let _ = reply.send(Err("no agent hosted (pass --agent)".to_string()));
+            }
+        },
+        ControlRequest::ProbePermission(decision, reply) => {
+            let open = app.permission_popup.is_some();
+            if open {
+                app.respond_permission(decision);
+            }
+            let _ = reply.send(open);
+        }
     }
 }
 
@@ -265,6 +318,7 @@ pub async fn run(
         apply_pty_layout(&mut app, pty.as_deref_mut(), term_cols, term_rows);
     }
 
+    let mut control_req_rx = control.as_mut().and_then(|c| c.req_rx.take());
     let outcome: (i32, Option<QuitReason>) = loop {
         tokio::select! {
             biased;
@@ -305,6 +359,14 @@ pub async fn run(
                 } else {
                     tracing::warn!("control message dropped: no agent PTY");
                 }
+            }
+            Some(req) = async {
+                match control_req_rx.as_mut() {
+                    Some(rx) => rx.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                handle_control_request(&mut app, pty.as_deref_mut(), req).await;
             }
             ev = events.next() => {
                 match ev {

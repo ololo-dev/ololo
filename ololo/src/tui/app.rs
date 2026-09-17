@@ -773,7 +773,7 @@ impl TuiApp {
     /// Answer the pending permission prompt and close its popup. Persisting
     /// an always-allow rule is the `player_ws` gate's job when the answer
     /// arrives — the UI layer never touches the filesystem.
-    fn respond_permission(&mut self, decision: crate::permissions::Decision) {
+    pub(crate) fn respond_permission(&mut self, decision: crate::permissions::Decision) {
         let Some(prompt) = self.permission_popup.take() else {
             return;
         };
@@ -1362,6 +1362,108 @@ impl TuiApp {
     /// with derived passed/folded state. Probes without a `task_id` are
     /// excluded — see [`TuiApp::ungrouped_probes`]. Single source of truth
     /// for the sidebar renderer and keyboard navigation.
+    /// The session as JSON, for the control service (`ololo session
+    /// status`): what the header shows, the tasks with their checks and
+    /// points, the judges' runs and verdicts, and whatever prompt is open.
+    pub fn control_snapshot(&self) -> serde_json::Value {
+        use serde_json::json;
+        let tasks: Vec<serde_json::Value> = self
+            .task_groups()
+            .iter()
+            .map(|g| {
+                let title = g
+                    .probes
+                    .first()
+                    .map(|p| p.task_title.clone())
+                    .unwrap_or_default();
+                let checks: Vec<serde_json::Value> = g
+                    .probes
+                    .iter()
+                    .map(|p| {
+                        json!({
+                            "probe_id": p.probe_id,
+                            "label": p.test_label,
+                            "outcome": p.outcome.as_ref().map(|o| format!("{o:?}").to_lowercase()),
+                            "exit_code": p.exit_code,
+                            "error": p.error,
+                            "stdout_tail": p.stdout.chars().rev().take(400).collect::<String>().chars().rev().collect::<String>(),
+                        })
+                    })
+                    .collect();
+                json!({
+                    "ordinal": g.ordinal,
+                    "task_id": g.task_id,
+                    "title": title,
+                    "passed": g.passed,
+                    "points": g.points,
+                    "current": Some(g.ordinal) == self.max_task_ordinal,
+                    "checks": checks,
+                })
+            })
+            .collect();
+        let judge_runs: Vec<serde_json::Value> = self
+            .judge_runs
+            .iter()
+            .map(|r| {
+                json!({
+                    "judge": r.judge_name,
+                    "task_ordinal": r.task_ordinal,
+                    "state": format!("{:?}", r.state).to_lowercase(),
+                })
+            })
+            .collect();
+        let verdicts: Vec<serde_json::Value> = self
+            .judge_verdicts
+            .iter()
+            .map(|v| {
+                json!({
+                    "judge": v.judge_name,
+                    "task_ordinal": v.task_ordinal,
+                    "points": v.point_delta,
+                    "feedback": v.feedback,
+                })
+            })
+            .collect();
+        let permission = self.permission_popup.as_ref().map(|p| {
+            json!({
+                "probe_id": p.probe_id,
+                "command": p.command,
+                "always_rule": p.always_rule,
+                "deadline_secs": p.deadline_secs,
+            })
+        });
+        let current_brief = self
+            .probes
+            .iter()
+            .rev()
+            .find(|p| Some(p.task_ordinal) == self.max_task_ordinal)
+            .map(|p| p.task_description.clone());
+        json!({
+            "session": self.header.session,
+            "session_url": self.header.session_url,
+            "project": self.header.project,
+            "project_url": self.header.project_url,
+            "status": format!("{:?}", self.header.status).to_lowercase(),
+            "countdown_secs": self.header.countdown_secs,
+            "error": self.header.error_message,
+            "score": self.score,
+            "rank": self.rank,
+            "total_tasks": self.total_tasks,
+            "current_task": self.max_task_ordinal,
+            "current_brief": current_brief,
+            "tasks": tasks,
+            "judge_runs": judge_runs,
+            "verdicts": verdicts,
+            "done_notes": self.done_notes.iter().map(|d| json!({"path": d.path, "task_ordinal": d.task_ordinal})).collect::<Vec<_>>(),
+            "permission_prompt": permission,
+            "agent": {
+                "label": self.agent_label,
+                "hosted": self.has_pty,
+                "desktop": self.agent_is_desktop,
+            },
+        })
+    }
+
     pub fn task_groups(&self) -> Vec<TaskGroup<'_>> {
         let mut by_task: std::collections::BTreeMap<(i32, Uuid), Vec<&ProbeResultInfo>> =
             std::collections::BTreeMap::new();
@@ -1628,6 +1730,42 @@ impl TuiApp {
 
     /// Judges still reviewing, grouped by task in arrival order:
     /// `[(task ordinal, [judge names])]`.
+    /// Judge-registered checks of the task in play whose latest run FAILED
+    /// (one slug per check, the judge that asked). Such a check is re-run
+    /// until it passes or the judges give up on it — and only the player
+    /// can make it pass, so the status row must say so instead of
+    /// "reviewing" (RI3V6G: `npm test` failed for twelve minutes in
+    /// silence). An expired check (`NoResponse`) let go of the task and
+    /// does not count.
+    pub fn failing_judge_checks(&self) -> Vec<String> {
+        let Some(group) = self.task_groups().into_iter().next() else {
+            return Vec::new();
+        };
+        // Same collapse as the transcript: the newest attempt of each test
+        // speaks for it.
+        let mut order: Vec<(i32, Uuid)> = Vec::new();
+        let mut latest: HashMap<(i32, Uuid), &ProbeResultInfo> = HashMap::new();
+        for p in &group.probes {
+            let key = if p.test_ordinal > 0 {
+                (p.test_ordinal, Uuid::nil())
+            } else {
+                (0, p.probe_id)
+            };
+            if latest.insert(key, p).is_none() {
+                order.push(key);
+            }
+        }
+        order
+            .into_iter()
+            .filter_map(|key| {
+                let p = latest[&key];
+                let slug = p.test_label.trim().strip_prefix("registered:")?.trim();
+                let failed = matches!(p.outcome, Some(arena_core::protocol::ProbeOutcome::Error));
+                (failed && !slug.is_empty()).then(|| slug.to_string())
+            })
+            .collect()
+    }
+
     fn reviewing_judges(&self) -> Vec<(Option<i32>, Vec<String>)> {
         let mut groups: Vec<(Option<i32>, Vec<String>)> = Vec::new();
         for run in self
@@ -1693,6 +1831,56 @@ impl TuiApp {
             | Status::Error => {
                 return None;
             }
+        }
+        // A judge's extra check came back FAILING: neither the panel nor
+        // the clock moves this — the player does. It outranks the judge
+        // hold and the countdown, where the wait used to hide.
+        let failing = self.failing_judge_checks();
+        if !failing.is_empty() {
+            let mut judges: Vec<String> = Vec::new();
+            for slug in &failing {
+                if !judges.contains(slug) {
+                    judges.push(slug.clone());
+                }
+            }
+            let who = join_names(&judges);
+            let n = failing.len();
+            let what = if n == 1 {
+                format!("the {who} judge is waiting on your code — its extra check is failing")
+            } else {
+                let verb = if judges.len() == 1 { "is" } else { "are" };
+                format!(
+                    "the {who} {} {verb} waiting on your code — {n} extra checks are failing",
+                    if judges.len() == 1 { "judge" } else { "judges" }
+                )
+            };
+            let them = if n == 1 { "it" } else { "them" };
+            let countdown = self.next_probe_due.map(|due| {
+                due.saturating_duration_since(std::time::Instant::now())
+                    .as_secs()
+            });
+            let (again, countdown) = match countdown {
+                Some(secs) if secs > 0 => (
+                    format!("fix {them}; ololo re-runs {them} in {secs}s"),
+                    Some(secs),
+                ),
+                Some(_) => (
+                    format!("fix {them}; ololo is re-running {them} now…"),
+                    Some(0),
+                ),
+                None => (
+                    format!(
+                        "fix {them}; ololo re-runs {them} until {}",
+                        if n == 1 { "it passes" } else { "they pass" }
+                    ),
+                    None,
+                ),
+            };
+            return Some(StatusLine {
+                text: format!("{what} · {again}"),
+                busy: countdown == Some(0),
+                countdown,
+            });
         }
         // The judge hold of a delivered open-ended task: the panel has the
         // build, and the next brief waits on its word.

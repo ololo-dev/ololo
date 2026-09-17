@@ -217,6 +217,12 @@ async fn connect_once(
     tracing::info!("ws connected to {}", ws_url);
 
     let mut memory = memory;
+    // Judge-registered checks in flight, by probe id → the judge's slug, so
+    // a failing grade can say whose check it is and that a fix is owed:
+    // `ProbeGraded` carries no label, and text mode has no transcript to
+    // look it up in.
+    let mut judge_checks: std::collections::HashMap<Uuid, String> =
+        std::collections::HashMap::new();
 
     loop {
         let msg = tokio::select! {
@@ -425,6 +431,9 @@ async fn connect_once(
                         // sources. The check itself happens off-thread.
                         if let Some(m) = memory.as_ref() {
                             m.handle.request();
+                        }
+                        if let Some(slug) = test_label.trim().strip_prefix("registered:") {
+                            judge_checks.insert(probe_id, slug.trim().to_string());
                         }
                         crate::ui::pause_countdown(|| {
                             crate::ui::step("Test pushed");
@@ -696,7 +705,24 @@ async fn connect_once(
                             if let Some(secs) = next_probe_in_secs {
                                 crate::ui::field_dim("next check", format!("in {secs}s"));
                             }
+                            // A judge's check failing is a request to the
+                            // player: it is re-run until it passes, and only
+                            // a fix makes it pass — say so where the agent
+                            // reads (RI3V6G: twelve silent minutes).
+                            if matches!(outcome, arena_core::protocol::ProbeOutcome::Error)
+                                && let Some(slug) = judge_checks.get(&probe_id)
+                            {
+                                crate::ui::warn(format!(
+                                    "the {slug} judge is waiting on your code: its extra check \
+                                     is failing — fix it; ololo re-runs it{} until it passes",
+                                    next_probe_in_secs
+                                        .map(|s| format!(" in {s}s and"))
+                                        .unwrap_or_default()
+                                ));
+                            }
                         });
+                        // A re-run comes as a fresh probe id: this one is spent.
+                        judge_checks.remove(&probe_id);
                         emit(
                             sink.clone(),
                             TuiEvent::ProbeGraded {

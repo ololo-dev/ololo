@@ -227,6 +227,25 @@ async fn main() {
             .await
         }
         Commands::Whoami => commands::run_whoami(&cli.profile).await,
+        Commands::Session(args) => {
+            use cli::SessionCommands;
+            let code = args.code.as_deref();
+            match args.command {
+                SessionCommands::List => commands::run_session_list(),
+                SessionCommands::Status { json } => commands::run_session_status(code, json).await,
+                SessionCommands::Screen => commands::run_session_screen(code).await,
+                SessionCommands::Send { text } => {
+                    commands::run_session_send(code, &text.join(" ")).await
+                }
+                SessionCommands::Keys { keys } => commands::run_session_keys(code, &keys).await,
+                SessionCommands::Agent { answer } => {
+                    commands::run_session_agent_permission(code, &answer).await
+                }
+                SessionCommands::Permission { decision } => {
+                    commands::run_session_permission(code, &decision).await
+                }
+            }
+        }
         Commands::Update { check } => commands::run_update(check).await,
         Commands::Profile(args) => match args.command {
             ProfileCommands::List => commands::run_profile_list(&cli.profile),

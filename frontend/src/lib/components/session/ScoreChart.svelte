@@ -309,8 +309,10 @@
       for (const r of ranges) {
         const t = r.start_t;
         if (t == null || (hookCut != null && t > hookCut)) continue;
-        const x = u.valToPos(t, "x", true);
-        if (x < left || x > left + w) continue;
+        // The first task starts at t = 0, on the axis itself: keep a marker
+        // that lands a sub-pixel outside the plot instead of dropping it.
+        const x = Math.min(Math.max(u.valToPos(t, "x", true), left), left + w);
+        if (x < left - 1 || x > left + w + 1) continue;
         ctx.strokeStyle = color;
         ctx.globalAlpha = 0.55;
         ctx.lineWidth = 1;

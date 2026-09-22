@@ -151,8 +151,35 @@ const HEALTH: SessionHealthPayload = {
   players: {
     p1: {
       checkpoints: [
-        checkpoint({ id: "c1", t: 2, score: 80, server_status: "ok" }),
-        checkpoint({ id: "c2", t: 6, score: 62, level: "amber", server_status: "pending" }),
+        checkpoint({
+          id: "c1",
+          t: 2,
+          score: 80,
+          server_status: "ok",
+          server: {
+            status: "ok",
+            score: 80,
+            grade: "B",
+            level: "green",
+            jscpd_version: "",
+            duration_ms: 1,
+          },
+        }),
+        checkpoint({
+          id: "c2",
+          t: 6,
+          score: 62,
+          level: "amber",
+          server_status: "pending",
+          client: {
+            status: "ok",
+            score: 62,
+            grade: "C",
+            level: "amber",
+            jscpd_version: "",
+            duration_ms: 1,
+          },
+        }),
         checkpoint({ id: "c3", t: 9, score: 40, level: "red", server_status: "failed" }),
       ],
       task_ranges: [
@@ -214,6 +241,11 @@ describe("ScoreChart with health", () => {
       scoreHistory: [
         { t: 0, scores: { p1: 0 } },
         { t: 10, scores: { p1: 5 }, changes: [{ player_id: "p1", delta: 5, kind: "probe" }] },
+        {
+          t: 14,
+          scores: { p1: 19 },
+          changes: [{ player_id: "p1", delta: 14, kind: "judge", label: "Performance" }],
+        },
       ],
       health: HEALTH,
     });
@@ -231,10 +263,15 @@ describe("ScoreChart with health", () => {
       expect(calls.filter((c) => c.name === "fillRect").length).toBe(0);
       // Three probe markers plus the scored change at t = 10.
       expect(calls.filter((c) => c.name === "arc").length).toBeGreaterThanOrEqual(4);
-      // Every probe is labelled with its health score.
-      for (const label of ["80.0", "62.0", "40.0"]) {
+      // Every probe wears a pill with its grade and score (no grade known
+      // for the failed one).
+      for (const label of ["B 80", "C 62", "40"]) {
         expect(calls.some((c) => c.name === "fillText" && c.args[0] === label)).toBe(true);
       }
+      // The judge verdict is a diamond (a closed four-point path) with the
+      // points it awarded.
+      expect(calls.some((c) => c.name === "fillText" && c.args[0] === "+14")).toBe(true);
+      expect(calls.filter((c) => c.name === "closePath").length).toBeGreaterThanOrEqual(1);
       // The failed probe's dashed ring.
       expect(
         calls.some(
@@ -247,8 +284,8 @@ describe("ScoreChart with health", () => {
             (c.args[0] as number[])[0] !== 4,
         ),
       ).toBe(true);
-      // The task separator label.
-      expect(calls.some((c) => c.name === "fillText" && c.args[0] === "Widget")).toBe(true);
+      // The task separator is a line only; its title lives in the tooltip.
+      expect(calls.some((c) => c.name === "fillText" && c.args[0] === "Widget")).toBe(false);
     });
     expect(screen.queryByText("Waiting for first scores…")).toBeNull();
   });

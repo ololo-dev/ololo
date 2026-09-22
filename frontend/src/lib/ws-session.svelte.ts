@@ -18,6 +18,7 @@ import type {
   LeaderboardEntry,
   MemberInfo,
   PlayerSummary,
+  ScoreChange,
   ScoreHistoryPoint,
   SessionHealthPayload,
 } from "$lib/types/arena";
@@ -93,6 +94,9 @@ export class WsSessionClient {
   degraded = $state<string | null>(null);
 
   private _startedAtMs: number | null = null;
+  /** Judge verdicts announced before the leaderboard update that carries
+   *  their points: they join that next score-history point. */
+  private _pendingChanges: ScoreChange[] = [];
   private _lastVersion = 0;
 
   constructor(joinCode: string, token: string | null, serverBase = "") {
@@ -207,7 +211,12 @@ export class WsSessionClient {
         for (const e of this.leaderboard) {
           scores[e.player_id] = e.total_points;
         }
-        this.scoreHistory = [...this.scoreHistory, { t: elapsed, scores }];
+        const point: ScoreHistoryPoint = { t: elapsed, scores };
+        if (this._pendingChanges.length > 0) {
+          point.changes = this._pendingChanges;
+          this._pendingChanges = [];
+        }
+        this.scoreHistory = [...this.scoreHistory, point];
         break;
       }
 
@@ -444,6 +453,17 @@ export class WsSessionClient {
 
       case "task_scored": {
         const judgeName = frame.judge_name || null;
+        // A judge verdict is a point on the score chart: it joins the
+        // score-history point its leaderboard update produces, whichever of
+        // the two frames lands first.
+        if (judgeName) {
+          this.noteJudgeVerdict({
+            player_id: frame.player_id,
+            delta: frame.point_delta,
+            kind: "judge",
+            label: judgeName,
+          });
+        }
         const entry: ActivityEvent = {
           kind: "task_scored",
           player_id: frame.player_id,
@@ -504,6 +524,20 @@ export class WsSessionClient {
       default:
         this.protocolMismatch = true;
         break;
+    }
+  }
+
+  /** Attach a judge verdict to the score-history point it belongs to: the
+   *  last point when the leaderboard update already landed (moments ago),
+   *  else the next one. */
+  private noteJudgeVerdict(change: ScoreChange) {
+    const elapsed = this._startedAtMs !== null ? (Date.now() - this._startedAtMs) / 1000 : 0;
+    const last = this.scoreHistory[this.scoreHistory.length - 1];
+    if (last && elapsed - last.t <= 5) {
+      const updated: ScoreHistoryPoint = { ...last, changes: [...(last.changes ?? []), change] };
+      this.scoreHistory = [...this.scoreHistory.slice(0, -1), updated];
+    } else {
+      this._pendingChanges = [...this._pendingChanges, change];
     }
   }
 }

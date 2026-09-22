@@ -8,7 +8,7 @@
     ScoreHistoryPoint,
     SessionHealthPayload,
   } from "$lib/types/arena";
-  import { LEVEL_COLORS, formatScore, seriesColor, shortSha } from "$lib/session-health";
+  import { LEVEL_COLORS, formatScore, seriesColor } from "$lib/session-health";
   import {
     buildChartData,
     describePoints,
@@ -58,7 +58,6 @@
     null,
   );
 
-  const SEPARATOR_LABEL_ROWS = 3;
 
   // Format elapsed seconds as H:MM:SS (or M:SS) — values are seconds since
   // session start, NOT unix timestamps, so we disable uPlot time mode.
@@ -231,24 +230,20 @@
     ctx.restore();
   }
 
-  /** Vertical separators where each participant's tasks start, tinted
-   * with the participant's colour and labelled with the task title. */
+  /** Vertical dotted separators where each participant's tasks start,
+   * tinted with the participant's colour. The tooltip names the task. */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   function drawTaskSeparators(u: any, members: ChartMember[]) {
     if (!hookHealth) return;
     const { left, width: w, top, height: h } = u.bbox;
     const ctx: CanvasRenderingContext2D = u.ctx;
-    const dpr = window.devicePixelRatio || 1;
     ctx.save();
-    ctx.font = `${10 * dpr}px sans-serif`;
-    ctx.textBaseline = "top";
-    ctx.textAlign = "left";
     members.forEach((m, i) => {
       const ranges = hookHealth?.players[m.player_id]?.task_ranges ?? [];
-      const color = seriesColor(i);
-      // The right edge of the last label drawn on this participant's row:
-      // a title that would overprint it is left to the tooltip.
-      let labelEnd = -Infinity;
+      ctx.strokeStyle = seriesColor(i);
+      ctx.globalAlpha = 0.55;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([2, 3]);
       for (const r of ranges) {
         const t = r.start_t;
         if (t == null || (hookCut != null && t > hookCut)) continue;
@@ -256,37 +251,71 @@
         // that lands a sub-pixel outside the plot instead of dropping it.
         const x = Math.min(Math.max(u.valToPos(t, "x", true), left), left + w);
         if (x < left - 1 || x > left + w + 1) continue;
-        ctx.strokeStyle = color;
-        ctx.globalAlpha = 0.55;
-        ctx.lineWidth = 1;
-        ctx.setLineDash([2, 3]);
         ctx.beginPath();
         ctx.moveTo(x, top);
         ctx.lineTo(x, top + h);
         ctx.stroke();
-        const title = (r.title ?? "task").slice(0, 28);
-        // Stack labels per participant so two players' markers do not
-        // overprint; past a few participants, the tooltip carries the title.
-        // Along the row, a label is skipped when the previous one is still
-        // under it (tasks closed seconds apart).
-        const labelX = x + 3 * dpr;
-        if (i < SEPARATOR_LABEL_ROWS && labelX >= labelEnd) {
-          ctx.setLineDash([]);
-          ctx.globalAlpha = 0.9;
-          ctx.fillStyle = color;
-          ctx.fillText(title, labelX, top + 2 * dpr + i * 12 * dpr);
-          labelEnd = labelX + ctx.measureText(title).width + 8 * dpr;
-        }
       }
     });
     ctx.restore();
   }
 
+  /** A rounded label with white text — the health grade and score on a
+   * probe, the points a judge awarded. Returns its horizontal extent. */
+  function drawPill(
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    yEdge: number,
+    text: string,
+    bg: string,
+    dpr: number,
+    above: boolean,
+  ): [number, number] {
+    const padX = 4 * dpr;
+    const h = 13 * dpr;
+    const w = ctx.measureText(text).width + padX * 2;
+    const left = x - w / 2;
+    const top = above ? yEdge - h : yEdge;
+    const r = h / 2;
+    ctx.beginPath();
+    if (typeof ctx.roundRect === "function") {
+      ctx.roundRect(left, top, w, h, r);
+    } else {
+      ctx.moveTo(left + r, top);
+      ctx.arcTo(left + w, top, left + w, top + h, r);
+      ctx.arcTo(left + w, top + h, left, top + h, r);
+      ctx.arcTo(left, top + h, left, top, r);
+      ctx.arcTo(left, top, left + w, top, r);
+      ctx.closePath();
+    }
+    ctx.fillStyle = bg;
+    ctx.fill();
+    ctx.fillStyle = "#ffffff";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(text, x, top + h / 2 + 0.5 * dpr);
+    return [left, left + w];
+  }
+
+  /** `B 75` for a scored check, `—` when there was nothing to score. */
+  function healthLabel(cp: HealthCheckpointView): string {
+    if (cp.score == null) return "—";
+    const grade = cp.server_status === "ok" ? cp.server?.grade : (cp.client?.grade ?? cp.server?.grade);
+    return `${grade ? `${grade} ` : ""}${Math.round(cp.score)}`;
+  }
+
+  function judgeDelta(meta: PointMeta): number | null {
+    const verdicts = meta.changes.filter((c) => c.kind === "judge");
+    if (verdicts.length === 0) return null;
+    return verdicts.reduce((sum, c) => sum + c.delta, 0);
+  }
+
   /** The markers on each line. A probe (health checkpoint) is a disc in
    * its health colour — filled once the server verified it, hollow while
-   * pending, dashed when the check failed — labelled with the health score;
-   * a task's final tree gets a ring. A scored change without a checkpoint
-   * is a small dot in the participant's colour. */
+   * pending, dashed when the check failed — with a pill naming its grade and
+   * score; a task's final tree gets a ring. A judge verdict is a diamond in
+   * the participant's colour with the points it awarded. Any other scored
+   * change is a small dot. */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   function drawPoints(u: any, members: ChartMember[]) {
     const ctx: CanvasRenderingContext2D = u.ctx;
@@ -295,14 +324,29 @@
     const { top } = u.bbox;
     ctx.save();
     ctx.font = `bold ${9 * dpr}px sans-serif`;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "bottom";
     for (let i = 0; i < members.length; i++) {
       const data: (number | null)[] = u.data[1 + i] ?? [];
       const color = seriesColor(i);
-      // The right edge of the last health label on this line, so labels
-      // of probes seconds apart do not overprint.
-      let labelEnd = -Infinity;
+      // The right edge of the last pill on each row (above / below the
+      // line), so pills of points seconds apart do not overprint.
+      let aboveEnd = -Infinity;
+      let belowEnd = -Infinity;
+      const pill = (x: number, y: number, r: number, text: string, bg: string, preferAbove: boolean) => {
+        // Above the marker unless that would leave the plot; a pill that
+        // would overprint the previous one on its row is left to the tooltip.
+        const half = (ctx.measureText(text).width + 8 * dpr) / 2;
+        const roomAbove = y - r - 16 * dpr >= top;
+        const fits = (row: boolean) => x - half > (row ? aboveEnd : belowEnd);
+        // The preferred row, else the other one, else the tooltip has it.
+        let above: boolean;
+        if (preferAbove && roomAbove && fits(true)) above = true;
+        else if (fits(false)) above = false;
+        else if (roomAbove && fits(true)) above = true;
+        else return;
+        const [, right] = drawPill(ctx, x, above ? y - r - 3 * dpr : y + r + 3 * dpr, text, bg, dpr, above);
+        if (above) aboveEnd = right + 3 * dpr;
+        else belowEnd = right + 3 * dpr;
+      };
       for (let idx = 0; idx < data.length; idx++) {
         const v = data[idx];
         if (v == null) continue;
@@ -311,65 +355,68 @@
         const x = u.valToPos(xs[idx], "x", true);
         const y = u.valToPos(v, "y", true);
         const cp = meta.checkpoint;
-        if (!cp) {
-          ctx.setLineDash([]);
-          ctx.globalAlpha = 1;
+        const verdict = judgeDelta(meta);
+        ctx.globalAlpha = 1;
+        ctx.setLineDash([]);
+        if (cp) {
+          const level = LEVEL_COLORS[cp.level ?? "unknown"].fg;
+          const r = 4 * dpr;
           ctx.beginPath();
-          ctx.arc(x, y, 2.5 * dpr, 0, Math.PI * 2);
-          ctx.fillStyle = color;
-          ctx.fill();
+          ctx.arc(x, y, r, 0, Math.PI * 2);
+          ctx.lineWidth = 1.5 * dpr;
+          if (cp.server_status === "ok") {
+            ctx.fillStyle = level;
+            ctx.fill();
+            ctx.strokeStyle = color;
+            ctx.stroke();
+          } else if (cp.server_status === "pending") {
+            ctx.fillStyle = "#ffffff";
+            ctx.fill();
+            ctx.strokeStyle = level;
+            ctx.stroke();
+          } else {
+            ctx.setLineDash([2 * dpr, 2 * dpr]);
+            ctx.fillStyle = "#ffffff";
+            ctx.fill();
+            ctx.strokeStyle = level;
+            ctx.stroke();
+            ctx.setLineDash([]);
+          }
+          if (cp.kind === "task_final") {
+            // The task's final tree: a ring around the point.
+            ctx.beginPath();
+            ctx.arc(x, y, r + 2.5 * dpr, 0, Math.PI * 2);
+            ctx.lineWidth = 1 * dpr;
+            ctx.strokeStyle = color;
+            ctx.stroke();
+          }
+          pill(x, y, r + (cp.kind === "task_final" ? 2.5 * dpr : 0), healthLabel(cp), level, true);
+          if (verdict !== null) {
+            pill(x, y, r, `${verdict >= 0 ? "+" : "−"}${Math.abs(verdict)}`, color, false);
+          }
           continue;
         }
-        const level = LEVEL_COLORS[cp.level ?? "unknown"].fg;
-        const r = 4 * dpr;
-        ctx.globalAlpha = 1;
-        ctx.beginPath();
-        ctx.arc(x, y, r, 0, Math.PI * 2);
-        ctx.lineWidth = 1.5 * dpr;
-        if (cp.server_status === "ok") {
-          ctx.setLineDash([]);
-          ctx.fillStyle = level;
-          ctx.fill();
-          ctx.strokeStyle = color;
-          ctx.stroke();
-        } else if (cp.server_status === "pending") {
-          ctx.setLineDash([]);
-          ctx.fillStyle = "#ffffff";
-          ctx.fill();
-          ctx.strokeStyle = level;
-          ctx.stroke();
-        } else {
-          ctx.setLineDash([2 * dpr, 2 * dpr]);
-          ctx.fillStyle = "#ffffff";
-          ctx.fill();
-          ctx.strokeStyle = level;
-          ctx.stroke();
-        }
-        if (cp.kind === "task_final") {
-          // The task's final tree: a ring around the point.
-          ctx.setLineDash([]);
+        if (verdict !== null) {
+          // A judge verdict: a diamond in the participant's colour.
+          const d = 5 * dpr;
           ctx.beginPath();
-          ctx.arc(x, y, r + 2.5 * dpr, 0, Math.PI * 2);
-          ctx.lineWidth = 1 * dpr;
-          ctx.strokeStyle = color;
+          ctx.moveTo(x, y - d);
+          ctx.lineTo(x + d, y);
+          ctx.lineTo(x, y + d);
+          ctx.lineTo(x - d, y);
+          ctx.closePath();
+          ctx.fillStyle = color;
+          ctx.fill();
+          ctx.lineWidth = 1.5 * dpr;
+          ctx.strokeStyle = "#ffffff";
           ctx.stroke();
+          pill(x, y, d, `${verdict >= 0 ? "+" : "−"}${Math.abs(verdict)}`, color, true);
+          continue;
         }
-        // The health score above the marker, in the level's colour — or
-        // below it when the marker sits under the task titles at the top.
-        const label = formatScore(cp.score);
-        const half = ctx.measureText(label).width / 2;
-        if (x - half > labelEnd) {
-          ctx.fillStyle = level;
-          const titleRows = top + (2 + SEPARATOR_LABEL_ROWS * 12) * dpr;
-          if (y - r - 13 * dpr < titleRows) {
-            ctx.textBaseline = "top";
-            ctx.fillText(label, x, y + r + 3 * dpr);
-            ctx.textBaseline = "bottom";
-          } else {
-            ctx.fillText(label, x, y - r - 3 * dpr);
-          }
-          labelEnd = x + half + 4 * dpr;
-        }
+        ctx.beginPath();
+        ctx.arc(x, y, 2.5 * dpr, 0, Math.PI * 2);
+        ctx.fillStyle = color;
+        ctx.fill();
       }
     }
     ctx.restore();
@@ -394,64 +441,65 @@
 
   function healthLines(cp: HealthCheckpointView): { label: string; value: string; tone?: string }[] {
     const lines: { label: string; value: string; tone?: string }[] = [];
-    const flags = cp.flags ?? {};
-    const badges = [
-      flags.score_mismatch ? "score mismatch" : null,
-      flags.version_mismatch ? "version mismatch" : null,
-      flags.task_mismatch ? "task mismatch" : null,
-      flags.late ? "late" : null,
-      flags.history_rewritten ? "history rewritten" : null,
-    ].filter((b): b is string => b !== null);
     const m = cp.server?.metrics ?? cp.client?.metrics ?? null;
-    const grade = cp.server_status === "ok" ? cp.server?.grade : (cp.client?.grade ?? cp.server?.grade);
-    // A scan that found nothing to score (no code files yet, or only files
-    // too small for jscpd's token floor) is not a failed check.
-    const nothingToScore = cp.score == null && m != null && m.files === 0;
-    lines.push({
-      label: "health",
-      value: nothingToScore
-        ? "no code to score yet"
-        : `${formatScore(cp.score)}${grade ? ` ${grade}` : ""} · ${cp.level}`,
-      tone: LEVEL_COLORS[cp.level ?? "unknown"].fg,
-    });
-    if (cp.server && cp.client && cp.server.score != null && cp.client.score != null) {
+    const tone = LEVEL_COLORS[cp.level ?? "unknown"].fg;
+    if (cp.score == null) {
       lines.push({
-        label: "server / client",
-        value: `${formatScore(cp.server.score)} / ${formatScore(cp.client.score)}`,
+        label: "health",
+        value: m && m.files === 0 ? "no code to score yet" : "not scored",
+        tone,
       });
+    } else {
+      lines.push({ label: "health", value: `${healthLabel(cp)} · ${cp.level}`, tone });
     }
-    if (m) {
+    if (m && m.files > 0) {
       lines.push({
         label: "duplication",
         value: `${m.duplication_pct == null ? "—" : `${m.duplication_pct.toFixed(1)}%`} · ${
           m.duplicated_lines ?? 0
-        } lines · ${m.clones} clones`,
+        } of ${m.code_lines} lines · ${m.clones} clone${m.clones === 1 ? "" : "s"} · ${m.files} file${
+          m.files === 1 ? "" : "s"
+        }`,
       });
-      lines.push({ label: "files", value: `${m.files} · ${m.code_lines} lines of code` });
-      if (m.ignore_markers > 0 || m.jscpd_config_present) {
-        lines.push({
-          label: "note",
-          value: [
-            m.ignore_markers > 0 ? `${m.ignore_markers} file(s) with jscpd:ignore markers` : null,
-            m.jscpd_config_present ? ".jscpd.json present (not applied)" : null,
-          ]
-            .filter(Boolean)
-            .join("; "),
-          tone: LEVEL_COLORS.amber.fg,
-        });
-      }
     }
-    lines.push({ label: "commit", value: shortSha(cp.commit) });
-    lines.push({
-      label: "check",
-      value: statusLabel(cp),
-      tone: cp.server_status === "ok" ? LEVEL_COLORS.green.fg : LEVEL_COLORS.amber.fg,
-    });
+    // Only what deserves attention: a check the server could not confirm,
+    // a disagreement, an attempt to steer the scan.
+    if (cp.server_status === "pending") {
+      lines.push({ label: "check", value: "pending verification", tone: LEVEL_COLORS.amber.fg });
+    } else if (cp.server_status !== "ok") {
+      lines.push({ label: "check", value: statusLabel(cp), tone: LEVEL_COLORS.red.fg });
+    }
+    const flags = cp.flags ?? {};
+    if (flags.score_mismatch && cp.client?.score != null && cp.server?.score != null) {
+      lines.push({
+        label: "mismatch",
+        value: `client said ${formatScore(cp.client.score)}, server ${formatScore(cp.server.score)}`,
+        tone: LEVEL_COLORS.red.fg,
+      });
+    }
+    const badges = [
+      flags.version_mismatch ? "jscpd version differs" : null,
+      flags.task_mismatch ? "commit belongs to another task" : null,
+      flags.late ? "reported after the task closed" : null,
+      flags.history_rewritten ? "history rewritten" : null,
+    ].filter((b): b is string => b !== null);
     if (badges.length > 0) {
       lines.push({ label: "flags", value: badges.join(", "), tone: LEVEL_COLORS.red.fg });
     }
+    if (m && (m.ignore_markers > 0 || m.jscpd_config_present)) {
+      lines.push({
+        label: "note",
+        value: [
+          m.ignore_markers > 0 ? `${m.ignore_markers} file(s) with jscpd:ignore markers` : null,
+          m.jscpd_config_present ? ".jscpd.json present (not applied)" : null,
+        ]
+          .filter(Boolean)
+          .join("; "),
+        tone: LEVEL_COLORS.amber.fg,
+      });
+    }
     const err = cp.server?.error ?? cp.client?.error;
-    if (err) lines.push({ label: "error", value: err.slice(0, 120) });
+    if (err) lines.push({ label: "error", value: err.slice(0, 120), tone: LEVEL_COLORS.red.fg });
     return lines;
   }
 
@@ -469,26 +517,26 @@
       if (!meta) continue;
       const cp = meta.checkpoint;
       lines.push({ label: members[i].display_name, value: "", tone: seriesColor(i) });
-      lines.push({
-        label: "time",
-        value: cp
-          ? `${fmtElapsed(meta.t)} · ${new Date(cp.created_at).toLocaleTimeString()}`
-          : fmtElapsed(meta.t),
-      });
       const range = taskAt(hookHealth?.players[members[i].player_id]?.task_ranges ?? [], meta.t);
       const task = cp?.task_title ?? range?.title ?? null;
-      if (task) {
+      const what =
+        cp?.kind === "task_final"
+          ? "final tree"
+          : cp?.kind === "probe"
+            ? `check #${cp.probe_seq ?? "?"}`
+            : judgeDelta(meta) !== null
+              ? "judge verdict"
+              : "points";
+      lines.push({ label: fmtElapsed(meta.t), value: task ? `${what} · ${task}` : what });
+      if (meta.delta !== null) {
         lines.push({
-          label: "task",
-          value: `${task}${cp?.kind === "task_final" ? " (final tree)" : ""}`,
+          label: "points",
+          value: describePoints(meta),
+          tone: meta.delta > 0 ? LEVEL_COLORS.green.fg : meta.delta < 0 ? LEVEL_COLORS.red.fg : undefined,
         });
+      } else {
+        lines.push({ label: "points", value: String(meta.total) });
       }
-      if (cp?.kind === "probe") lines.push({ label: "probe", value: `#${cp.probe_seq ?? "?"}` });
-      lines.push({
-        label: "points",
-        value: describePoints(meta),
-        tone: meta.delta == null ? undefined : meta.delta > 0 ? LEVEL_COLORS.green.fg : meta.delta < 0 ? LEVEL_COLORS.red.fg : undefined,
-      });
       if (cp) lines.push(...healthLines(cp));
     }
     if (lines.length === 0) {

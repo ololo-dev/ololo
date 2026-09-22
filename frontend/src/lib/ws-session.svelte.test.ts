@@ -108,6 +108,53 @@ describe("WsSessionClient", () => {
     expect(c.scoreHistory[0].scores).toEqual({ a1: 10 });
   });
 
+  it("attaches a judge verdict to the score-history point that carries its points", () => {
+    const c = client();
+    const verdict = {
+      type: "task_scored",
+      player_id: "a1",
+      player_display_name: "Alpha",
+      task_id: "t1",
+      task_ordinal: 1,
+      task_title: "Task One",
+      point_delta: 14,
+      judge_name: "Performance",
+      timestamp: "2026-07-16T00:01:00Z",
+      version: 2,
+    };
+    // Verdict first, leaderboard update after: the verdict waits for it.
+    captured[0].onMessage(JSON.stringify(verdict));
+    expect(c.scoreHistory.length).toBe(0);
+    captured[0].onMessage(
+      JSON.stringify({
+        type: "leaderboard_update",
+        entries: [{ agent_id: "a1", total_points: 14 }],
+      }),
+    );
+    expect(c.scoreHistory[0].changes).toEqual([
+      { player_id: "a1", delta: 14, kind: "judge", label: "Performance" },
+    ]);
+    // Leaderboard update first, verdict moments later: it joins that point.
+    captured[0].onMessage(
+      JSON.stringify({
+        type: "leaderboard_update",
+        entries: [{ agent_id: "a1", total_points: 18 }],
+      }),
+    );
+    captured[0].onMessage(
+      JSON.stringify({ ...verdict, point_delta: 4, judge_name: "Tests", version: 3 }),
+    );
+    expect(c.scoreHistory.length).toBe(2);
+    expect(c.scoreHistory[1].changes).toEqual([
+      { player_id: "a1", delta: 4, kind: "judge", label: "Tests" },
+    ]);
+    // A probe-pass line (no judge) is not a chart change.
+    captured[0].onMessage(
+      JSON.stringify({ ...verdict, judge_name: "", point_delta: 10, version: 4 }),
+    );
+    expect(c.scoreHistory[1].changes).toHaveLength(1);
+  });
+
   it("accumulates visited task ids on player progress updates", () => {
     const c = client();
     captured[0].onMessage(

@@ -74,6 +74,7 @@ async fn insert_project(state: &AppState, owner_id: Uuid, public: bool) -> Uuid 
         default_value_points: Set(10),
         default_fail_points: Set(-5),
         default_no_response_points: Set(-10),
+        default_health_points: sea_orm::ActiveValue::NotSet,
         default_completion_bonus_points: Set(10),
         default_deadline_secs: Set(60),
         default_session_duration_secs: Set(3600),
@@ -134,6 +135,7 @@ async fn insert_task(state: &AppState, project_id: Uuid, ordinal: i32, title: &s
         max_interval_secs: Set(Some(300)),
         fail_points: Set(0),
         no_response_points: Set(0),
+        health_points: sea_orm::ActiveValue::NotSet,
         completion_bonus_points: Set(10),
         evaluation: Set(None),
     }
@@ -187,6 +189,7 @@ async fn insert_result(
         answer: Set(answer.to_string()),
         created_at: Set(created_at),
         point_delta: Set(point_delta),
+        kind: Set(arena_core::entities::task_results::KIND_PROBE.to_string()),
         is_bonus: Set(false),
     }
     .insert(&state.db)

@@ -33,6 +33,14 @@ pub enum PlayerAgentFrame {
         answer_template: String,
         #[serde(default)]
         validation_kind: arena_core::protocol::ValidationKind,
+        /// 1-based position among this player's probes; 0 from servers
+        /// that do not number them.
+        #[serde(default)]
+        probe_seq: u32,
+        /// Present when the server tracks code health: commit the tree per
+        /// probe, score it, report. Absent: behave as before the feature.
+        #[serde(default)]
+        health: Option<arena_core::protocol::HealthProbeConfig>,
     },
     SessionComplete {
         #[allow(dead_code)]
@@ -171,6 +179,11 @@ pub enum PlayerAgentClientFrame {
         /// working against one.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
+        /// The `probe(<task>)` snapshot commit made when the probe arrived.
+        /// Only set when the push carried `health` — a server that did not
+        /// ask rejects unknown fields and would fail the probe.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        commit: Option<String>,
     },
 }
 
@@ -179,7 +192,6 @@ pub enum PlayerAgentClientFrame {
 pub struct ResolveResponse {
     #[allow(dead_code)]
     pub game_server_url: String,
-    #[allow(dead_code)]
     pub session_id: String,
     pub player_id: String,
 }

@@ -112,6 +112,7 @@ fn is_public_frame(frame: &ArenaFrame) -> bool {
             | ArenaFrame::PlayerProgressUpdate { .. }
             | ArenaFrame::TaskStarted { .. }
             | ArenaFrame::TaskScored { .. }
+            | ArenaFrame::HealthUpdated { .. }
             | ArenaFrame::Heartbeat
     )
 }

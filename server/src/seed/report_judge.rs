@@ -232,6 +232,7 @@ mod tests {
             default_value_points: Set(10),
             default_fail_points: Set(-5),
             default_no_response_points: Set(-10),
+            default_health_points: sea_orm::ActiveValue::NotSet,
             default_completion_bonus_points: Set(10),
             default_deadline_secs: Set(60),
             default_session_duration_secs: Set(900),
@@ -265,6 +266,7 @@ mod tests {
                 max_interval_secs: Set(None),
                 fail_points: Set(-5),
                 no_response_points: Set(-10),
+                health_points: sea_orm::ActiveValue::NotSet,
                 completion_bonus_points: Set(10),
                 evaluation: Set(None),
             }

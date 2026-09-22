@@ -72,11 +72,116 @@ export interface SessionSnapshotPayload {
   started_at: string | null;
   activity?: SessionActivityEvent[];
   score_history?: ScoreHistoryPoint[];
+  /** Every participant's code-health history; absent when the session
+   *  tracks none (and from servers predating the feature). */
+  health?: SessionHealthPayload | null;
 }
 
 export interface ScoreHistoryPoint {
   t: number;
   scores: Record<string, number>;
+}
+
+// ── Code health (mirrors arena-core/src/protocol/health.rs) ──────────────
+
+export type HealthLevel = "green" | "amber" | "red" | "unknown";
+export type HealthReportStatus = "ok" | "failed" | "timeout" | "skipped";
+export type HealthCheckStatus =
+  | "pending"
+  | "ok"
+  | "failed"
+  | "timeout"
+  | "commit_missing"
+  | "unverified";
+export type HealthCheckpointKind = "probe" | "task_final";
+
+export interface HealthThresholds {
+  green_min: number;
+  amber_min: number;
+}
+
+export interface HealthMetrics {
+  files: number;
+  code_lines: number;
+  duplication_pct?: number | null;
+  duplicated_lines?: number | null;
+  clones: number;
+  complexity_pct?: number | null;
+  complex_lines?: number | null;
+  ignore_markers: number;
+  jscpd_config_present: boolean;
+}
+
+export interface HealthFlags {
+  score_mismatch?: boolean;
+  version_mismatch?: boolean;
+  task_mismatch?: boolean;
+  late?: boolean;
+  history_rewritten?: boolean;
+}
+
+/** One side's numbers for a checkpoint (the client's report or the
+ *  server's verification). */
+export interface HealthSide {
+  status: HealthReportStatus;
+  score?: number | null;
+  grade?: string | null;
+  level: HealthLevel;
+  jscpd_version: string;
+  duration_ms: number;
+  metrics?: HealthMetrics | null;
+  error?: string | null;
+}
+
+/** One point of the health line. */
+export interface HealthCheckpointView {
+  id: string;
+  kind: HealthCheckpointKind;
+  probe_id?: string | null;
+  probe_seq?: number;
+  task_id?: string | null;
+  task_title?: string | null;
+  commit: string;
+  created_at: string;
+  /** Seconds since the session started (the chart's x). */
+  t?: number | null;
+  client?: HealthSide | null;
+  server?: HealthSide | null;
+  server_status: HealthCheckStatus;
+  flags?: HealthFlags;
+  /** The score to show: the server's once verified, the client's until then. */
+  score?: number | null;
+  level: HealthLevel;
+}
+
+/** A task's span in a player's history, for the chart's separators. */
+export interface TaskRangeView {
+  task_id: string;
+  title?: string | null;
+  ordinal?: number | null;
+  start_commit: string;
+  end_commit?: string | null;
+  start_at?: string | null;
+  end_at?: string | null;
+  start_t?: number | null;
+  end_t?: number | null;
+}
+
+export interface PlayerHealthPayload {
+  checkpoints: HealthCheckpointView[];
+  task_ranges: TaskRangeView[];
+}
+
+export interface SessionHealthPayload {
+  thresholds: HealthThresholds;
+  /** Keyed by player id. */
+  players: Record<string, PlayerHealthPayload>;
+}
+
+export interface HealthUpdatedPayload {
+  player_id: string;
+  checkpoint: HealthCheckpointView;
+  version: number;
 }
 
 export interface SessionInfo {
@@ -163,6 +268,11 @@ export interface PlayerTaskSummaryEntry {
   total_points?: number;
   /** Completion-bonus portion of total_points, labelled separately in the UI. */
   bonus_points?: number;
+  /** Health-bonus portion of total_points (its own line item); absent when
+   *  the task pays no health points or has not closed yet. */
+  health_points?: number | null;
+  /** Why the health bonus is what it is. */
+  health_note?: string | null;
 }
 
 export interface PlayerSnapshotPayload {
@@ -202,6 +312,8 @@ export interface PlayerSnapshotPayload {
     duplicated_pct?: number;
     sources?: { join_code: string; player: string; matched_lines: number }[];
   } | null;
+  /** This player's code-health history (narrowed to them), when tracked. */
+  health?: SessionHealthPayload | null;
 }
 
 /** One open-ended task's evaluation state on the player page. */
@@ -491,6 +603,8 @@ export type PlayerFrame =
       deadline_at: string;
     }
   | { type: "evaluation_ready"; task_id: string }
+  /** One of this player's health checkpoints landed or settled. */
+  | { type: "health_updated"; checkpoint: HealthCheckpointView }
   /** The session report has been written — its text is in the snapshot. */
   | { type: "session_report_ready" }
   | { type: "player_error"; seq: number; message: string };
@@ -668,7 +782,8 @@ export type ArenaFrame =
   | { type: "user_players_snapshot"; players: PlayerSummary[] }
   | ({ type: "task_started" } & TaskStartedPayload)
   | ({ type: "task_scored" } & TaskScoredPayload)
-  | ({ type: "artifact_received" } & ArtifactReceivedPayload);
+  | ({ type: "artifact_received" } & ArtifactReceivedPayload)
+  | ({ type: "health_updated" } & HealthUpdatedPayload);
 
 export type ZmqEvent =
   | {

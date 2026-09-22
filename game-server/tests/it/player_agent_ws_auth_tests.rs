@@ -143,6 +143,7 @@ async fn seed_session(state: &GameServerState, join_code: &str) -> (Uuid, Uuid) 
         default_value_points: Set(10),
         default_fail_points: Set(-5),
         default_no_response_points: Set(-10),
+        default_health_points: sea_orm::ActiveValue::NotSet,
         default_completion_bonus_points: Set(10),
         default_deadline_secs: Set(60),
         default_min_interval_secs: Set(5),

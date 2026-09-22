@@ -59,10 +59,14 @@ readable end to end.
 ololo keeps a shadow git repository beside your work — your own repo, if you
 have one, is never touched. It commits a snapshot when the session starts,
 checkpoints while you work, and a commit when each task closes, then pushes
-them to the server.
+them to the server. On sessions that track code health it also commits the
+tree at every check, so each check has exactly one commit to point at.
 
 That history is what the judges read, and what the session report shows as
-per-task diffs. It is also why playing in a clean directory matters: work
+per-task diffs. Its commit messages tell the story on their own: a `start`
+marker opens each task, every commit in between is addressed to it, and the
+task's final commit closes it — `git log --oneline` reads as which task was
+in progress when. It is also why playing in a clean directory matters: work
 that existed before the session started is exactly what the anti-cheat judges
 look for.
 

@@ -67,6 +67,7 @@ pub async fn post_create(
         .no_response
         .unwrap_or(project.default_no_response_points);
     let req_completion_bonus = pts.completion_bonus.unwrap_or(req_point_value);
+    let req_health = pts.health.unwrap_or(project.default_health_points).max(0);
 
     // Resolve intervals: task override → None (inherit project default at read time).
     let req_intervals = req.intervals.unwrap_or_default();
@@ -131,6 +132,7 @@ pub async fn post_create(
                     max_interval_secs: Set(req_intervals.max_interval_secs),
                     fail_points: Set(req_fail),
                     no_response_points: Set(req_no_response),
+                    health_points: Set(req_health),
                     completion_bonus_points: Set(req_completion_bonus),
                     evaluation: Set(None),
                 };
@@ -284,6 +286,9 @@ pub async fn patch_one(
                     }
                     if let Some(cb) = p.completion_bonus {
                         am.completion_bonus_points = Set(cb);
+                    }
+                    if let Some(h) = p.health {
+                        am.health_points = Set(h.max(0));
                     }
                 }
                 if let Some(intv) = new_intervals {

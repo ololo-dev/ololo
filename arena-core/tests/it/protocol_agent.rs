@@ -17,6 +17,8 @@ fn player_agent_frame_test_push_roundtrip_with_expected_answer() {
         expected_answer: Some("hello".to_string()),
         answer_template: String::new(),
         validation_kind: ValidationKind::Minijinja,
+        probe_seq: 0,
+        health: None,
     };
     let json = serde_json::to_string(&frame).unwrap();
     assert!(json.contains("\"expected_answer\":\"hello\""));
@@ -49,6 +51,8 @@ fn player_agent_frame_test_push_roundtrip_with_answer_template() {
         expected_answer: None,
         answer_template: "result != \"\"".to_string(),
         validation_kind: ValidationKind::Minijinja,
+        probe_seq: 0,
+        health: None,
     };
     let json = serde_json::to_string(&frame).unwrap();
     assert!(json.contains("\"answer_template\":\"result != \\\"\\\"\""));
@@ -74,6 +78,8 @@ fn player_agent_frame_test_push_roundtrip_with_js_validation() {
         answer_template: "const code = Number(result.trim()); code >= 200 && code < 500"
             .to_string(),
         validation_kind: ValidationKind::Javascript,
+        probe_seq: 0,
+        health: None,
     };
     let json = serde_json::to_string(&frame).unwrap();
     assert!(json.contains("\"validation_kind\":\"javascript\""));

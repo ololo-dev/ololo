@@ -51,6 +51,15 @@ fn probe_exec_permits() -> &'static Semaphore {
     &PROBE_EXEC_PERMITS
 }
 
+/// A slot under the server-side execution cap, for work that reads a
+/// player's tree outside the probe runners (the health verifier).
+pub(crate) async fn acquire_permit() -> tokio::sync::SemaphorePermit<'static> {
+    probe_exec_permits()
+        .acquire()
+        .await
+        .expect("the probe execution semaphore is never closed")
+}
+
 /// Per-probe wall-clock deadline; same knob family as the execution judge.
 fn probe_deadline() -> std::time::Duration {
     let ms = std::env::var("OLOLO_SERVER_PROBE_TIMEOUT_MS")

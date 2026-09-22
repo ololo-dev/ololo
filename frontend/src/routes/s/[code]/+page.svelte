@@ -1,10 +1,11 @@
 <script lang="ts">
   import { browser } from "$app/environment";
   import { onMount, onDestroy, untrack } from "svelte";
-  import type { LeaderboardEntry, MemberInfo, ScoreHistoryPoint, ActivityEvent } from "$lib/types/arena";
+  import type { LeaderboardEntry, MemberInfo, ScoreHistoryPoint, ActivityEvent, SessionHealthPayload } from "$lib/types/arena";
+  import { indicatorFor } from "$lib/session-health";
   import type { PageData } from "./$types";
   import type { SessionReportResponse } from "$lib/api";
-  import { patchSession, getSessionPlayerStats, getSessionReport } from "$lib/api";
+  import { patchSession, getSessionPlayerStats, getSessionReport, getSessionHealth } from "$lib/api";
   import type { SessionPlayerStatsResponse } from "$lib/api";
   import SessionPlayerStatsBlock from "$lib/components/session/SessionPlayerStatsBlock.svelte";
   import { invalidateAll } from "$app/navigation";
@@ -93,6 +94,19 @@
   let activityLog = $state<ActivityEvent[]>([]);
   let sessionStartedAt = $state<Date | null>(null);
   let playerStats = $state<SessionPlayerStatsResponse | null>(null);
+  // Code-health history: live from the WS snapshot + `health_updated`
+  // frames; finished sessions (no socket) fetch it once over REST.
+  let health = $state<SessionHealthPayload | null>(null);
+  let healthFetched = $state(false);
+  $effect(() => {
+    if (!browser || phase !== "finished" || healthFetched || health) return;
+    healthFetched = true;
+    getSessionHealth(data.session.id)
+      .then((h) => {
+        if (!health && Object.keys(h.players).length > 0) health = h;
+      })
+      .catch(() => {});
+  });
 
   // Statistics block data: the block renders only for a finished session
   // (final probe/task/token counts are meaningless mid-run), so fetch only
@@ -179,6 +193,7 @@
     userPlayers = wsClient.userPlayers;
     activityLog = wsClient.activityLog;
     sessionStartedAt = wsClient.startedAt;
+    if (wsClient.health) health = wsClient.health;
 
     const wp = wsClient.phase;
     if (wp === "finished") {
@@ -214,21 +229,6 @@
     phase === "lobby"
       ? countdownDigits(countdownSecs ?? 0)
       : countdownDigits(runningCountdownSecs ?? 0),
-  );
-
-  const ownPlayerIds = $derived(new Set(userPlayers.map((p) => p.player_id)));
-
-  /**
-   * Map user_id → player_id for own players.
-   * Needed to match unscored leaderboard entries, which use participant.user_id
-   * as their synthetic player_id instead of the actual player UUID.
-   */
-  const ownUserIdToPlayerId = $derived(
-    new Map(
-      userPlayers
-        .filter((p) => p.user_id !== null)
-        .map((p) => [p.user_id as string, p.player_id]),
-    ),
   );
 
   /**
@@ -296,6 +296,8 @@
         username: member?.username ?? null,
         // Absent on list paths / pre-upgrade servers — the row renders no badge.
         completion_status: member?.completion_status ?? null,
+        // Latest code-health score, when the session tracks health.
+        health: indicatorFor(health, member?.player_id ?? entry.player_id),
       };
     }),
   );
@@ -449,6 +451,7 @@
       avatar_url: reportPlayerById.get(e.player_id)?.avatar_url ?? null,
       fingerprint: null as string | null,
       username: reportPlayerById.get(e.player_id)?.username ?? null,
+      health: indicatorFor(health, e.player_id),
     })),
   );
 
@@ -606,7 +609,7 @@
         <!-- Score over time chart (flex-grow) -->
         <div class="min-w-0 flex-grow overflow-hidden rounded-[8px] bg-white px-[24px] py-[20px]">
           <h2 class="mb-[16px] font-heading text-[16px] font-bold" style="color: #363636;">Score over time</h2>
-          <ScoreChart {phase} {leaderboard} {reportMembers} {sessionReport} scoreHistory={effectiveScoreHistory} />
+          <ScoreChart {phase} {leaderboard} {reportMembers} scoreHistory={effectiveScoreHistory} {health} />
         </div>
 
         <!-- Leaderboard (fixed 300px on large screens) -->
@@ -698,7 +701,7 @@
         <!-- Score over time chart -->
         <div class="min-w-0 flex-grow overflow-hidden rounded-[8px] bg-white px-[24px] py-[20px]">
           <h2 class="mb-[16px] font-heading text-[16px] font-bold" style="color: #363636;">Score over time</h2>
-          <ScoreChart {phase} {leaderboard} {reportMembers} {sessionReport} scoreHistory={effectiveScoreHistory} revealUntil={replay.revealUntil} />
+          <ScoreChart {phase} {leaderboard} {reportMembers} scoreHistory={effectiveScoreHistory} {health} revealUntil={replay.revealUntil} />
         </div>
 
         <!-- Final leaderboard -->

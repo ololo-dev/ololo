@@ -100,6 +100,19 @@ pub enum PlayerAgentFrame {
         /// Defaults to `minijinja` for back-compat with old game-servers.
         #[serde(default)]
         validation_kind: ValidationKind,
+        /// 1-based position of this probe among the player's probes in the
+        /// session — the `#<seq>` of the probe commit and the health
+        /// checkpoint. 0 from pre-upgrade game-servers, which never
+        /// numbered probes (the agent then counts for itself).
+        #[serde(default)]
+        probe_seq: u32,
+        /// Present when the server tracks code health for this session: the
+        /// agent commits the tree, scores it with `ololo-health` and sends a
+        /// `HealthReport`. Absent (health off, or a pre-upgrade server) means
+        /// the agent neither commits per probe nor reports — and never sets
+        /// `TestResult.commit`, which a pre-upgrade server would reject.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        health: Option<super::HealthProbeConfig>,
     },
     /// Session has ended — or, for one specific reason, this player is done
     /// while the session keeps running. `reason` values:
@@ -253,7 +266,20 @@ pub enum PlayerAgentClientFrame {
         /// unknown fields) still parses the frames of a probe that ran.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
+        /// The `probe(<task>)` snapshot commit the agent made when this
+        /// probe arrived — the tree the probe ran against and the health
+        /// checkpoint's key. Only set when the `TestPush` carried `health`:
+        /// a server that did not ask (pre-upgrade, or health off) rejects
+        /// unknown fields, and an unparseable answer would fail the probe.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        commit: Option<String>,
     },
+    /// The agent's code-health analysis of the tree it committed for a
+    /// probe (see `super::HealthReportPayload`). Its own frame, sent when
+    /// the analysis ends — never inside the probe answer, so it can never
+    /// delay it; sent on failure and timeout too, never skipped silently.
+    /// Pre-upgrade servers fail to parse the variant and drop the frame.
+    HealthReport(Box<super::HealthReportPayload>),
     /// The player edited a memory source file (`AGENTS.md` / `README.md`)
     /// and the agent has pushed a commit carrying it.
     ///

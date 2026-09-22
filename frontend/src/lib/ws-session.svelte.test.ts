@@ -565,4 +565,103 @@ describe("WsSessionClient", () => {
     const verdicts = c.activityLog.filter((e) => e.kind === "task_scored" && e.judge_name);
     expect(verdicts.map((v) => v.task_id)).toEqual(["t0", "t1", "t2"]);
   });
+
+  // ── Code health ──────────────────────────────────────────────────────────
+
+  const CHECKPOINT = {
+    id: "c1",
+    kind: "probe",
+    probe_id: "pr1",
+    probe_seq: 1,
+    task_id: "t1",
+    task_title: "Widget",
+    commit: "abc",
+    created_at: "2026-09-22T10:00:00Z",
+    t: 5,
+    server_status: "pending",
+    flags: {},
+    score: 74.3,
+    level: "green",
+  };
+
+  it("seeds the health history from the snapshot and upserts live checkpoints by id", () => {
+    const c = client();
+    captured[0].onMessage(
+      JSON.stringify({
+        type: "session_snapshot",
+        session_id: "s",
+        phase: "running",
+        version: 1,
+        participants: [],
+        leaderboard: [],
+        started_at: null,
+        health: {
+          thresholds: { green_min: 70, amber_min: 55 },
+          players: { p1: { checkpoints: [CHECKPOINT], task_ranges: [] } },
+        },
+      }),
+    );
+    expect(c.health?.players.p1.checkpoints.map((x) => x.id)).toEqual(["c1"]);
+    expect(c.protocolMismatch).toBe(false);
+
+    // The verification replaces the pending point; a new probe appends in
+    // time order; another player gets their own entry. Versions never gate
+    // these frames — they are events, like task_started.
+    captured[0].onMessage(
+      JSON.stringify({
+        type: "health_updated",
+        player_id: "p1",
+        checkpoint: { ...CHECKPOINT, server_status: "ok", score: 74.0 },
+        version: 0,
+      }),
+    );
+    captured[0].onMessage(
+      JSON.stringify({
+        type: "health_updated",
+        player_id: "p1",
+        checkpoint: { ...CHECKPOINT, id: "c0", probe_seq: 0, t: 2, score: 90 },
+        version: 0,
+      }),
+    );
+    captured[0].onMessage(
+      JSON.stringify({
+        type: "health_updated",
+        player_id: "p2",
+        checkpoint: { ...CHECKPOINT, id: "c9", t: 7 },
+        version: 0,
+      }),
+    );
+    const p1 = c.health!.players.p1.checkpoints;
+    expect(p1.map((x) => x.id)).toEqual(["c0", "c1"]);
+    expect(p1[1].server_status).toBe("ok");
+    expect(p1[1].score).toBe(74.0);
+    expect(c.health!.players.p2.checkpoints.map((x) => x.id)).toEqual(["c9"]);
+    expect(c.protocolMismatch).toBe(false);
+  });
+
+  it("a snapshot without health leaves the history null", () => {
+    const c = client();
+    captured[0].onMessage(
+      JSON.stringify({
+        type: "session_snapshot",
+        session_id: "s",
+        phase: "running",
+        version: 1,
+        participants: [],
+        leaderboard: [],
+        started_at: null,
+      }),
+    );
+    expect(c.health).toBeNull();
+    // A live checkpoint before any snapshot history starts one.
+    captured[0].onMessage(
+      JSON.stringify({
+        type: "health_updated",
+        player_id: "p1",
+        checkpoint: CHECKPOINT,
+        version: 2,
+      }),
+    );
+    expect(c.health?.players.p1.checkpoints.length).toBe(1);
+  });
 });

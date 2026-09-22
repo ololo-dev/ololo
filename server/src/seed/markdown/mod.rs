@@ -261,6 +261,7 @@ pub fn load_markdown_project(dir: &Path) -> Result<ExportEnvelope, String> {
                 fail: p.fail,
                 no_response: p.no_response,
                 completion_bonus: p.completion_bonus,
+                health: p.health,
             }),
             intervals: task_fm.intervals.map(|i| ExportTaskIntervals {
                 deadline_secs: i.deadline_secs,

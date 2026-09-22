@@ -126,6 +126,7 @@ pub fn build_router(state: AppState) -> Router {
             "/api/sessions/:id/activity",
             get(api::sessions::get_activity),
         )
+        .route("/api/sessions/:id/health", get(api::sessions::get_health))
         .route(
             "/api/sessions/:id/player-stats",
             get(api::sessions::get_player_stats),

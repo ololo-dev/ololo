@@ -147,6 +147,7 @@ fn event_variant(event: &ZmqEvent) -> &'static str {
         ZmqEvent::EvaluationReady { .. } => "evaluation_ready",
         ZmqEvent::SessionAwarded { .. } => "session_awarded",
         ZmqEvent::SessionSettled { .. } => "session_settled",
+        ZmqEvent::HealthUpdated { .. } => "health_updated",
     }
 }
 
@@ -485,6 +486,20 @@ pub async fn route_event(state: &crate::state::AppState, event: &ZmqEvent) -> an
                 duration_ms: *duration_ms,
             }));
     }
+    // A health checkpoint reaches the player's own page the same way, with
+    // or without a dashboard open.
+    if let ZmqEvent::HealthUpdated {
+        player_id,
+        checkpoint,
+        ..
+    } = event
+        && let Some(ch) = state.player_registry.get(player_id)
+    {
+        use arena_core::protocol::PlayerFrame;
+        let _ = ch.sender.send(PlayerFrame::HealthUpdated {
+            checkpoint: checkpoint.clone(),
+        });
+    }
     // Score-bearing events must refresh the server's cached leaderboard —
     // the probe-driven poll task only recomputes when a probe resolves, so
     // judge verdicts (and completion bonuses) landing after the last probe
@@ -721,6 +736,26 @@ pub async fn route_event(state: &crate::state::AppState, event: &ZmqEvent) -> an
                         version,
                     };
                     let _ = entry.tx.send(frame);
+                }
+                ZmqEvent::HealthUpdated {
+                    player_id,
+                    checkpoint,
+                    ..
+                } => {
+                    use arena_core::protocol::ArenaFrame;
+                    // Re-stamped with the server's counter — see SessionTimer.
+                    let version = match entry.cache.write() {
+                        Ok(mut cache) => {
+                            cache.version = cache.version.saturating_add(1);
+                            cache.version
+                        }
+                        Err(_) => return Ok(()),
+                    };
+                    let _ = entry.tx.send(ArenaFrame::HealthUpdated {
+                        player_id: *player_id,
+                        checkpoint: checkpoint.clone(),
+                        version,
+                    });
                 }
                 _ => {}
             }

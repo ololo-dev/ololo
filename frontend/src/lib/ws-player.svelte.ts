@@ -12,6 +12,7 @@ import {
   createWsConnection,
   type WsConnection,
 } from "$lib/ws/connection.svelte.js";
+import { upsertCheckpoint } from "$lib/session-health";
 
 const GAP_THRESHOLD = 10;
 
@@ -272,6 +273,22 @@ export class WsPlayerClient {
         const { type: _, ...payload } = frame;
         this._seedJudgeStatuses([payload as PlayerJudgeStatusPayload]);
         if (frame.type === "judge_failed") this._scheduleRefresh(400);
+        break;
+      }
+      case "health_updated": {
+        // The snapshot carries the history narrowed to this player; upsert
+        // the checkpoint by id into it. Keyed by the snapshot's player id —
+        // the route param may be a username.
+        if (this.snapshot) {
+          this.snapshot = {
+            ...this.snapshot,
+            health: upsertCheckpoint(
+              this.snapshot.health ?? null,
+              this.snapshot.player_id,
+              frame.checkpoint,
+            ),
+          };
+        }
         break;
       }
       case "artifact_awaited":

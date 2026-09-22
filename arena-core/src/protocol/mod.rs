@@ -8,6 +8,7 @@
 
 pub mod agent;
 pub mod arena_frame;
+pub mod health;
 pub mod ids;
 pub mod player;
 pub mod session;
@@ -17,6 +18,7 @@ pub mod zmq;
 // Single import surface: `use arena_core::protocol::*;` keeps working.
 pub use agent::*;
 pub use arena_frame::*;
+pub use health::*;
 pub use ids::*;
 pub use player::*;
 pub use session::*;

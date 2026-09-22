@@ -37,13 +37,16 @@ pub fn provision_player_repo(
     player_id: Uuid,
 ) -> Result<PathBuf, GitStoreError> {
     let repo = player_repo_path(base, session_id, player_id);
+    let git_bin = which::which("git").map_err(|e| GitStoreError::GitNotFound(e.to_string()))?;
     if repo.join("HEAD").exists() {
+        // Repos provisioned before the line-of-record rule get it on the
+        // next join; setting a config key is idempotent.
+        enforce_linear_history(&git_bin, &repo)?;
         return Ok(repo);
     }
     std::fs::create_dir_all(repo.parent().ok_or(GitStoreError::NoBaseDir)?)?;
 
-    let git_bin = which::which("git").map_err(|e| GitStoreError::GitNotFound(e.to_string()))?;
-    let out = std::process::Command::new(git_bin)
+    let out = std::process::Command::new(&git_bin)
         .arg("init")
         .arg("--bare")
         .arg("--initial-branch=main")
@@ -55,7 +58,35 @@ pub fn provision_player_repo(
             stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
         });
     }
+    enforce_linear_history(&git_bin, &repo)?;
     Ok(repo)
+}
+
+/// The player's repo is the line of record: a push that cannot fast-forward
+/// (a second client, a re-initialised local snapshot) is refused rather
+/// than allowed to replace history the game already scored, and `main`
+/// cannot be deleted. The ololo client resyncs to the served line when its
+/// push is rejected (`SnapshotRepo::recover_from_remote`).
+fn enforce_linear_history(git_bin: &Path, repo: &Path) -> Result<(), GitStoreError> {
+    for (key, value) in [
+        ("receive.denyNonFastForwards", "true"),
+        ("receive.denyDeletes", "true"),
+    ] {
+        let out = std::process::Command::new(git_bin)
+            .arg("-C")
+            .arg(repo)
+            .arg("config")
+            .arg(key)
+            .arg(value)
+            .output()?;
+        if !out.status.success() {
+            return Err(GitStoreError::GitInitFailed {
+                code: out.status.code().unwrap_or(-1),
+                stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+            });
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -93,5 +124,44 @@ mod tests {
         let first = provision_player_repo(&base, sid, pid).expect("first");
         let second = provision_player_repo(&base, sid, pid).expect("second");
         assert_eq!(first, second, "idempotent returns same path");
+    }
+
+    fn config_value(repo: &Path, key: &str) -> String {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .arg("config")
+            .arg("--get")
+            .arg(key)
+            .output()
+            .expect("git config");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    /// The repo refuses history rewrites and branch deletion — and a repo
+    /// provisioned before the rule picks it up on the next provisioning.
+    #[test]
+    fn provision_makes_the_repo_fast_forward_only() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let base = tmp.path().join("repos");
+        let sid = Uuid::new_v4();
+        let pid = Uuid::new_v4();
+        let repo = provision_player_repo(&base, sid, pid).expect("provision");
+        assert_eq!(config_value(&repo, "receive.denyNonFastForwards"), "true");
+        assert_eq!(config_value(&repo, "receive.denyDeletes"), "true");
+
+        // Simulate a pre-rule repo: drop the keys, provision again.
+        for key in ["receive.denyNonFastForwards", "receive.denyDeletes"] {
+            let _ = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .arg("config")
+                .arg("--unset")
+                .arg(key)
+                .output();
+        }
+        assert_eq!(config_value(&repo, "receive.denyNonFastForwards"), "");
+        provision_player_repo(&base, sid, pid).expect("re-provision");
+        assert_eq!(config_value(&repo, "receive.denyNonFastForwards"), "true");
     }
 }

@@ -80,6 +80,7 @@ async fn import_inherits_project_default_for_omitted_task_points() {
                 fail: -1,
                 no_response: -2,
                 completion_bonus: 7,
+                health: 0,
             },
             intervals: ExportIntervals {
                 deadline_secs: 60,
@@ -162,6 +163,7 @@ async fn import_task_override_beats_project_default() {
                 fail: -1,
                 no_response: -2,
                 completion_bonus: 7,
+                health: 0,
             },
             intervals: ExportIntervals {
                 deadline_secs: 60,
@@ -185,6 +187,7 @@ async fn import_task_override_beats_project_default() {
                 fail: None,
                 no_response: None,
                 completion_bonus: None,
+                health: None,
             }),
             intervals: Some(ExportTaskIntervals {
                 deadline_secs: Some(60),
@@ -243,6 +246,7 @@ async fn import_rolls_back_on_bad_ordinal() {
                 fail: -5,
                 no_response: -10,
                 completion_bonus: 10,
+                health: 0,
             },
             intervals: ExportIntervals {
                 deadline_secs: 60,
@@ -324,6 +328,7 @@ async fn import_rejects_unsupported_schema_version() {
                 fail: -5,
                 no_response: -10,
                 completion_bonus: 10,
+                health: 0,
             },
             intervals: ExportIntervals {
                 deadline_secs: 60,

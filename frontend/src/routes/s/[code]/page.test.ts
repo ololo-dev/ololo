@@ -13,6 +13,7 @@ vi.mock("$lib/api", () => ({
   },
   patchSession: (...args: unknown[]) => patchSessionMock(...args),
   getSessionPlayerStats: async () => ({ total_tasks: 0, players: [] }),
+  getSessionHealth: async () => ({ thresholds: { green_min: 70, amber_min: 55 }, players: {} }),
 }));
 
 vi.mock("$app/navigation", () => ({

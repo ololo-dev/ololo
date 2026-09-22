@@ -20,6 +20,7 @@ import type {
   PublicUserProfile,
   PublicSessionsResponse,
 } from "./types";
+import type { SessionHealthPayload } from "$lib/types/arena";
 
 export function getMe(opts: { fetch?: FetchLike } = {}) {
   return request<Me>("/api/users/me", { fetch: opts.fetch });
@@ -27,6 +28,14 @@ export function getMe(opts: { fetch?: FetchLike } = {}) {
 
 export function getSessionReport(sessionId: string, opts: { fetch?: FetchLike } = {}) {
   return request<SessionReportResponse>(`/api/sessions/${encodeURIComponent(sessionId)}/report`, {
+    fetch: opts.fetch,
+  });
+}
+
+/** The session's code-health history — the same payload the WS snapshot
+ *  carries, for finished sessions with no live socket. */
+export function getSessionHealth(sessionId: string, opts: { fetch?: FetchLike } = {}) {
+  return request<SessionHealthPayload>(`/api/sessions/${encodeURIComponent(sessionId)}/health`, {
     fetch: opts.fetch,
   });
 }

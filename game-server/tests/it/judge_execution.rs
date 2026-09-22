@@ -100,6 +100,7 @@ async fn insert_project(db: &DatabaseConnection, owner_id: Uuid) -> Uuid {
         default_value_points: Set(10),
         default_fail_points: Set(-5),
         default_no_response_points: Set(-10),
+        default_health_points: sea_orm::ActiveValue::NotSet,
         default_completion_bonus_points: Set(10),
         default_deadline_secs: Set(60),
         default_session_duration_secs: Set(3600),
@@ -181,6 +182,7 @@ async fn insert_chain(db: &DatabaseConnection, project_id: Uuid) -> (Uuid, Uuid,
         max_interval_secs: Set(Some(300)),
         fail_points: Set(0),
         no_response_points: Set(0),
+        health_points: sea_orm::ActiveValue::NotSet,
         completion_bonus_points: Set(0),
         evaluation: Set(None),
     }
@@ -1304,6 +1306,7 @@ async fn insert_exec_task_judge(
         max_interval_secs: Set(Some(300)),
         fail_points: Set(0),
         no_response_points: Set(0),
+        health_points: sea_orm::ActiveValue::NotSet,
         completion_bonus_points: Set(0),
         evaluation: Set(None),
     }
@@ -1803,6 +1806,7 @@ async fn per_task_trigger_skips_session_scoped_judges() {
         max_interval_secs: Set(Some(300)),
         fail_points: Set(0),
         no_response_points: Set(0),
+        health_points: sea_orm::ActiveValue::NotSet,
         completion_bonus_points: Set(0),
         evaluation: Set(None),
     }
@@ -1904,6 +1908,7 @@ async fn session_judge_trigger_always_leaves_terminal_rows() {
             max_interval_secs: Set(Some(300)),
             fail_points: Set(0),
             no_response_points: Set(0),
+            health_points: sea_orm::ActiveValue::NotSet,
             completion_bonus_points: Set(0),
             evaluation: Set(None),
         }
@@ -2051,6 +2056,7 @@ async fn the_reporter_runs_for_a_player_who_pushed_nothing() {
         max_interval_secs: Set(Some(300)),
         fail_points: Set(0),
         no_response_points: Set(0),
+        health_points: sea_orm::ActiveValue::NotSet,
         completion_bonus_points: Set(0),
         evaluation: Set(None),
     }
@@ -2169,6 +2175,7 @@ async fn pending_task_judges_gate_awards_on_the_all_done_path() {
         max_interval_secs: Set(Some(300)),
         fail_points: Set(0),
         no_response_points: Set(0),
+        health_points: sea_orm::ActiveValue::NotSet,
         completion_bonus_points: Set(0),
         evaluation: Set(None),
     }
@@ -2381,6 +2388,7 @@ async fn extra_task_for_judge(
         max_interval_secs: Set(Some(300)),
         fail_points: Set(0),
         no_response_points: Set(0),
+        health_points: sea_orm::ActiveValue::NotSet,
         completion_bonus_points: Set(0),
         evaluation: Set(None),
     }
@@ -2692,6 +2700,7 @@ async fn the_reporter_waits_until_the_panel_is_terminal() {
         max_interval_secs: Set(Some(300)),
         fail_points: Set(0),
         no_response_points: Set(0),
+        health_points: sea_orm::ActiveValue::NotSet,
         completion_bonus_points: Set(0),
         evaluation: Set(None),
     }
@@ -2885,6 +2894,7 @@ async fn the_reporter_waits_until_the_panel_is_terminal() {
         max_interval_secs: Set(Some(300)),
         fail_points: Set(0),
         no_response_points: Set(0),
+        health_points: sea_orm::ActiveValue::NotSet,
         completion_bonus_points: Set(0),
         evaluation: Set(None),
     }

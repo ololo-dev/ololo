@@ -167,6 +167,8 @@ pub(crate) async fn db_poll_task(
                     scheduler_state: sched_state,
                     total_points: 0,
                     bonus_points: 0,
+                    health_points: None,
+                    health_note: None,
                 };
                 let payload = TaskRevealedPayload {
                     seq: 0,

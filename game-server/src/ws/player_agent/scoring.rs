@@ -35,6 +35,7 @@ pub async fn insert_task_result(
         answer: Set(answer.to_string()),
         created_at: Set(Utc::now()),
         point_delta: Set(point_delta),
+        kind: Set(arena_core::entities::task_results::KIND_PROBE.to_string()),
         is_bonus: Set(false),
     };
     if let Err(e) = am.insert(&state.db).await {

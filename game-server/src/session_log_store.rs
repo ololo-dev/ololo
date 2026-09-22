@@ -292,7 +292,8 @@ fn player_id_of(event: &ZmqEvent) -> Option<Uuid> {
         | ZmqEvent::ArtifactReceived { player_id, .. }
         | ZmqEvent::ArtifactAwaited { player_id, .. }
         | ZmqEvent::EvaluationReady { player_id, .. }
-        | ZmqEvent::SessionReportReady { player_id, .. } => Some(*player_id),
+        | ZmqEvent::SessionReportReady { player_id, .. }
+        | ZmqEvent::HealthUpdated { player_id, .. } => Some(*player_id),
     }
 }
 

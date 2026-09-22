@@ -79,6 +79,7 @@ pub async fn get_list(
                 fail: row.fail_points,
                 no_response: row.no_response_points,
                 completion_bonus: row.completion_bonus_points,
+                health: row.health_points,
             },
             intervals: resolve_intervals(
                 row.deadline_secs,
@@ -138,6 +139,8 @@ pub struct TaskPreviewItem {
     pub open_ended: bool,
     /// Extra points for completing every check of the task.
     pub completion_bonus: i32,
+    /// Points the code health of the task's final tree can earn (0 = none).
+    pub health_points: i32,
     /// Judges attached to this task, in attachment order.
     pub judges: Vec<TaskPreviewJudge>,
 }
@@ -235,6 +238,7 @@ pub async fn get_preview(
             points: row.point_value,
             open_ended: row.evaluation.is_some(),
             completion_bonus: row.completion_bonus_points,
+            health_points: row.health_points,
             judges: judges_by_task.remove(&row.id).unwrap_or_default(),
             description: row.content,
         })

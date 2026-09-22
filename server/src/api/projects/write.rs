@@ -96,6 +96,7 @@ pub async fn post_create(
         default_value_points: Set(pts.value.unwrap_or(10)),
         default_fail_points: Set(pts.fail.unwrap_or(-5)),
         default_no_response_points: Set(pts.no_response.unwrap_or(-10)),
+        default_health_points: Set(pts.health.unwrap_or(0).max(0)),
         default_completion_bonus_points: Set(pts.completion_bonus.unwrap_or(10)),
         default_deadline_secs: Set(resolved_intervals.deadline_secs),
         default_session_duration_secs: Set(session_duration_secs),
@@ -250,6 +251,9 @@ pub async fn patch_one(
         }
         if let Some(cb) = pts.completion_bonus {
             am.default_completion_bonus_points = Set(cb);
+        }
+        if let Some(h) = pts.health {
+            am.default_health_points = Set(h.max(0));
         }
     }
 

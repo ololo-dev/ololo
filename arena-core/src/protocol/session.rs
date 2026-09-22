@@ -116,6 +116,11 @@ pub struct SessionSnapshotPayload {
     pub activity: Option<Vec<SessionActivityEvent>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub score_history: Option<Vec<ScoreHistorySample>>,
+    /// Every participant's code-health history, so a late-joining viewer
+    /// draws the health line at once. `None` when the session does not
+    /// track health, and from pre-upgrade servers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health: Option<super::SessionHealthPayload>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

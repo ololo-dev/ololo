@@ -6,12 +6,16 @@ members = [
     "server",
     "server/migration",
     "ololo",
+    "ololo-health",
     "agent-tokens",
 ]
 
 [workspace.package]
 edition = "2024"
-rust-version = "1.93.0"
+# The jscpd crates (`cpd-core`/`cpd-finder`, pulled in by ololo-health)
+# declare rust-version 1.96; cargo refuses to build them on anything older.
+# Keep this in step with .github/workflows/ci.yml and both Dockerfiles.
+rust-version = "1.96.0"
 license = "Apache-2.0"
 authors = ["Andrey Kucherenko <kucherenko.andrey@gmail.com>"]
 

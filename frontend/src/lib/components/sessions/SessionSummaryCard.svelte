@@ -79,6 +79,34 @@
     {/if}
   </div>
 
+  {#if summary.healthNotes.length > 0}
+    <!-- The code-health bonus, one line per task that pays it: what the
+         final tree scored and what that earned — or why it earned nothing.
+         A score change is never reasonless. -->
+    {@const earned = summary.healthPoints > 0}
+    <div
+      class="mt-3 rounded-[8px] px-3 py-2 {earned ? 'bg-green-50' : 'bg-amber-50'}"
+      data-testid="{testid}-health"
+    >
+      <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span class="text-[10px] font-bold uppercase tracking-wider {earned ? 'text-green-700' : 'text-amber-700'}">Code health</span>
+        <span class="min-w-0 flex-1 text-[12px] {earned ? 'text-green-800' : 'text-amber-800'}">
+          {summary.healthNotes.length === 1 ? summary.healthNotes[0].note : `${summary.healthNotes.length} tasks scored on the health of their final tree`}
+        </span>
+        <span class="shrink-0 text-[14px] font-bold tabular-nums {earned ? 'text-green-700' : 'text-amber-700'}">
+          {pointsChip(summary.healthPoints)} pts
+        </span>
+      </div>
+      {#if summary.healthNotes.length > 1}
+        <ul class="mt-1 space-y-0.5 text-[11px] {earned ? 'text-green-800/80' : 'text-amber-800/80'}">
+          {#each summary.healthNotes as n (n.ordinal)}
+            <li><span class="font-semibold">{n.title}</span>: {n.note}</li>
+          {/each}
+        </ul>
+      {/if}
+    </div>
+  {/if}
+
   {#if similarityAdjustment}
     <!-- The copy/paste verdict, source named: a score change must
          never be reasonless (and a clean check deserves its tick). -->

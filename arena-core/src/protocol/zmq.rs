@@ -208,6 +208,18 @@ pub enum ZmqEvent {
         session_id: uuid::Uuid,
         timestamp: chrono::DateTime<chrono::Utc>,
     },
+    /// game-server -> server: a player's code-health checkpoint was created
+    /// or its server-side verification settled. Bridged to
+    /// `ArenaFrame::HealthUpdated` (dashboard) and `PlayerFrame::HealthUpdated`
+    /// (player page). Published once when the client's report lands (server
+    /// status `pending`) and again when the server has scored the commit.
+    HealthUpdated {
+        join_code: String,
+        player_id: uuid::Uuid,
+        checkpoint: Box<super::HealthCheckpointView>,
+        timestamp: chrono::DateTime<chrono::Utc>,
+        version: u64,
+    },
 }
 
 impl ZmqEvent {
@@ -231,6 +243,7 @@ impl ZmqEvent {
             ZmqEvent::SessionReportReady { join_code, .. } => join_code,
             ZmqEvent::SessionAwarded { join_code, .. } => join_code,
             ZmqEvent::SessionSettled { join_code, .. } => join_code,
+            ZmqEvent::HealthUpdated { join_code, .. } => join_code,
         }
     }
 }

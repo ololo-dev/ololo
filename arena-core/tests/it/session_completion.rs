@@ -34,6 +34,7 @@ async fn insert_task(db: &DatabaseConnection, project_id: Uuid, ordinal: i32) ->
         max_interval_secs: Set(None),
         fail_points: Set(-5),
         no_response_points: Set(-10),
+        health_points: sea_orm::ActiveValue::NotSet,
         completion_bonus_points: Set(10),
         evaluation: Set(None),
     }

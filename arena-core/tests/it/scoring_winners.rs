@@ -70,6 +70,7 @@ async fn score(db: &sea_orm::DatabaseConnection, session_id: Uuid, player_id: Uu
         point_delta: Set(points),
         answer: Set(String::new()),
         created_at: Set(Utc::now()),
+        kind: Set(arena_core::entities::task_results::KIND_PROBE.to_string()),
         is_bonus: Set(false),
     }
     .insert(db)

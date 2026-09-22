@@ -700,6 +700,7 @@ async fn apply_penalty(
         answer: Set(answer),
         created_at: Set(chrono::Utc::now()),
         point_delta: Set(penalty as i32),
+        kind: Set(arena_core::entities::task_results::KIND_SIMILARITY_PENALTY.to_string()),
         is_bonus: Set(true),
     }
     .insert(db)

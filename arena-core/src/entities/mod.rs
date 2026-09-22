@@ -7,6 +7,7 @@ pub mod categories;
 pub mod cli_tokens;
 pub mod email_templates;
 pub mod game_servers;
+pub mod health_checkpoints;
 pub mod judge_results;
 pub mod judge_run_ledger;
 pub mod judge_run_transcripts;

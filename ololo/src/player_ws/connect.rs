@@ -20,7 +20,7 @@ pub async fn resolve_session(
     base_url: &str,
     join_code: &str,
     pat: &str,
-) -> Result<(String, Option<String>), ResolveError> {
+) -> Result<(String, Option<String>, Option<String>), ResolveError> {
     let http_base = util::http_base_url(base_url);
 
     let url = format!("{http_base}/api/sessions/resolve?join_code={join_code}");
@@ -39,7 +39,11 @@ pub async fn resolve_session(
             .json()
             .await
             .map_err(|e| ResolveError::Fatal(format!("parsing resolve response: {e}")))?;
-        Ok((body.game_server_url, Some(body.player_id)))
+        Ok((
+            body.game_server_url,
+            Some(body.player_id),
+            Some(body.session_id),
+        ))
     } else if status == reqwest::StatusCode::SERVICE_UNAVAILABLE {
         Err(ResolveError::Retry(
             "no game server assigned yet".to_string(),
@@ -47,7 +51,7 @@ pub async fn resolve_session(
     } else if status == reqwest::StatusCode::NOT_FOUND {
         tracing::warn!("resolve endpoint returned 404, falling back to direct connection");
         let ws_base = util::ws_base_url(base_url);
-        Ok((ws_base, None))
+        Ok((ws_base, None, None))
     } else if status == reqwest::StatusCode::UNAUTHORIZED
         || status == reqwest::StatusCode::FORBIDDEN
     {
@@ -75,7 +79,7 @@ pub async fn run_connect_loop(
     viewer_player_id: Option<Uuid>,
     backoff_ms: &mut u64,
     max_attempts: Option<u64>,
-    memory: &mut Option<super::MemoryChannel>,
+    memory: &mut Option<super::SnapshotChannel>,
 ) -> bool {
     let mut attempts: u64 = 0;
     loop {

@@ -257,6 +257,15 @@ pub enum ArenaFrame {
         timestamp: chrono::DateTime<chrono::Utc>,
         version: u64,
     },
+    /// Server -> dashboard: a participant's code-health checkpoint landed
+    /// or its verification settled — one point of the health line on the
+    /// score chart. Keyed by `checkpoint.id`: the second frame for a
+    /// checkpoint replaces the first.
+    HealthUpdated {
+        player_id: uuid::Uuid,
+        checkpoint: Box<super::HealthCheckpointView>,
+        version: u64,
+    },
     ProjectSessionsSnapshot {
         project_id: uuid::Uuid,
         sessions: Vec<ProjectSessionSummary>,

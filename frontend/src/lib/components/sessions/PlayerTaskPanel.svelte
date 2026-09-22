@@ -100,7 +100,7 @@
   let prevJudges: number | null = null;
   let prevStats: number | null = null;
   $effect(() => {
-    const v = `${task.total_points ?? 0}:${task.bonus_points ?? 0}`;
+    const v = `${task.total_points ?? 0}:${task.bonus_points ?? 0}:${task.health_points ?? 0}`;
     if (prevPoints !== null && v !== prevPoints) pointsPulse++;
     prevPoints = v;
   });
@@ -352,6 +352,15 @@
             data-testid="task-bonus-points-{task.ordinal}"
             class="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold tabular-nums text-amber-700 {pointsPulse > 0 ? 'chip-pulse' : ''}"
           >bonus {task.bonus_points > 0 ? '+' : ''}{task.bonus_points}</span>
+        {/key}
+      {/if}
+      {#if task.health_points != null}
+        {#key pointsPulse}
+          <span
+            data-testid="task-health-points-{task.ordinal}"
+            class="rounded-full px-2 py-0.5 text-[10px] font-semibold tabular-nums {task.health_points > 0 ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'} {pointsPulse > 0 ? 'chip-pulse' : ''}"
+            title={task.health_note ?? undefined}
+          >health {task.health_points > 0 ? '+' : ''}{task.health_points}</span>
         {/key}
       {/if}
       {#if task.total_points != null}

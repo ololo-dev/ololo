@@ -235,6 +235,7 @@ fn session_snapshot_paused_phase_roundtrip() {
         timeline: None,
         activity: None,
         score_history: None,
+        health: None,
     };
     let frame = ArenaFrame::SessionSnapshot(payload);
     let json = serde_json::to_string(&frame).unwrap();
@@ -341,6 +342,7 @@ fn session_snapshot_score_history_roundtrip() {
         timeline: None,
         activity: None,
         score_history: Some(samples.clone()),
+        health: None,
     };
     let frame = ArenaFrame::SessionSnapshot(payload);
     let json = serde_json::to_string(&frame).unwrap();

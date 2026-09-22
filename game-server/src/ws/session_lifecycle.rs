@@ -120,6 +120,7 @@ async fn handle_cli_socket(
             timeline: None,
             activity: None,
             score_history: None,
+            health: None,
         }
     };
     if let Ok(json) = serde_json::to_string(&ArenaFrame::SessionSnapshot(cache)) {

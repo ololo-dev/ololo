@@ -516,6 +516,7 @@ pub async fn award_completion_bonus(
         answer: Set(String::new()),
         created_at: Set(chrono::Utc::now()),
         point_delta: Set(completion_bonus_points),
+        kind: Set(crate::entities::task_results::KIND_COMPLETION_BONUS.to_string()),
         is_bonus: Set(true),
     };
     // The SELECT above is a fast path; the ux_task_results_completion_bonus

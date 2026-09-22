@@ -150,6 +150,16 @@ async fn main() -> Result<()> {
         }
     });
 
+    // Health checkpoints left `pending` by a restart are verified again.
+    let health_state = state.clone();
+    tokio::spawn(async move {
+        match game_server::health::resume_pending(health_state).await {
+            Ok(n) if n > 0 => tracing::info!("health: re-driving {n} pending checkpoint(s)"),
+            Ok(_) => {}
+            Err(e) => tracing::error!("health recovery sweep failed: {e}"),
+        }
+    });
+
     // Deploys/crashes during the post-expiry judge-settle window lose the
     // in-memory settle task; sweep recently finished sessions and re-announce.
     let settle_state = state.clone();

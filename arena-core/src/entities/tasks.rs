@@ -35,6 +35,9 @@ pub struct Model {
     pub no_response_points: i32,
     /// Bonus points awarded when a player completes all tests for this task.
     pub completion_bonus_points: i32,
+    /// Points the code health of the task's final tree can earn (a green
+    /// tree earns all of them, a red one none). 0 = no health bonus.
+    pub health_points: i32,
     /// Open-ended evaluation contract (`crate::evaluation::EvaluationContract`).
     /// NULL = classic probe-verified task; nothing about it changes.
     #[sea_orm(column_type = "Json", nullable)]

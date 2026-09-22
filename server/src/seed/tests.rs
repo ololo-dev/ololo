@@ -72,6 +72,7 @@ fn sample_envelope(slug: &str) -> ExportEnvelope {
                 fail: -5,
                 no_response: -10,
                 completion_bonus: 10,
+                health: 0,
             },
             intervals: crate::api::intervals::ExportIntervals {
                 deadline_secs: 60,
@@ -129,6 +130,7 @@ async fn inserts_project_and_skips_on_rerun() {
                 fail: -5,
                 no_response: -10,
                 completion_bonus: 10,
+                health: 0,
             },
             intervals: crate::api::intervals::ExportIntervals {
                 deadline_secs: 60,

@@ -110,6 +110,14 @@ pub struct PlayerTaskSummaryEntry {
     /// `is_bonus`), surfaced separately so the UI can label it.
     #[serde(default)]
     pub bonus_points: i64,
+    /// Health-bonus portion of `total_points` (the `health_bonus` row),
+    /// its own line item. `None` when the task pays no health points or the
+    /// task has not closed yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health_points: Option<i64>,
+    /// Why the health bonus is what it is — the row's note.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health_note: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -193,6 +201,12 @@ pub struct PlayerSnapshotPayload {
     /// any — a score change is never allowed to be reasonless on the page.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub similarity_adjustment: Option<PlayerSimilarityAdjustment>,
+    /// Code-health checkpoints of this player so far, with the thresholds
+    /// that colour them — the session payload narrowed to this one player,
+    /// so the page and the dashboard read one shape. `None` when the
+    /// session does not track health, and from pre-upgrade servers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health: Option<super::SessionHealthPayload>,
 }
 
 /// The copy/paste validation's result, as shown to the player: the note
@@ -495,6 +509,12 @@ pub enum PlayerFrame {
     EvaluationReady {
         task_id: uuid::Uuid,
     },
+    /// Server → browser client: one of this player's code-health checkpoints
+    /// landed or its verification settled (same payload as the dashboard's
+    /// `ArenaFrame::HealthUpdated`).
+    HealthUpdated {
+        checkpoint: Box<super::HealthCheckpointView>,
+    },
 }
 
 /// Internal type shared by WS and REST serialization paths.
@@ -522,6 +542,7 @@ pub struct PlayerSnapshotData {
     pub session_report: Option<PlayerSessionReport>,
     pub evaluations: Vec<PlayerTaskEvaluation>,
     pub similarity_adjustment: Option<PlayerSimilarityAdjustment>,
+    pub health: Option<super::SessionHealthPayload>,
 }
 
 impl From<PlayerSnapshotData> for PlayerSnapshotPayload {
@@ -548,6 +569,7 @@ impl From<PlayerSnapshotData> for PlayerSnapshotPayload {
             judge_statuses: data.judge_statuses,
             session_report: data.session_report,
             evaluations: data.evaluations,
+            health: data.health,
         }
     }
 }

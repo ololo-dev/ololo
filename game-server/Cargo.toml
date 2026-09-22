@@ -7,6 +7,9 @@ authors.workspace = true
 
 [dependencies]
 arena-core = { path = "../arena-core" }
+# The health verifier scores pushed commits in-process (same crate,
+# same version as the client).
+ololo-health = { path = "../ololo-health" }
 migration = { path = "../server/migration" }
 axum = { version = "0.7.5", features = ["ws", "macros"] }
 tokio = { version = "1.38.0", features = ["full"] }

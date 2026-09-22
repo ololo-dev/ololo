@@ -42,6 +42,7 @@ async fn insert_task_at(
         max_interval_secs: Set(Some(300)),
         fail_points: Set(0),
         no_response_points: Set(0),
+        health_points: sea_orm::ActiveValue::NotSet,
         completion_bonus_points: Set(0),
         evaluation: Set(None),
     }

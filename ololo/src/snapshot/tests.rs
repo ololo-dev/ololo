@@ -351,15 +351,28 @@ fn test_commit_task_message_format() {
     std::fs::write(worktree.path().join("b.txt"), "beta").unwrap();
     let task_id = uuid::Uuid::new_v4();
     snapshot
-        .commit_task(task_id, "Implement greeting endpoint")
+        .commit_task(task_id, "Implement greeting endpoint", "completed")
         .expect("commit_task");
 
     let msg = head_commit_message(&snapshot.repo).expect("HEAD commit exists");
     assert_eq!(
-        msg,
+        msg.lines().next().unwrap(),
         format!("feat({task_id}): Implement greeting endpoint"),
-        "task commit message: {msg}"
+        "task commit subject: {msg}"
     );
+    let parsed = arena_core::snapshot_message::SnapshotMessage::parse(&msg);
+    assert!(parsed.is_task_done());
+    assert_eq!(parsed.task_id(), Some(task_id));
+    assert_eq!(parsed.trailers.format, Some(1));
+    assert_eq!(
+        parsed.trailers.task_title.as_deref(),
+        Some("Implement greeting endpoint")
+    );
+    assert_eq!(parsed.trailers.outcome.as_deref(), Some("completed"));
+    assert!(parsed.trailers.timestamp.is_some());
+    // `feat(` appears once: the grep for the task-final commit must match
+    // this commit and nothing inside it twice.
+    assert_eq!(msg.matches("feat(").count(), 1);
 
     let head = snapshot.repo.head_commit().expect("head");
     let decoded = head.decode().expect("decode");
@@ -383,10 +396,13 @@ fn test_commit_wip_message_never_matches_the_feat_grep() {
     snapshot.commit_wip(task_id).expect("commit_wip");
 
     let msg = head_commit_message(&snapshot.repo).expect("HEAD commit exists");
-    assert_eq!(msg, format!("wip({task_id}): checkpoint"));
+    assert_eq!(
+        msg.lines().next().unwrap(),
+        format!("wip({task_id}): checkpoint")
+    );
     // The server resolves the task's FINAL snapshot by grepping `feat(` —
     // a checkpoint must never satisfy that grep.
-    assert!(!msg.starts_with("feat("));
+    assert!(!msg.contains("feat("));
 }
 
 #[test]
@@ -399,7 +415,10 @@ fn test_push_to_remote_no_op_when_disabled() {
     std::fs::write(worktree.path().join("a.txt"), "a").unwrap();
     snapshot.commit_session_start().expect("start");
     // No remote/pat configured — push_to_remote is a silent no-op.
-    snapshot.push_to_remote().expect("no-op push");
+    assert_eq!(
+        snapshot.push_to_remote().expect("no-op push"),
+        PushOutcome::Disabled
+    );
 }
 
 #[test]
@@ -435,28 +454,37 @@ fn test_auxiliary_commits_address_the_current_task() {
     let snapshot =
         SnapshotRepo::new("default", "ADDR1", worktree.path(), None, None).expect("new succeeds");
 
+    let subject = |s: &SnapshotRepo| {
+        s.head_commit_message()
+            .map(|m| m.lines().next().unwrap().to_string())
+    };
     std::fs::write(worktree.path().join("a.txt"), "1").unwrap();
     snapshot.commit_artifacts_sync().expect("commit");
     assert_eq!(
-        snapshot.head_commit_message().as_deref(),
+        subject(&snapshot).as_deref(),
         Some("artifact: sync"),
-        "no current task → legacy message"
+        "no current task → unaddressed subject"
     );
 
     let task_id = uuid::Uuid::new_v4();
-    snapshot.set_current_task(Some(task_id));
+    snapshot.set_current_task(Some((task_id, "Widget")));
     std::fs::write(worktree.path().join("a.txt"), "2").unwrap();
     snapshot.commit_artifacts_sync().expect("commit");
     assert_eq!(
-        snapshot.head_commit_message(),
-        Some(format!("artifact({task_id}): sync")),
+        subject(&snapshot),
+        Some(format!("artifact({task_id}): sync"))
     );
+    let parsed = arena_core::snapshot_message::SnapshotMessage::parse(
+        &snapshot.head_commit_message().unwrap(),
+    );
+    assert_eq!(parsed.trailers.task, Some(task_id));
+    assert_eq!(parsed.trailers.task_title.as_deref(), Some("Widget"));
 
     std::fs::write(worktree.path().join("b.txt"), "3").unwrap();
     snapshot.commit_completion_flag("done.md").expect("commit");
     assert_eq!(
-        snapshot.head_commit_message(),
-        Some(format!("flag({task_id}): done.md")),
+        subject(&snapshot),
+        Some(format!("flag({task_id}): done.md"))
     );
 }
 
@@ -714,4 +742,314 @@ fn stage_all_prunes_dependency_and_build_dirs_but_keeps_artifacts() {
             "{pruned} must NOT be in the snapshot"
         );
     }
+}
+
+// ───────────────── task markers, probe commits, identity ─────────────────
+
+fn parse_head(snapshot: &SnapshotRepo) -> arena_core::snapshot_message::SnapshotMessage {
+    arena_core::snapshot_message::SnapshotMessage::parse(
+        &snapshot.head_commit_message().expect("head commit"),
+    )
+}
+
+#[test]
+fn task_start_marker_is_an_empty_commit_written_once() {
+    let _g = HOME_LOCK.lock().unwrap();
+    let home = tempfile::tempdir().expect("home tempdir");
+    let worktree = tempfile::tempdir().expect("worktree tempdir");
+    let _h = HomeGuard::set(home.path().to_str().unwrap());
+    let snapshot =
+        SnapshotRepo::new("default", "START1", worktree.path(), None, None).expect("new");
+    std::fs::write(worktree.path().join("a.txt"), "alpha").unwrap();
+    let root = snapshot.commit_session_start().expect("start");
+    let root_tree = head_commit_tree_id(&snapshot.repo).unwrap();
+
+    let task_id = uuid::Uuid::new_v4();
+    // The worktree changed, but a marker never carries a tree change.
+    std::fs::write(worktree.path().join("b.txt"), "beta").unwrap();
+    let marker = snapshot
+        .commit_task_start(task_id, "Build the widget")
+        .expect("marker")
+        .expect("first marker is written");
+    assert_ne!(marker, root);
+    assert_eq!(
+        head_commit_tree_id(&snapshot.repo).unwrap(),
+        root_tree,
+        "empty commit"
+    );
+    let parsed = parse_head(&snapshot);
+    assert!(parsed.is_task_start());
+    assert_eq!(parsed.task_id(), Some(task_id));
+    assert_eq!(parsed.subject, "Build the widget");
+    assert_eq!(
+        parsed.trailers.task_title.as_deref(),
+        Some("Build the widget")
+    );
+
+    // Idempotent: the second call is a no-op...
+    assert_eq!(
+        snapshot
+            .commit_task_start(task_id, "Build the widget")
+            .unwrap(),
+        None
+    );
+    assert_eq!(snapshot.head_id(), Some(marker));
+
+    // ...even across a reopen of the same repo (a reconnect).
+    drop(snapshot);
+    let reopened =
+        SnapshotRepo::new("default", "START1", worktree.path(), None, None).expect("reopen");
+    assert_eq!(
+        reopened
+            .commit_task_start(task_id, "Build the widget")
+            .unwrap(),
+        None
+    );
+    let other = uuid::Uuid::new_v4();
+    assert!(reopened.commit_task_start(other, "Next").unwrap().is_some());
+}
+
+#[test]
+fn probe_commits_carry_the_probe_and_land_even_when_nothing_changed() {
+    let _g = HOME_LOCK.lock().unwrap();
+    let home = tempfile::tempdir().expect("home tempdir");
+    let worktree = tempfile::tempdir().expect("worktree tempdir");
+    let _h = HomeGuard::set(home.path().to_str().unwrap());
+    let snapshot =
+        SnapshotRepo::new("default", "PROBE1", worktree.path(), None, None).expect("new");
+    std::fs::write(worktree.path().join("a.txt"), "alpha").unwrap();
+    snapshot.commit_session_start().expect("start");
+    let (session, participant) = (uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
+    snapshot.set_identity(Some(session), Some(participant));
+
+    let task_id = uuid::Uuid::new_v4();
+    let probe_a = uuid::Uuid::new_v4();
+    let first = snapshot
+        .commit_probe(task_id, "Widget", probe_a, 1)
+        .expect("probe 1");
+    let tree_first = head_commit_tree_id(&snapshot.repo).unwrap();
+    let parsed = parse_head(&snapshot);
+    assert_eq!(parsed.kind, arena_core::snapshot_message::Kind::Probe);
+    assert_eq!(parsed.subject, "#1 Widget");
+    assert_eq!(parsed.trailers.probe, Some(probe_a));
+    assert_eq!(parsed.trailers.probe_seq, Some(1));
+    assert_eq!(parsed.trailers.session, Some(session));
+    assert_eq!(parsed.trailers.participant, Some(participant));
+    assert_eq!(parsed.task_id(), Some(task_id));
+
+    // Nothing changed on disk: the next probe still gets its own commit.
+    let probe_b = uuid::Uuid::new_v4();
+    let second = snapshot
+        .commit_probe(task_id, "Widget", probe_b, 2)
+        .expect("probe 2");
+    assert_ne!(first, second);
+    assert_eq!(head_commit_tree_id(&snapshot.repo).unwrap(), tree_first);
+    let head = snapshot.repo.head_commit().unwrap();
+    assert_eq!(head.decode().unwrap().parents.len(), 1);
+
+    // The probe made the task current for auxiliary commits.
+    std::fs::write(worktree.path().join("x.txt"), "x").unwrap();
+    snapshot.commit_artifacts_sync().expect("artifacts");
+    assert_eq!(parse_head(&snapshot).task_id(), Some(task_id));
+}
+
+#[test]
+fn every_commit_kind_parses_and_the_log_reads_as_task_ranges() {
+    let _g = HOME_LOCK.lock().unwrap();
+    let home = tempfile::tempdir().expect("home tempdir");
+    let worktree = tempfile::tempdir().expect("worktree tempdir");
+    let _h = HomeGuard::set(home.path().to_str().unwrap());
+    let snapshot =
+        SnapshotRepo::new("default", "RANGE1", worktree.path(), None, None).expect("new");
+    std::fs::write(worktree.path().join("a.txt"), "alpha").unwrap();
+    snapshot.commit_session_start().expect("start");
+    let (a, b) = (uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
+    snapshot.commit_task_start(a, "Task A").unwrap();
+    snapshot
+        .commit_probe(a, "Task A", uuid::Uuid::new_v4(), 1)
+        .unwrap();
+    std::fs::write(worktree.path().join("a.txt"), "done").unwrap();
+    snapshot.commit_task(a, "Task A", "completed").unwrap();
+    snapshot.commit_task_start(b, "Task B").unwrap();
+    snapshot
+        .commit_probe(b, "Task B", uuid::Uuid::new_v4(), 2)
+        .unwrap();
+    snapshot.commit_final().unwrap();
+
+    // Oldest first, as `task_ranges` wants it.
+    let mut log: Vec<arena_core::snapshot_message::LogEntry> = walk_main(&snapshot.repo)
+        .into_iter()
+        .map(|id| {
+            let c = snapshot.repo.find_commit(id).unwrap();
+            arena_core::snapshot_message::LogEntry {
+                sha: id.to_string(),
+                message: c.message_raw().unwrap().to_string(),
+                committed_at: None,
+            }
+        })
+        .collect();
+    log.reverse();
+    let ranges = arena_core::snapshot_message::task_ranges(&log);
+    assert_eq!(ranges.ranges.len(), 2);
+    assert_eq!(ranges.ranges[0].task_id, a);
+    assert!(!ranges.ranges[0].is_open());
+    assert_eq!(ranges.ranges[0].commits.len(), 3, "start, probe, feat");
+    assert_eq!(ranges.ranges[1].task_id, b);
+    assert!(ranges.ranges[1].is_open());
+    assert_eq!(ranges.ranges[1].commits.len(), 3, "start, probe, final");
+}
+
+// ──────────────────────── pushing to a local bare remote ────────────────────
+
+/// A bare repo standing in for the server's store, fast-forward-only like
+/// the server provisions it.
+fn local_remote() -> (tempfile::TempDir, String) {
+    let dir = tempfile::tempdir().expect("remote tempdir");
+    let repo = dir.path().join("player.git");
+    let ok = std::process::Command::new("git")
+        .args(["init", "--bare", "--initial-branch=main"])
+        .arg(&repo)
+        .output()
+        .expect("git init")
+        .status
+        .success();
+    assert!(ok);
+    for key in ["receive.denyNonFastForwards", "receive.denyDeletes"] {
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(["config", key, "true"])
+            .output()
+            .expect("git config");
+    }
+    let url = format!("file://{}", repo.display());
+    (dir, url)
+}
+
+fn remote_log(url: &str) -> Vec<String> {
+    let path = url.strip_prefix("file://").unwrap();
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["log", "--first-parent", "--format=%s", "main"])
+        .output()
+        .expect("git log");
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+#[test]
+fn push_is_never_forced_and_a_rejected_push_recovers_onto_the_served_line() {
+    let _g = HOME_LOCK.lock().unwrap();
+    let home = tempfile::tempdir().expect("home tempdir");
+    let _h = HomeGuard::set(home.path().to_str().unwrap());
+    let (_remote_dir, url) = local_remote();
+
+    // Client one: session start + a task, pushed.
+    let wt1 = tempfile::tempdir().expect("worktree 1");
+    std::fs::write(wt1.path().join("a.txt"), "one").unwrap();
+    let one = SnapshotRepo::new(
+        "default",
+        "PUSHA",
+        wt1.path(),
+        Some(url.clone()),
+        Some("pat".into()),
+    )
+    .expect("repo one");
+    let root = one.commit_session_start().expect("start");
+    assert_eq!(
+        one.push_to_remote().unwrap(),
+        PushOutcome::Pushed { head: root }
+    );
+    let task = uuid::Uuid::new_v4();
+    let feat = one.commit_task(task, "Task", "completed").expect("feat");
+    assert_eq!(
+        one.push_to_remote().unwrap(),
+        PushOutcome::Pushed { head: feat }
+    );
+    assert_eq!(one.push_status_for(root).state, PushState::Pushed);
+    assert_eq!(remote_log(&url).len(), 2);
+
+    // Client two: a fresh snapshot of the same session (another machine,
+    // `--fresh`) with an unrelated root. Its push must be refused, not
+    // allowed to replace what the game already scored.
+    let wt2 = tempfile::tempdir().expect("worktree 2");
+    std::fs::write(wt2.path().join("b.txt"), "two").unwrap();
+    let two = SnapshotRepo::new(
+        "default",
+        "PUSHB",
+        wt2.path(),
+        Some(url.clone()),
+        Some("pat".into()),
+    )
+    .expect("repo two");
+    let stray = two.commit_session_start().expect("start two");
+    match two.push_to_remote().unwrap() {
+        PushOutcome::Rejected { head, .. } => assert_eq!(head, stray),
+        other => panic!("expected a rejected push, got {other:?}"),
+    }
+    assert_eq!(remote_log(&url).len(), 2, "the served line is untouched");
+    assert_eq!(two.push_status_for(stray).state, PushState::Failed);
+
+    // Recovery: the served line becomes ours, the working tree lands on top.
+    two.set_current_task(Some((task, "Task")));
+    let resync = two.recover_from_remote().expect("resync");
+    assert_eq!(
+        two.push_to_remote().unwrap(),
+        PushOutcome::Pushed { head: resync }
+    );
+    let log = remote_log(&url);
+    assert_eq!(log.len(), 3, "linear: root, feat, resync");
+    assert_eq!(log[0], format!("wip({task}): resync after a rejected push"));
+    // The stray root is remembered as rewritten history; the resync commit
+    // is pushed; the file from the stray line is in the new head's tree.
+    assert_eq!(
+        two.push_status_for(stray).state,
+        PushState::RejectedNonFastForward
+    );
+    assert_eq!(two.push_status_for(resync).state, PushState::Pushed);
+    let head = two.repo.head_commit().unwrap();
+    let parents: Vec<_> = head.parent_ids().map(|p| p.detach()).collect();
+    assert_eq!(parents, vec![feat], "the resync sits on the served head");
+    let tree = head.tree().unwrap();
+    assert!(tree.lookup_entry_by_path("b.txt").unwrap().is_some());
+    // The working tree is the truth: client two never had a.txt, so the
+    // resync commit records its removal rather than resurrecting it.
+    assert!(tree.lookup_entry_by_path("a.txt").unwrap().is_none());
+}
+
+#[tokio::test]
+async fn the_pusher_coalesces_requests_and_reports_the_outcome() {
+    // HOME only matters while the repo is opened (its git dir lives under
+    // it); release the process-wide lock before any await.
+    let (_home, _wt, _remote_dir, url, repo, root) = {
+        let _g = HOME_LOCK.lock().unwrap();
+        let home = tempfile::tempdir().expect("home tempdir");
+        let _h = HomeGuard::set(home.path().to_str().unwrap());
+        let (remote_dir, url) = local_remote();
+        let wt = tempfile::tempdir().expect("worktree");
+        std::fs::write(wt.path().join("a.txt"), "one").unwrap();
+        let repo = SnapshotRepo::new(
+            "default",
+            "PUSHC",
+            wt.path(),
+            Some(url.clone()),
+            Some("pat".into()),
+        )
+        .expect("repo");
+        let root = repo.commit_session_start().expect("start");
+        (home, wt, remote_dir, url, repo, root)
+    };
+    let repo = std::sync::Arc::new(std::sync::Mutex::new(repo));
+    let (pusher, _task) = super::pusher::spawn(std::sync::Arc::clone(&repo));
+
+    pusher.request();
+    pusher.request();
+    let outcome = pusher.push_and_wait().await;
+    assert_eq!(outcome, PushOutcome::Pushed { head: root });
+    assert_eq!(remote_log(&url).len(), 1);
+    // The handle is attached: request_push goes through the pusher.
+    assert!(repo.lock().unwrap().pusher().is_some());
 }

@@ -307,11 +307,19 @@ pub(crate) async fn build_snapshot_from_parts(
     let mut latest_result_by_task: HashMap<Uuid, task_results::Model> = HashMap::new();
     let mut points_by_task: HashMap<Uuid, i64> = HashMap::new();
     let mut bonus_by_task: HashMap<Uuid, i64> = HashMap::new();
+    // The health bonus is its own line item, not part of "Bonus".
+    let mut health_by_task: HashMap<Uuid, (i64, String)> = HashMap::new();
     for row in result_rows {
         let Some(task_id) = row.task_id else {
             continue;
         };
         *points_by_task.entry(task_id).or_insert(0) += row.point_delta as i64;
+        if row.kind == task_results::KIND_HEALTH_BONUS {
+            health_by_task
+                .entry(task_id)
+                .or_insert((row.point_delta as i64, row.answer.clone()));
+            continue;
+        }
         if row.is_bonus {
             *bonus_by_task.entry(task_id).or_insert(0) += row.point_delta as i64;
         }
@@ -538,6 +546,8 @@ pub(crate) async fn build_snapshot_from_parts(
                 scheduler_state,
                 total_points: points_by_task.get(&task.id).copied().unwrap_or(0),
                 bonus_points: bonus_by_task.get(&task.id).copied().unwrap_or(0),
+                health_points: health_by_task.get(&task.id).map(|(p, _)| *p),
+                health_note: health_by_task.get(&task.id).map(|(_, n)| n.clone()),
             }
         })
         .collect();
@@ -614,6 +624,10 @@ pub(crate) async fn build_snapshot_from_parts(
         session_id,
     )
     .await;
+
+    // This player's code-health history (narrowed to them), absent when the
+    // session tracks none.
+    let health = crate::api::sessions::load_session_health(db, session_id, Some(player_id)).await;
 
     // The copy/paste validation's result: the persisted report names the
     // percentage and the matched sources (clean runs included); sessions
@@ -709,6 +723,7 @@ pub(crate) async fn build_snapshot_from_parts(
         session_report,
         evaluations,
         similarity_adjustment,
+        health,
     }
     .into()
 }

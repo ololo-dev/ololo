@@ -28,6 +28,7 @@ async fn insert_task_result(
         answer: Set(String::new()),
         created_at: Set(Utc::now()),
         point_delta: Set(point_delta),
+        kind: Set(arena_core::entities::task_results::legacy_kind(is_bonus).to_string()),
         is_bonus: Set(is_bonus),
     }
     .insert(db)
@@ -62,6 +63,7 @@ async fn insert_judge_chain(
         max_interval_secs: Set(Some(300)),
         fail_points: Set(0),
         no_response_points: Set(0),
+        health_points: sea_orm::ActiveValue::NotSet,
         completion_bonus_points: Set(0),
         evaluation: Set(None),
     }

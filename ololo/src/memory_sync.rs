@@ -49,10 +49,11 @@ pub fn spawn(
         while rx.recv().await.is_some() {
             drain(&mut rx);
             let snap = Arc::clone(&snapshot);
-            // gix + `git push` are blocking; keep them off the runtime.
-            let pushed = tokio::task::spawn_blocking(move || sync_once(&snap))
+            // gix is blocking; keep it off the runtime.
+            let committed = tokio::task::spawn_blocking(move || commit_once(&snap))
                 .await
                 .unwrap_or(false);
+            let pushed = committed && push(&snapshot).await;
             if pushed
                 && frame_tx
                     .send(PlayerAgentClientFrame::MemorySourcesPushed)
@@ -72,8 +73,8 @@ fn drain(rx: &mut UnboundedReceiver<()>) {
     while rx.try_recv().is_ok() {}
 }
 
-/// Commit + push the memory files. Returns true when something was pushed.
-fn sync_once(snapshot: &Mutex<SnapshotRepo>) -> bool {
+/// Commit the memory files. Returns true when something was committed.
+fn commit_once(snapshot: &Mutex<SnapshotRepo>) -> bool {
     let guard = match snapshot.lock() {
         Ok(g) => g,
         // Another thread panicked mid-commit; the repo may be mid-write, so
@@ -84,20 +85,45 @@ fn sync_once(snapshot: &Mutex<SnapshotRepo>) -> bool {
         }
     };
     match guard.commit_memory_sources() {
-        Ok(false) => false,
-        Ok(true) => {
-            if let Err(e) = guard.push_to_remote() {
-                tracing::warn!("memory sync: push failed: {e}");
-                // The commit is local-only for now; a later sync or the next
-                // task commit pushes it. Do not claim it reached the server.
-                return false;
-            }
-            tracing::debug!("memory sync: pushed updated memory sources");
-            true
-        }
+        Ok(committed) => committed,
         Err(e) => {
             tracing::warn!("memory sync: commit failed: {e}");
             false
         }
+    }
+}
+
+/// Push through the background pusher (inline when none is attached) and
+/// say whether the commit reached the server. A push that did not land
+/// leaves the commit local-only for now; a later push catches up, and the
+/// server is not told anything it cannot yet read.
+async fn push(snapshot: &Arc<Mutex<SnapshotRepo>>) -> bool {
+    let pusher = snapshot.lock().ok().and_then(|g| g.pusher());
+    let outcome = match pusher {
+        Some(pusher) => pusher.push_and_wait().await,
+        None => {
+            let snap = Arc::clone(snapshot);
+            tokio::task::spawn_blocking(move || {
+                snap.lock()
+                    .ok()
+                    .and_then(|g| g.push_to_remote().ok())
+                    .unwrap_or(crate::snapshot::PushOutcome::Failed {
+                        head: None,
+                        error: "snapshot unavailable".into(),
+                    })
+            })
+            .await
+            .unwrap_or(crate::snapshot::PushOutcome::Failed {
+                head: None,
+                error: "push task panicked".into(),
+            })
+        }
+    };
+    if outcome.is_pushed() {
+        tracing::debug!("memory sync: pushed updated memory sources");
+        true
+    } else {
+        tracing::warn!("memory sync: push did not land: {outcome:?}");
+        false
     }
 }

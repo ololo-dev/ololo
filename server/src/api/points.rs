@@ -19,6 +19,9 @@ pub struct PointsReq {
     pub no_response: Option<i32>,
     #[serde(default)]
     pub completion_bonus: Option<i32>,
+    /// Points the code health of the task's final tree can earn (0 = none).
+    #[serde(default)]
+    pub health: Option<i32>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -28,6 +31,8 @@ pub struct PointsResp {
     pub fail: i32,
     pub no_response: i32,
     pub completion_bonus: i32,
+    #[serde(default)]
+    pub health: i32,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

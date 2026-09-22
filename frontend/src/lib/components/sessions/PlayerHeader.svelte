@@ -3,6 +3,7 @@
   import StatCard from "./StatCard.svelte";
   import { formatCountdown } from "$lib/format";
   import type { PlayerCompletionStatus } from "$lib/types/arena";
+  import { formatScore, type HealthIndicator } from "$lib/session-health";
 
   let {
     playerName,
@@ -21,6 +22,7 @@
     completionStatus = null,
     judgingPending = false,
     agentConnected = null,
+    health = null,
   }: {
     playerName: string;
     avatarUrl?: string | null;
@@ -38,6 +40,8 @@
     rank: number | null;
     /** Derived per-player completion state; null/absent renders no badge. */
     completionStatus?: PlayerCompletionStatus | null;
+    /** Latest code-health score, when the session tracks health. */
+    health?: HealthIndicator | null;
     /**
      * Judges still owe verdicts for this player. Suppresses the green
      * session "Complete" chip: the timer stopping is not completion while
@@ -194,6 +198,21 @@
       valueClass={score >= 0 ? "text-green-600" : "text-red-600"}
     />
     <StatCard label="Rank" value="#{rank}" />
+    {#if health}
+      <!-- The latest server-verified code-health score; the glyph, not the
+           colour, carries the direction against the previous check. -->
+      <StatCard
+        label={health.verified ? "Health" : "Health (pending)"}
+        value="{formatScore(health.score)}{health.trend === 'up' ? ' ▲' : health.trend === 'down' ? ' ▼' : ''}"
+        valueClass={health.level === "green"
+          ? "text-green-600"
+          : health.level === "amber"
+            ? "text-amber-600"
+            : health.level === "red"
+              ? "text-red-600"
+              : ""}
+      />
+    {/if}
   </div>
 </div>
 

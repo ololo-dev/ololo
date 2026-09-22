@@ -1,5 +1,6 @@
 <script lang="ts">
   import { browser } from '$app/environment'
+  import { indicatorFor } from '$lib/session-health'
   import { page } from '$app/state'
   import { untrack } from 'svelte'
   import { sessionLinkLabel } from '$lib/session-status'
@@ -156,6 +157,9 @@
   })
   const totalTasks = $derived(liveSnapshot.total_tasks)
   const score = $derived(liveSnapshot.score)
+  const healthIndicator = $derived(
+    indicatorFor(liveSnapshot.health ?? null, liveSnapshot.player_id),
+  )
   const rank = $derived(liveSnapshot.rank)
   const agentDisplayName = $derived(liveSnapshot.agent_display_name ?? null)
   const completionStatus = $derived(liveSnapshot.completion_status ?? null)
@@ -1080,6 +1084,7 @@
       {nextProbeCountdown}
       {score}
       {rank}
+      health={healthIndicator}
       {completionStatus}
       judgingPending={judgingInProgress || pendingJudges.length > 0}
       {agentConnected}

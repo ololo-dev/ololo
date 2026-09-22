@@ -84,6 +84,7 @@ async fn seed_project(
         default_value_points: Set(10),
         default_fail_points: Set(-5),
         default_no_response_points: Set(-10),
+        default_health_points: sea_orm::ActiveValue::NotSet,
         default_completion_bonus_points: Set(10),
         default_deadline_secs: Set(60),
         default_session_duration_secs: Set(900),
@@ -119,6 +120,7 @@ async fn seed_task(db: &DatabaseConnection, project_id: Uuid, ordinal: i32) {
         max_interval_secs: Set(None),
         fail_points: Set(-5),
         no_response_points: Set(-10),
+        health_points: sea_orm::ActiveValue::NotSet,
         completion_bonus_points: Set(10),
         evaluation: Set(None),
     }
@@ -555,6 +557,7 @@ async fn award_completion_bonuses(db: &DatabaseConnection, session_id: Uuid, pla
             answer: Set("completion bonus".into()),
             created_at: Set(Utc::now()),
             point_delta: Set(10),
+            kind: Set(arena_core::entities::task_results::KIND_COMPLETION_BONUS.to_string()),
             is_bonus: Set(true),
         }
         .insert(db)
@@ -612,6 +615,7 @@ async fn seed_awarded_session(
         answer: Set("seed score".into()),
         created_at: Set(Utc::now()),
         point_delta: Set(i32::try_from(game_points - 10).expect("score fits i32")),
+        kind: Set(arena_core::entities::task_results::KIND_PROBE.to_string()),
         is_bonus: Set(false),
     }
     .insert(db)
@@ -880,6 +884,7 @@ async fn a_campaign_board_says_how_far_each_player_got() {
         answer: Set("seed score".into()),
         created_at: Set(Utc::now()),
         point_delta: Set(10),
+        kind: Set(arena_core::entities::task_results::KIND_PROBE.to_string()),
         is_bonus: Set(false),
     }
     .insert(&state.db)

@@ -83,7 +83,7 @@ pub async fn run_with_sink(
     join_code: &str,
     pat: &str,
     sink: SinkArg,
-    memory: Option<MemoryChannel>,
+    memory: Option<SnapshotChannel>,
 ) -> Result<()> {
     let mut memory = memory;
     // Resolve → connect, forever. A lost game server used to end the CLI —
@@ -98,9 +98,9 @@ pub async fn run_with_sink(
     let max_ws_attempts = 5;
     let mut cycles: u64 = 0;
     loop {
-        let (game_server_url, player_id_raw) = loop {
+        let (game_server_url, player_id_raw, session_id_raw) = loop {
             match connect::resolve_session(base_url, join_code, pat).await {
-                Ok((url, pid)) => break (url, pid),
+                Ok((url, pid, sid)) => break (url, pid, sid),
                 Err(ResolveError::Retry(msg)) => {
                     crate::ui::hint(format!("Resolve: {}. Retrying in 3s…", msg));
                     emit(
@@ -128,6 +128,18 @@ pub async fn run_with_sink(
         let viewer_player_id = player_id_raw.as_deref().and_then(parse_player_id);
         if let Some(vid) = viewer_player_id {
             emit(sink.clone(), TuiEvent::ViewerIdentified(vid));
+        }
+        // Stamp the snapshot commits (and the health reports) with who
+        // they belong to.
+        if let Some(m) = memory.as_mut() {
+            let session_id = session_id_raw
+                .as_deref()
+                .and_then(|s| Uuid::parse_str(s).ok());
+            m.session_id = session_id;
+            m.player_id = viewer_player_id;
+            if let Ok(guard) = m.snapshot.lock() {
+                guard.set_identity(session_id, viewer_player_id);
+            }
         }
 
         let full_ws_url = agent_ws_url(
@@ -179,11 +191,19 @@ pub async fn run_with_sink(
 /// `Ok(true)` — `SessionComplete` received (exit cleanly).
 /// `Ok(false)` — socket closed without terminal frame (reconnect).
 /// `Err(_)` — protocol / IO error (reconnect).
-/// Memory-source syncing wired into the probe loop: a handle to ask for a
-/// check on each probe, and the channel the sync task reports back on.
-pub struct MemoryChannel {
-    pub handle: crate::memory_sync::MemorySyncHandle,
+/// The snapshot repo wired into the probe loop: the memory-sync handle to
+/// nudge on each probe, the channel the background tasks report back on
+/// (frames they want sent to the server), and the repo itself for the
+/// per-probe commits.
+pub struct SnapshotChannel {
+    pub memory: crate::memory_sync::MemorySyncHandle,
     pub frames: tokio::sync::mpsc::UnboundedReceiver<arena_core::protocol::PlayerAgentClientFrame>,
+    pub snapshot: Arc<std::sync::Mutex<crate::snapshot::SnapshotRepo>>,
+    /// Scores the tree of each probe commit and reports, off this loop.
+    pub health: crate::health_run::HealthRunnerHandle,
+    /// Who we are, for the reports (learned from the resolve endpoint).
+    pub session_id: Option<Uuid>,
+    pub player_id: Option<Uuid>,
 }
 
 async fn connect_once(
@@ -191,7 +211,7 @@ async fn connect_once(
     pat: &str,
     sink: SinkArg,
     viewer_player_id: Option<Uuid>,
-    memory: Option<&mut MemoryChannel>,
+    memory: Option<&mut SnapshotChannel>,
 ) -> Result<bool> {
     let mut request = ws_url
         .into_client_request()
@@ -425,13 +445,64 @@ async fn connect_once(
                         expected_answer,
                         answer_template,
                         validation_kind,
+                        probe_seq,
+                        health,
                     } => {
                         // A probe is the one regular heartbeat we get, so it
                         // doubles as the moment to notice edited memory
                         // sources. The check itself happens off-thread.
                         if let Some(m) = memory.as_ref() {
-                            m.handle.request();
+                            m.memory.request();
                         }
+                        // Health tracking: the tree at this moment becomes a
+                        // `probe(<task>)` commit (after the task's start
+                        // marker, once), so the probe answer and the health
+                        // checkpoint name the same tree. Only when the
+                        // server asked — otherwise the repo sees no
+                        // difference from a session without health.
+                        let probe_commit = match (health.as_ref(), memory.as_ref(), task_id) {
+                            (Some(_), Some(m), Some(tid)) => {
+                                let snap = Arc::clone(&m.snapshot);
+                                let title = task_title.clone();
+                                let committed = tokio::task::spawn_blocking(move || {
+                                    let guard = snap
+                                        .lock()
+                                        .map_err(|e| format!("snapshot lock poisoned: {e}"))?;
+                                    if let Err(e) = guard.commit_task_start(tid, &title) {
+                                        tracing::warn!("task start marker failed: {e}");
+                                    }
+                                    let id = guard
+                                        .commit_probe(tid, &title, probe_id, probe_seq)
+                                        .map_err(|e| e.to_string())?;
+                                    guard.request_push();
+                                    Ok::<_, String>(id)
+                                })
+                                .await
+                                .unwrap_or_else(|e| Err(format!("commit task panicked: {e}")));
+                                if let Err(e) = &committed {
+                                    tracing::warn!("probe snapshot commit failed: {e}");
+                                }
+                                Some(committed)
+                            }
+                            _ => None,
+                        };
+                        // The analysis runs off this loop and reports on its
+                        // own; the probe answer below does not wait for it.
+                        if let (Some(cfg), Some(m), Some(committed)) =
+                            (health.clone(), memory.as_ref(), probe_commit.clone())
+                        {
+                            m.health.submit(crate::health_run::HealthJob {
+                                probe_id,
+                                probe_seq,
+                                task_id,
+                                session_id: m.session_id,
+                                player_id: m.player_id,
+                                commit: committed,
+                                config: cfg,
+                            });
+                        }
+                        let probe_commit_hex =
+                            probe_commit.and_then(|c| c.ok()).map(|id| id.to_string());
                         if let Some(slug) = test_label.trim().strip_prefix("registered:") {
                             judge_checks.insert(probe_id, slug.trim().to_string());
                         }
@@ -558,6 +629,7 @@ async fn connect_once(
                                 exit_code: Some(-1),
                                 duration_ms: 0,
                                 error: Some("declined by player".into()),
+                                commit: probe_commit_hex.clone(),
                             };
                             let json =
                                 serde_json::to_string(&reply).context("serialising TestResult")?;
@@ -608,6 +680,7 @@ async fn connect_once(
                                     exit_code: Some(ec),
                                     duration_ms: dur,
                                     error: None,
+                                    commit: probe_commit_hex.clone(),
                                 }
                             }
                             Err(e) => {
@@ -647,6 +720,7 @@ async fn connect_once(
                                     exit_code: None,
                                     duration_ms: 0,
                                     error: Some(format!("{e}")),
+                                    commit: probe_commit_hex.clone(),
                                 }
                             }
                         };

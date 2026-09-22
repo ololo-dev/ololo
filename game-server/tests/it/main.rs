@@ -6,6 +6,7 @@
 //! parallel (one process per test).
 
 mod api_judge_run_tests;
+mod health_checkpoints_tests;
 mod heartbeat_tests;
 mod idle_sweep_tests;
 mod judge_execution;

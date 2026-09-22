@@ -234,6 +234,7 @@ pub(crate) fn to_summary(
             fail: m.fail_points,
             no_response: m.no_response_points,
             completion_bonus: m.completion_bonus_points,
+            health: m.health_points,
         },
         intervals,
     })

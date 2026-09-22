@@ -125,6 +125,9 @@ pub(crate) async fn build_session_snapshot(
         .ok()
         .flatten();
     let activity = load_session_activity(db, session_id).await;
+    // Best-effort too: the code-health history, absent when the session
+    // tracks none.
+    let health = crate::api::sessions::load_session_health(db, session_id, None).await;
     // Best-effort like score_history: a failure leaves every status None
     // rather than blocking the snapshot.
     let status_by_player: std::collections::HashMap<
@@ -156,6 +159,7 @@ pub(crate) async fn build_session_snapshot(
         timeline: None,
         activity: Some(activity),
         score_history,
+        health,
     }
 }
 
@@ -588,6 +592,7 @@ mod tests {
             default_value_points: Set(10),
             default_fail_points: Set(-5),
             default_no_response_points: Set(-10),
+            default_health_points: sea_orm::ActiveValue::NotSet,
             default_completion_bonus_points: Set(10),
             default_deadline_secs: Set(60),
             default_session_duration_secs: Set(3600),
@@ -645,6 +650,7 @@ mod tests {
             created_at: Set(Utc::now()),
             tags: Set("[]".to_string()),
             point_value: Set(10),
+            health_points: sea_orm::ActiveValue::NotSet,
             completion_bonus_points: Set(10),
             deadline_secs: Set(Some(30)),
             min_interval_secs: Set(Some(1)),

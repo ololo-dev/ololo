@@ -32,6 +32,9 @@ async-trait = "0.1"
 rig-core = "0.36.0"
 tokio = { version = "1.38.0", features = ["time", "rt", "process"] }
 which = "6"
+# Code-health checkpoints: the wire carries ololo-health's result types
+# verbatim, so the client and the servers deserialize one shape.
+ololo-health = { path = "../ololo-health" }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

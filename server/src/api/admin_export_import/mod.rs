@@ -83,6 +83,10 @@ pub struct ExportPoints {
     pub fail: i32,
     pub no_response: i32,
     pub completion_bonus: i32,
+    /// Points the code health of a task's final tree can earn; 0 = none.
+    /// Absent from envelopes written before health existed.
+    #[serde(default)]
+    pub health: i32,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -150,6 +154,8 @@ pub struct ExportTaskPoints {
     pub no_response: Option<i32>,
     #[serde(default)]
     pub completion_bonus: Option<i32>,
+    #[serde(default)]
+    pub health: Option<i32>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -308,6 +314,7 @@ pub async fn export_project(
                 fail: Some(t.fail_points),
                 no_response: Some(t.no_response_points),
                 completion_bonus: Some(t.completion_bonus_points),
+                health: Some(t.health_points),
             }),
             intervals: Some(ExportTaskIntervals {
                 deadline_secs: t.deadline_secs,
@@ -336,6 +343,7 @@ pub async fn export_project(
                 fail: project.default_fail_points,
                 no_response: project.default_no_response_points,
                 completion_bonus: project.default_completion_bonus_points,
+                health: project.default_health_points,
             },
             intervals: ExportIntervals {
                 deadline_secs: project.default_deadline_secs,
@@ -511,6 +519,7 @@ pub(crate) async fn insert_task_with_judges(
         max_interval_secs: Set(task_intervals.max_interval_secs),
         fail_points: Set(resolved_fail),
         no_response_points: Set(resolved_no_response),
+        health_points: Set(pts.health.unwrap_or(proj_pts.health)),
         completion_bonus_points: Set(resolved_completion_bonus),
         evaluation: Set(task.evaluation.clone()),
     };
@@ -585,6 +594,7 @@ async fn insert_project_from_envelope(
                     default_value_points: Set(proj_pts.value),
                     default_fail_points: Set(proj_pts.fail),
                     default_no_response_points: Set(proj_pts.no_response),
+                    default_health_points: Set(proj_pts.health),
                     default_completion_bonus_points: Set(proj_pts.completion_bonus),
                     default_deadline_secs: Set(proj_intervals.deadline_secs),
                     default_session_duration_secs: Set(envelope.project.session_duration_secs),
@@ -778,6 +788,7 @@ async fn apply_envelope_to_project(
                     project_am.default_fail_points = Set(proj_pts.fail);
                     project_am.default_no_response_points = Set(proj_pts.no_response);
                     project_am.default_completion_bonus_points = Set(proj_pts.completion_bonus);
+                    project_am.default_health_points = Set(proj_pts.health);
                     project_am.default_deadline_secs =
                         Set(envelope.project.intervals.deadline_secs);
                     project_am.default_session_duration_secs =
@@ -846,6 +857,7 @@ async fn apply_envelope_to_project(
                                 am.fail_points = Set(resolved_fail);
                                 am.no_response_points = Set(resolved_no_response);
                                 am.completion_bonus_points = Set(resolved_completion_bonus);
+                                am.health_points = Set(pts.health.unwrap_or(proj_pts.health));
                                 am.evaluation = Set(task.evaluation.clone());
                                 tasks::Entity::update(am).exec(txn).await?;
                                 updated += 1;
@@ -871,6 +883,7 @@ async fn apply_envelope_to_project(
                                     max_interval_secs: Set(task_intervals.max_interval_secs),
                                     fail_points: Set(resolved_fail),
                                     no_response_points: Set(resolved_no_response),
+                                    health_points: Set(pts.health.unwrap_or(proj_pts.health)),
                                     completion_bonus_points: Set(resolved_completion_bonus),
                                     evaluation: Set(task.evaluation.clone()),
                                 };

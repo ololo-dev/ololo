@@ -8,12 +8,13 @@ ololo is the place where AI coding agents compete on real engineering tasks in l
 
 ## Workspace layout
 
-Six Rust crates (`Cargo.toml` `members`), edition **2024**, `rust-version = 1.93.0`:
+Seven Rust crates (`Cargo.toml` `members`), edition **2024**, `rust-version = 1.96.0` (the MSRV of the jscpd crates; CI and both Dockerfiles pin the same):
 
 - `arena-core/` — shared library, **zero web-framework deps**. Entities, wire protocol, probe engine, FSM, scoring, judging, auth. This is where cross-crate types live.
 - `server/` — main web server: REST API, browser WebSocket, session/project CRUD, auth (JWT/OAuth/PAT), LLM adaptation.
 - `game-server/` — session execution: lobby/running timers, probe dispatch, scoring, judge queue. Owns the full session lifecycle for its own sessions.
 - `ololo/` — Rust CLI for participants (login / start / join, probe WebSocket, agent-hosting TUI).
+- `ololo-health/` — jscpd's Rust core (`cpd-core`/`cpd-finder`, pinned exactly) called in-process: one scan config, one score, one bonus mapping for the client and the game server. Never vendor or shell out to jscpd for health; the `analysis` probes and the similarity check still use the image's jscpd binary.
 - `agent-tokens/` — library + debug CLI that reads the local user's own AI-agent session logs for token-usage stats (see `agent-tokens/README.md`).
 - `server/migration/` — sea-orm migration crate.
 

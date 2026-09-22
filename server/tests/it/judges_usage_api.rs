@@ -198,6 +198,7 @@ async fn attach_to_two_tasks(
         default_value_points: Set(10),
         default_fail_points: Set(-5),
         default_no_response_points: Set(-10),
+        default_health_points: sea_orm::ActiveValue::NotSet,
         default_completion_bonus_points: Set(0),
         default_deadline_secs: Set(60),
         default_min_interval_secs: Set(10),
@@ -233,6 +234,7 @@ async fn attach_to_two_tasks(
             max_interval_secs: Set(Some(60)),
             fail_points: Set(0),
             no_response_points: Set(0),
+            health_points: sea_orm::ActiveValue::NotSet,
             completion_bonus_points: Set(0),
             evaluation: Set(None),
         }

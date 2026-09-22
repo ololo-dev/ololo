@@ -83,6 +83,7 @@ pub(crate) async fn session_with_player(db: &DatabaseConnection) -> SessionFixtu
         default_value_points: Set(10),
         default_fail_points: Set(-5),
         default_no_response_points: Set(-10),
+        default_health_points: sea_orm::ActiveValue::NotSet,
         default_completion_bonus_points: Set(10),
         default_deadline_secs: Set(60),
         default_session_duration_secs: Set(3600),
@@ -161,6 +162,7 @@ pub(crate) async fn task_with_test(db: &DatabaseConnection, fx: &SessionFixture)
         max_interval_secs: Set(None),
         fail_points: Set(-5),
         no_response_points: Set(-10),
+        health_points: sea_orm::ActiveValue::NotSet,
         completion_bonus_points: Set(10),
         evaluation: Set(None),
     }
@@ -400,6 +402,7 @@ pub(crate) async fn extra_task(db: &DatabaseConnection, fx: &SessionFixture, ord
         max_interval_secs: Set(None),
         fail_points: Set(-5),
         no_response_points: Set(-10),
+        health_points: sea_orm::ActiveValue::NotSet,
         completion_bonus_points: Set(10),
         evaluation: Set(None),
     }

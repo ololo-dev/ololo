@@ -186,9 +186,32 @@ pub fn spawn(
                 }
                 let snap = Arc::clone(&snapshot);
                 let commit_name = file_name.clone();
-                // gix + `git push` are blocking; keep them off the runtime.
-                let _ =
-                    tokio::task::spawn_blocking(move || publish_once(&snap, &commit_name)).await;
+                // gix is blocking; keep it off the runtime.
+                let committed =
+                    tokio::task::spawn_blocking(move || publish_once(&snap, &commit_name))
+                        .await
+                        .unwrap_or(false);
+                if committed {
+                    // Wait for the push so the server reads the flagged tree
+                    // when it acts on the nudge; a push that did not land is
+                    // retried by the pusher on its own.
+                    let pusher = snapshot.lock().ok().and_then(|g| g.pusher());
+                    match pusher {
+                        Some(pusher) => {
+                            let outcome = pusher.push_and_wait().await;
+                            if !outcome.is_pushed() {
+                                tracing::warn!("flag watch: push did not land: {outcome:?}");
+                            }
+                        }
+                        None => {
+                            let snap = Arc::clone(&snapshot);
+                            let _ = tokio::task::spawn_blocking(move || {
+                                snap.lock().ok().map(|g| g.push_to_remote())
+                            })
+                            .await;
+                        }
+                    }
+                }
                 // The nudge is worth sending even when the push glitched: the
                 // completion probe runs locally, and the final task commit
                 // catches the tree up.
@@ -204,23 +227,22 @@ pub fn spawn(
     })
 }
 
-/// Commit + push the working tree for a freshly settled flag file.
-fn publish_once(snapshot: &Mutex<SnapshotRepo>, file_name: &str) {
+/// Commit the working tree for a freshly settled flag file. Returns
+/// whether the commit was made (the push follows separately).
+fn publish_once(snapshot: &Mutex<SnapshotRepo>, file_name: &str) -> bool {
     let guard = match snapshot.lock() {
         Ok(g) => g,
         // Another thread panicked mid-commit; skip rather than compound it.
         Err(e) => {
             tracing::warn!("flag watch: snapshot lock poisoned: {e}");
-            return;
+            return false;
         }
     };
     if let Err(e) = guard.commit_completion_flag(file_name) {
         tracing::warn!("flag watch: commit failed: {e}");
-        return;
+        return false;
     }
-    if let Err(e) = guard.push_to_remote() {
-        tracing::warn!("flag watch: push failed: {e}");
-    }
+    true
 }
 
 #[cfg(test)]

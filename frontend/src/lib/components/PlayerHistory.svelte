@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { PlayerHistoryCommit } from '$lib/types/arena';
   import DiffView from './sessions/DiffView.svelte';
+  import { displayTrailers, parseCommitMessage } from '$lib/sessions/commit-message';
 
   type Props = {
     commits: PlayerHistoryCommit[];
@@ -113,9 +114,21 @@
           </button>
 
           {#if expanded}
+            {@const parsed = parseCommitMessage(commit.message)}
             <div class="border-t border-brand-border/40 bg-brand-light-blue/10 px-6 py-4 space-y-3">
-              {#if commit.message.split('\n').length > 1}
-                <pre class="whitespace-pre-wrap rounded-md bg-white px-3 py-2 text-[12px] text-brand-text/80 border border-brand-border/40">{commit.message.split('\n').slice(1).join('\n').trim()}</pre>
+              {#if parsed.body}
+                <pre class="whitespace-pre-wrap rounded-md bg-white px-3 py-2 text-[12px] text-brand-text/80 border border-brand-border/40">{parsed.body}</pre>
+              {/if}
+              {#if parsed.trailers.length > 0}
+                {@const shown = displayTrailers(parsed)}
+                <dl class="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-brand-muted" data-testid="commit-trailers">
+                  {#each shown as t (t.key)}
+                    <div class="flex gap-1">
+                      <dt>{t.key}</dt>
+                      <dd class="text-brand-text/80">{t.value}</dd>
+                    </div>
+                  {/each}
+                </dl>
               {/if}
               {#if visibleFiles.length === 0}
                 <p class="py-2 text-center text-sm text-brand-muted">No file changes in this commit.</p>

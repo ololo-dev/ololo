@@ -14,6 +14,7 @@ mod config;
 mod control;
 mod done_flag;
 mod error;
+mod health_run;
 mod join;
 mod memory_sync;
 mod permissions;

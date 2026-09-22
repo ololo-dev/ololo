@@ -25,6 +25,7 @@ pub struct Model {
     pub default_fail_points: i32,
     pub default_no_response_points: i32,
     pub default_completion_bonus_points: i32,
+    pub default_health_points: i32,
     pub default_deadline_secs: i64,
     pub default_session_duration_secs: i64,
     /// Cancel a running session after this many seconds with no connected

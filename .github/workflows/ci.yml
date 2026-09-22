@@ -50,7 +50,7 @@ jobs:
             pkg-config libsqlite3-dev libzmq3-dev cmake bubblewrap
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.93.0"
+          toolchain: "1.96.0"
           components: rustfmt, clippy
       # The workspace links ~140 test binaries; mold cuts that link storm to
       # a fraction.

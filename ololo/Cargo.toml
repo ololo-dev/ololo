@@ -1,6 +1,6 @@
 [package]
 name = "ololo"
-version = "0.24.0"
+version = "0.25.0"
 edition = "2024"
 license = "Apache-2.0"
 authors.workspace = true
@@ -42,6 +42,11 @@ dirs = "5"
 agent-tokens = { path = "../agent-tokens" }
 gix = { version = "0.85", features = ["tree-editor"] }
 arena-core = { path = "../arena-core" }
+# The health scan and the snapshot prune the same directories (one list).
+ololo-health = { path = "../ololo-health" }
+# The health scan reads a committed tree written to a temp dir.
+tempfile = "3"
+
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.31", default-features = false, features = ["signal", "process"] }

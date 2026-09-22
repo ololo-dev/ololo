@@ -19,7 +19,9 @@ import type {
   MemberInfo,
   PlayerSummary,
   ScoreHistoryPoint,
+  SessionHealthPayload,
 } from "$lib/types/arena";
+import { upsertCheckpoint } from "$lib/session-health";
 import { backendPhaseToUiPhase, type UiSessionPhase } from "$lib/session-phase";
 import type { PlayerProgressState } from "$lib/session-view-model";
 import { createWsConnection, type WsConnection } from "$lib/ws/connection.svelte";
@@ -53,6 +55,7 @@ const KNOWN_FRAME_TYPES = new Set([
   "task_started",
   "task_scored",
   "artifact_received",
+  "health_updated",
 ]);
 
 export class WsSessionClient {
@@ -83,6 +86,9 @@ export class WsSessionClient {
   agentProgress = $state<Record<string, AgentProgressState>>({});
   userPlayers = $state<PlayerSummary[]>([]);
   activityLog = $state<ActivityEvent[]>([]);
+  /** Every participant's code-health history; null when the session
+   *  tracks none. Seeded by the snapshot, upserted by `health_updated`. */
+  health = $state<SessionHealthPayload | null>(null);
   protocolMismatch = $state(false);
   degraded = $state<string | null>(null);
 
@@ -142,7 +148,8 @@ export class WsSessionClient {
     const isEventFrame =
       frame.type === "task_started" ||
       frame.type === "task_scored" ||
-      frame.type === "artifact_received";
+      frame.type === "artifact_received" ||
+      frame.type === "health_updated";
     const frameVersion =
       typeof (frame as { version?: unknown }).version === "number"
         ? (frame as { version: number }).version
@@ -271,6 +278,10 @@ export class WsSessionClient {
             version: e.version,
           }));
         }
+        // The health history is a full state: the snapshot replaces it.
+        if (frame.health !== undefined) {
+          this.health = frame.health ?? null;
+        }
         // Seed scoreHistory from snapshot on first connect so the chart shows
         // existing scores immediately rather than waiting for the next probe.
         if (this.scoreHistory.length === 0) {
@@ -388,6 +399,11 @@ export class WsSessionClient {
         }
         break;
       }
+      case "health_updated":
+        // Keyed by checkpoint id: the second frame for a checkpoint (the
+        // server's verification) replaces the first (the client's report).
+        this.health = upsertCheckpoint(this.health, frame.player_id, frame.checkpoint);
+        break;
 
       case "artifact_received": {
         // One artifact per probe — the resolver records it once, but a

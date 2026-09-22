@@ -650,6 +650,7 @@ async fn seed_envelope(
                     default_value_points: Set(proj_pts.value),
                     default_fail_points: Set(proj_pts.fail),
                     default_no_response_points: Set(proj_pts.no_response),
+                    default_health_points: Set(proj_pts.health),
                     default_completion_bonus_points: Set(proj_pts.completion_bonus),
                     default_deadline_secs: Set(proj_intervals.deadline_secs),
                     default_session_duration_secs: Set(session_duration),

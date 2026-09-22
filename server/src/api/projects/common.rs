@@ -409,6 +409,7 @@ pub fn to_summary_with_sessions(
             fail: m.default_fail_points,
             no_response: m.default_no_response_points,
             completion_bonus: m.default_completion_bonus_points,
+            health: m.default_health_points,
         },
         points_range,
         intervals: IntervalsResp {

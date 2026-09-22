@@ -1,7 +1,9 @@
-# Single-stage: build + run in rust:1.93-slim so we avoid a second apt-get
+# Single-stage: build + run in rust:1.96-slim so we avoid a second apt-get
 # in a debian:bookworm-slim runtime (its apt GPG keyring is broken on the
 # Dokploy build host). Image is larger but the builder apt is cached/working.
-FROM rust:1.93-slim
+# 1.96 is the MSRV of the jscpd crates behind ololo-health (same pin as the
+# workspace rust-version and CI).
+FROM rust:1.96-slim
 WORKDIR /app
 RUN rm -rf /var/lib/apt/lists/* && for i in 1 2 3; do \
         apt-get update && apt-get install -y --no-install-recommends \

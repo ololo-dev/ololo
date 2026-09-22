@@ -164,6 +164,7 @@ async fn seed(state: &AppState) {
         default_value_points: Set(10),
         default_fail_points: Set(-5),
         default_no_response_points: Set(-10),
+        default_health_points: sea_orm::ActiveValue::NotSet,
         default_completion_bonus_points: Set(10),
         default_deadline_secs: Set(60),
         default_session_duration_secs: Set(3600),
@@ -218,6 +219,7 @@ async fn seed(state: &AppState) {
         max_interval_secs: Set(Some(300)),
         fail_points: Set(0),
         no_response_points: Set(0),
+        health_points: sea_orm::ActiveValue::NotSet,
         completion_bonus_points: Set(10),
         evaluation: Set(None),
     }

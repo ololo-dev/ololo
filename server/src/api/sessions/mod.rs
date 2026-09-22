@@ -10,6 +10,7 @@
 pub use admin::get_admin_list;
 pub use common::{CreateSessionReq, JoinSessionReq, PatchSessionReq, SessionError};
 pub use create::post_create;
+pub use health::{get_health, load_session_health};
 pub use join::post_join;
 pub(crate) use read::load_session_activity;
 pub use read::{
@@ -21,6 +22,7 @@ pub use regenerate::post_regenerate_code;
 pub(crate) mod admin;
 pub(crate) mod common;
 pub(crate) mod create;
+pub(crate) mod health;
 pub(crate) mod join;
 pub(crate) mod read;
 pub(crate) mod regenerate;

@@ -53,6 +53,9 @@ mod m20260818_000001_projects_show_tasks;
 mod m20260820_000001_projects_campaign_parts;
 mod m20260822_000001_judges_ignore_paths;
 mod m20260904_000001_judge_run_transcripts;
+mod m20260922_000001_task_results_kind;
+mod m20260922_000002_health_points;
+mod m20260922_000003_health_checkpoints;
 
 /// Advisory-lock key serialising `Migrator::up` across processes on Postgres.
 /// Arbitrary but must be identical in every binary that runs migrations.
@@ -178,6 +181,9 @@ impl MigratorTrait for Migrator {
             Box::new(m20260820_000001_projects_campaign_parts::Migration),
             Box::new(m20260822_000001_judges_ignore_paths::Migration),
             Box::new(m20260904_000001_judge_run_transcripts::Migration),
+            Box::new(m20260922_000001_task_results_kind::Migration),
+            Box::new(m20260922_000002_health_points::Migration),
+            Box::new(m20260922_000003_health_checkpoints::Migration),
         ]
     }
 }

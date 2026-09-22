@@ -736,3 +736,79 @@ async fn session_replay_switch_refuses_non_boolean() {
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
 }
+
+/// The code-health keys: the switch is a bool, the budget is bounded, the
+/// scores are 0–100 — and what the readers make of them.
+#[tokio::test]
+async fn settings_put_health_keys_validate_and_persist() {
+    use arena_core::health_settings::{
+        HEALTH_AMBER_MIN_KEY, HEALTH_ENABLED_KEY, HEALTH_GREEN_MIN_KEY,
+        HEALTH_MISMATCH_TOLERANCE_KEY, HEALTH_TIMEOUT_SECS_KEY, HealthSettings,
+    };
+    let state = test_state().await;
+    let db = state.db.clone();
+    let app = build_router(state);
+    let (_, cookie) =
+        register_and_login(app.clone(), "admin@settings-health.test", "password-12345").await;
+
+    let put = |key: &'static str, value: &'static str| {
+        let app = app.clone();
+        let cookie = cookie.clone();
+        async move {
+            read_body(
+                app.oneshot(put_settings_req(&cookie, key, value))
+                    .await
+                    .expect("put resp"),
+            )
+            .await
+            .0
+        }
+    };
+
+    assert_eq!(put(HEALTH_ENABLED_KEY, "TRUE").await, StatusCode::OK);
+    assert_ne!(put(HEALTH_ENABLED_KEY, "yes").await, StatusCode::OK);
+    assert_eq!(put(HEALTH_TIMEOUT_SECS_KEY, "45").await, StatusCode::OK);
+    assert_ne!(put(HEALTH_TIMEOUT_SECS_KEY, "1").await, StatusCode::OK);
+    assert_ne!(put(HEALTH_TIMEOUT_SECS_KEY, "abc").await, StatusCode::OK);
+    assert_eq!(put(HEALTH_GREEN_MIN_KEY, "80").await, StatusCode::OK);
+    assert_eq!(put(HEALTH_AMBER_MIN_KEY, "60.5").await, StatusCode::OK);
+    assert_ne!(put(HEALTH_AMBER_MIN_KEY, "101").await, StatusCode::OK);
+    assert_eq!(
+        put(HEALTH_MISMATCH_TOLERANCE_KEY, "0.5").await,
+        StatusCode::OK
+    );
+    assert_ne!(
+        put(HEALTH_MISMATCH_TOLERANCE_KEY, "-1").await,
+        StatusCode::OK
+    );
+
+    let (status, body) = read_body(
+        app.clone()
+            .oneshot(get_settings_req(&cookie))
+            .await
+            .expect("get resp"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body[HEALTH_ENABLED_KEY], serde_json::json!("true"));
+    assert_eq!(body[HEALTH_TIMEOUT_SECS_KEY], serde_json::json!("45"));
+
+    // The readers see the same rows.
+    let settings = HealthSettings::load(&db).await.expect("load");
+    assert!(settings.enabled);
+    assert_eq!(settings.timeout, Duration::from_secs(45));
+    assert_eq!(
+        (settings.thresholds.green_min, settings.thresholds.amber_min),
+        (80.0, 60.5)
+    );
+    assert_eq!(settings.tolerance, 0.5);
+
+    // An inverted pair is stored (keys are edited one at a time) but read
+    // back as the defaults, never inside out.
+    assert_eq!(put(HEALTH_GREEN_MIN_KEY, "50").await, StatusCode::OK);
+    let settings = HealthSettings::load(&db).await.expect("load");
+    assert_eq!(
+        settings.thresholds,
+        arena_core::protocol::Thresholds::default()
+    );
+}

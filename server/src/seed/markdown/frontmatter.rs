@@ -72,6 +72,9 @@ pub(crate) struct ReadmePoints {
     pub(crate) no_response: i32,
     #[serde(default = "baseline_completion_bonus")]
     pub(crate) completion_bonus: i32,
+    /// Points the code health of a task's final tree can earn; 0 = none.
+    #[serde(default)]
+    pub(crate) health: i32,
 }
 
 fn baseline_fail() -> i32 {
@@ -96,6 +99,7 @@ impl ReadmePoints {
             fail: self.fail,
             no_response: self.no_response,
             completion_bonus: self.completion_bonus,
+            health: self.health,
         }
     }
 }
@@ -107,6 +111,7 @@ pub(crate) fn baseline_points() -> ExportPoints {
         fail: baseline_fail(),
         no_response: baseline_no_response(),
         completion_bonus: baseline_completion_bonus(),
+        health: 0,
     }
 }
 
@@ -207,6 +212,8 @@ pub(crate) struct TaskPointsFm {
     pub(crate) no_response: Option<i32>,
     #[serde(default)]
     pub(crate) completion_bonus: Option<i32>,
+    #[serde(default)]
+    pub(crate) health: Option<i32>,
 }
 
 /// Per-task interval overrides in markdown frontmatter. All `Option`;

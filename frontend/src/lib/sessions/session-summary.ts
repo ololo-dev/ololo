@@ -23,6 +23,9 @@ export type SessionSummary = {
   verdictCount: number;
   judgePoints: number;
   bonusPoints: number;
+  /** The health bonuses' sum, and per task the note the server left. */
+  healthPoints: number;
+  healthNotes: { ordinal: number; title: string; points: number; note: string }[];
   tasksPassed: number;
   judges: SummaryJudge[];
   criteria: { key: string; title: string; avg: number }[];
@@ -74,6 +77,16 @@ export function buildSessionSummary(
     verdictCount: allVerdicts.length,
     judgePoints: allVerdicts.reduce((sum, v) => sum + v.point_delta, 0),
     bonusPoints: tasks.reduce((sum, t) => sum + (t.bonus_points ?? 0), 0),
+    healthPoints: tasks.reduce((sum, t) => sum + (t.health_points ?? 0), 0),
+    healthNotes: tasks
+      .filter((t) => t.health_points != null)
+      .map((t) => ({
+        ordinal: t.ordinal,
+        title: t.title,
+        points: t.health_points ?? 0,
+        note: (t.health_note ?? "").replace(/^health-bonus:\s*/, ""),
+      }))
+      .sort((a, b) => a.ordinal - b.ordinal),
     tasksPassed: tasks.filter(isTaskPassed).length,
     judges: [...judgeTotals.entries()]
       .map(([slug, e]) => ({

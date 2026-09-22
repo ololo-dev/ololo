@@ -841,7 +841,16 @@ fn player_tasks_done_ack_commits_last_task_and_does_not_quit() {
         .unwrap()
         .head_commit_message()
         .expect("head commit exists after ack");
-    assert_eq!(msg, format!("feat({tid}): Last task"));
+    assert_eq!(
+        msg.lines().next().unwrap(),
+        format!("feat({tid}): Last task")
+    );
+    let parsed = arena_core::snapshot_message::SnapshotMessage::parse(&msg);
+    assert_eq!(
+        parsed.trailers.outcome.as_deref(),
+        Some(arena_core::snapshot_message::OUTCOME_COMPLETED),
+        "a per-player ack means the task was completed"
+    );
 }
 
 #[test]

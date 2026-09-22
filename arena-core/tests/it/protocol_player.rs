@@ -42,6 +42,7 @@ fn player_snapshot_round_trips() {
         session_report: None,
         evaluations: Vec::new(),
         similarity_adjustment: None,
+        health: None,
     };
     let frame = PlayerFrame::PlayerSnapshot(payload);
     let json = serde_json::to_string(&frame).unwrap();
@@ -73,6 +74,7 @@ fn player_snapshot_data_converts() {
         session_report: None,
         evaluations: Vec::new(),
         similarity_adjustment: None,
+        health: None,
     };
     let payload: PlayerSnapshotPayload = data.into();
     assert_eq!(payload.display_name, "Bob");
@@ -121,6 +123,7 @@ fn player_snapshot_completion_status_roundtrip() {
         session_report: None,
         evaluations: Vec::new(),
         similarity_adjustment: None,
+        health: None,
     };
     let frame = PlayerFrame::PlayerSnapshot(payload);
     let json = serde_json::to_string(&frame).unwrap();
@@ -156,6 +159,7 @@ fn player_snapshot_completion_status_none_skipped_and_absent_parses() {
         session_report: None,
         evaluations: Vec::new(),
         similarity_adjustment: None,
+        health: None,
     };
     // None means "not computed" and must not appear on the wire.
     let json = serde_json::to_string(&payload).unwrap();
@@ -347,6 +351,8 @@ fn task_revealed_roundtrip() {
             scheduler_state: None,
             total_points: 0,
             bonus_points: 0,
+            health_points: None,
+            health_note: None,
         },
         total_tasks: 5,
     };
@@ -438,6 +444,7 @@ fn player_snapshot_total_tasks_roundtrip() {
         session_report: None,
         evaluations: Vec::new(),
         similarity_adjustment: None,
+        health: None,
     };
     let frame = PlayerFrame::PlayerSnapshot(payload);
     let json = serde_json::to_string(&frame).unwrap();

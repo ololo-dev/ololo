@@ -101,6 +101,7 @@ async fn seed_scores(
         max_interval_secs: Set(Some(300)),
         fail_points: Set(0),
         no_response_points: Set(0),
+        health_points: sea_orm::ActiveValue::NotSet,
         completion_bonus_points: Set(10),
         evaluation: Set(None),
     }
@@ -116,6 +117,7 @@ async fn seed_scores(
         answer: Set(String::new()),
         created_at: Set(now),
         point_delta: Set(100),
+        kind: Set(arena_core::entities::task_results::KIND_PROBE.to_string()),
         is_bonus: Set(false),
     }
     .insert(db)

@@ -421,6 +421,7 @@ pub async fn grade_test_result(
             exit_code,
             duration_ms,
             error,
+            ..
         })) if recv_id == probe_id => {
             let stdout_trimmed = stdout.trim_end().to_string();
             // A probe that never ran is failed here, before any validation

@@ -420,7 +420,7 @@ impl TuiApp {
                         if let Some(snap) = self.snapshot.clone()
                             && let Ok(guard) = snap.lock()
                         {
-                            guard.set_current_task(Some(tid));
+                            guard.set_current_task(Some((tid, &p.task_title)));
                         }
                         self.snapshot_current_task = Some(tid);
                     }
@@ -497,7 +497,7 @@ impl TuiApp {
                     if let Some(snap) = self.snapshot.clone()
                         && let Ok(guard) = snap.lock()
                     {
-                        guard.set_current_task(Some(task_id));
+                        guard.set_current_task(Some((task_id, &task_title)));
                     }
                     self.snapshot_current_task = Some(task_id);
                 }
@@ -511,8 +511,8 @@ impl TuiApp {
                     if let Ok(guard) = snap.lock()
                         && guard.commit_wip(task_id).is_ok()
                     {
-                        let _ = guard.push_to_remote();
-                        tracing::info!("wip snapshot pushed: wip({task_id})");
+                        guard.request_push();
+                        tracing::info!("wip snapshot committed: wip({task_id})");
                     }
                 } else if !self.committed_tasks.contains_key(&task_id) {
                     let title = self
@@ -520,13 +520,20 @@ impl TuiApp {
                         .get(&task_id)
                         .map(|t| t.title.clone())
                         .unwrap_or(task_title);
+                    // The server names why the task closed: `todo_complete`
+                    // is the player's own declaration, `deadline` the clock.
+                    let outcome = if reason == arena_core::protocol::SNAPSHOT_REASON_DEADLINE {
+                        arena_core::snapshot_message::OUTCOME_DEADLINE
+                    } else {
+                        arena_core::snapshot_message::OUTCOME_COMPLETED
+                    };
                     if let Ok(guard) = snap.lock()
-                        && guard.commit_task(task_id, &title).is_ok()
+                        && guard.commit_task(task_id, &title, outcome).is_ok()
                     {
                         self.committed_tasks.insert(task_id, ());
-                        let _ = guard.push_to_remote();
+                        guard.request_push();
                         tracing::info!(
-                            "final snapshot pushed ({reason}): feat({task_id}): {title}"
+                            "final snapshot committed ({reason}): feat({task_id}): {title}"
                         );
                     }
                     self.report_task_stats(false);
@@ -920,9 +927,9 @@ impl TuiApp {
             return;
         }
         if guard.commit_artifacts_sync().is_ok() {
-            let _ = guard.push_to_remote();
+            guard.request_push();
             self.artifacts_fingerprint = fp;
-            tracing::info!("artifacts committed and pushed (.ololo/artifacts sync)");
+            tracing::info!("artifacts committed (.ololo/artifacts sync); push requested");
         }
     }
 
@@ -931,12 +938,20 @@ impl TuiApp {
             return;
         };
         let to_commit = self.done_tasks(only_below_max, &self.committed_tasks);
+        // A task the scheduler moved past was completed; one committed only
+        // because the session ended was cut by the clock.
+        let outcome =
+            if only_below_max || self.header.status == crate::tui::header::Status::TasksDone {
+                arena_core::snapshot_message::OUTCOME_COMPLETED
+            } else {
+                arena_core::snapshot_message::OUTCOME_DEADLINE
+            };
         for t in to_commit {
             if let Ok(guard) = snap.lock()
-                && guard.commit_task(t.id, &t.title).is_ok()
+                && guard.commit_task(t.id, &t.title, outcome).is_ok()
             {
                 self.committed_tasks.insert(t.id, ());
-                let _ = guard.push_to_remote();
+                guard.request_push();
                 tracing::info!(
                     "task snapshot committed{}: feat({}): {}",
                     if only_below_max { "" } else { " (final)" },

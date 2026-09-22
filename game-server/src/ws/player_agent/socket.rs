@@ -453,6 +453,17 @@ pub async fn handle_player_agent_socket(
                 if open_ended.is_none() {
                     spawn_task_judges(&state, session_id, player_id, task_id).await;
                 }
+                // The task's final tree becomes a health checkpoint (verified
+                // from the `feat` commit ololo pushes for it); no-op when
+                // health is off.
+                crate::health::on_task_closed(
+                    state.clone(),
+                    session_id,
+                    player_id,
+                    join_code.clone(),
+                    task_row.clone(),
+                )
+                .await;
                 if !advanced {
                     tracing::info!(session_id = %session_id, player_id = %player_id, "player_agent: player completed all tasks");
                     // Per-player acknowledgment first, then finish the session
@@ -651,6 +662,11 @@ pub async fn handle_player_agent_socket(
         };
         let (test_ordinal, test_total) =
             test_position(&state, task_id, session_id, adapted_test.id).await;
+        // The probe's position among this player's probes (the row above
+        // is already counted) and, when health is tracked, the client's
+        // analysis budget.
+        let (probe_seq, health) =
+            crate::health::probe_dispatch_info(&state, session_id, player_id).await;
         let push_frame = PlayerAgentFrame::TestPush {
             probe_id,
             rendered_command: rendered_command.clone(),
@@ -677,6 +693,8 @@ pub async fn handle_player_agent_socket(
             } else {
                 arena_core::protocol::ValidationKind::Minijinja
             },
+            probe_seq,
+            health,
         };
         let push_json = serde_json::to_string(&push_frame).unwrap_or_default();
         if socket.send(Message::Text(push_json)).await.is_err() {
@@ -709,6 +727,19 @@ pub async fn handle_player_agent_socket(
                                             )
                                             .await;
                                         });
+                                        continue;
+                                    }
+                                    // A health report is not a probe result
+                                    // either: store it and verify off this
+                                    // loop, keep waiting.
+                                    if let PlayerAgentClientFrame::HealthReport(report) = frame {
+                                        tokio::spawn(crate::health::on_report(
+                                            state.clone(),
+                                            session_id,
+                                            player_id,
+                                            join_code.clone(),
+                                            *report,
+                                        ));
                                         continue;
                                     }
                                     // Same rule: a completion-flag announce is

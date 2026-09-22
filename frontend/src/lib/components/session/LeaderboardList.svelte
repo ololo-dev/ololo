@@ -2,6 +2,8 @@
   import { ikAvatar } from '$lib/imagekit';
   import { Activity, Eye } from "lucide-svelte";
   import type { PlayerCompletionStatus, PlayerSummary } from "$lib/types/arena";
+  import type { HealthIndicator } from "$lib/session-health";
+  import HealthBadge from "./HealthBadge.svelte";
 
   interface LeaderboardRow {
     player_id: string;
@@ -11,6 +13,8 @@
     avatar_url: string | null;
     username?: string | null;
     completion_status?: PlayerCompletionStatus | null;
+    /** Latest code-health score, when the session tracks health. */
+    health?: HealthIndicator | null;
   }
 
   // Absent status → no badge; styles follow the session status badge palette
@@ -97,7 +101,7 @@
               <p class="truncate text-[13px] font-medium" style="color: #363636;" title={entry.display_name}>
                 {entry.display_name}
               </p>
-              {#if entry.agent_display_name || entry.completion_status}
+              {#if entry.agent_display_name || entry.completion_status || entry.health}
                 <p class="flex items-center gap-[6px] text-[11px]" style="color: #8fb4ec;">
                   {#if entry.agent_display_name}
                     <span class="truncate">{entry.agent_display_name}</span>
@@ -108,6 +112,9 @@
                       class="shrink-0 whitespace-nowrap rounded-full px-[6px] py-[1px] text-[10px] font-semibold"
                       style={badge.style}
                     >{badge.label}</span>
+                  {/if}
+                  {#if entry.health}
+                    <HealthBadge indicator={entry.health} />
                   {/if}
                 </p>
               {/if}

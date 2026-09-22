@@ -64,6 +64,7 @@ async fn insert_project_with_duration(db: &DatabaseConnection, duration_secs: i6
         default_value_points: Set(10),
         default_fail_points: Set(-5),
         default_no_response_points: Set(-10),
+        default_health_points: sea_orm::ActiveValue::NotSet,
         default_completion_bonus_points: Set(10),
         default_deadline_secs: Set(60),
         default_session_duration_secs: Set(duration_secs),
@@ -385,6 +386,7 @@ async fn missed_judge_runs_are_re_driven_exactly_once() {
             max_interval_secs: Set(Some(300)),
             fail_points: Set(0),
             no_response_points: Set(0),
+            health_points: sea_orm::ActiveValue::NotSet,
             completion_bonus_points: Set(0),
             evaluation: Set(None),
         }
@@ -568,6 +570,7 @@ async fn periodic_sweep_honors_the_age_floor() {
         max_interval_secs: Set(Some(300)),
         fail_points: Set(0),
         no_response_points: Set(0),
+        health_points: sea_orm::ActiveValue::NotSet,
         completion_bonus_points: Set(0),
         evaluation: Set(None),
     }
@@ -740,6 +743,7 @@ async fn orphaned_running_judge_row_of_a_cancelled_session_is_requeued() {
         max_interval_secs: Set(Some(300)),
         fail_points: Set(0),
         no_response_points: Set(0),
+        health_points: sea_orm::ActiveValue::NotSet,
         completion_bonus_points: Set(0),
         evaluation: Set(None),
     }
@@ -933,6 +937,7 @@ async fn abandoned_judge_runs_are_reaped_as_failed() {
         max_interval_secs: Set(Some(300)),
         fail_points: Set(0),
         no_response_points: Set(0),
+        health_points: sea_orm::ActiveValue::NotSet,
         completion_bonus_points: Set(0),
         evaluation: Set(None),
     }

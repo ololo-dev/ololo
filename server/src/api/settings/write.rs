@@ -39,6 +39,12 @@ pub async fn put_settings(
         // Cross-session copy/paste validation (game server reads this):
         // duplication % below which no penalty applies; 100 disables.
         "similarity_threshold_pct",
+        // Code-health checkpoints (game server + web server read these).
+        arena_core::health_settings::HEALTH_ENABLED_KEY,
+        arena_core::health_settings::HEALTH_TIMEOUT_SECS_KEY,
+        arena_core::health_settings::HEALTH_GREEN_MIN_KEY,
+        arena_core::health_settings::HEALTH_AMBER_MIN_KEY,
+        arena_core::health_settings::HEALTH_MISMATCH_TOLERANCE_KEY,
         "email.provider",
         "email.ses_region",
         "email.access_key_id",
@@ -73,6 +79,7 @@ pub async fn put_settings(
     } else if body.key == "show_llm_costs_in_session"
         || body.key == crate::api::settings::SESSION_REPLAY_KEY
         || body.key == arena_core::quota::PLANS_ENABLED_KEY
+        || body.key == arena_core::health_settings::HEALTH_ENABLED_KEY
     {
         if !is_valid_bool_value(&body.value) {
             return Err(SettingsError::InvalidProjectCreationValue);
@@ -87,6 +94,36 @@ pub async fn put_settings(
         }) {
             return Err(SettingsError::UnknownKey);
         }
+    } else if body.key == arena_core::health_settings::HEALTH_TIMEOUT_SECS_KEY {
+        // Seconds, within the bounds the readers enforce anyway.
+        let parsed: u32 = body
+            .value
+            .trim()
+            .parse()
+            .map_err(|_| SettingsError::InvalidPlanLimitValue)?;
+        if !(arena_core::health_settings::MIN_TIMEOUT_SECS
+            ..=arena_core::health_settings::MAX_TIMEOUT_SECS)
+            .contains(&parsed)
+        {
+            return Err(SettingsError::InvalidPlanLimitValue);
+        }
+        body.value = parsed.to_string();
+    } else if body.key == arena_core::health_settings::HEALTH_GREEN_MIN_KEY
+        || body.key == arena_core::health_settings::HEALTH_AMBER_MIN_KEY
+        || body.key == arena_core::health_settings::HEALTH_MISMATCH_TOLERANCE_KEY
+    {
+        // A score (0–100) or a score distance. The pair rule (amber below
+        // green) is applied when the settings are read, so the two keys
+        // can be edited one at a time.
+        let parsed: f64 = body
+            .value
+            .trim()
+            .parse()
+            .map_err(|_| SettingsError::InvalidPlanLimitValue)?;
+        if !(parsed.is_finite() && (0.0..=100.0).contains(&parsed)) {
+            return Err(SettingsError::InvalidPlanLimitValue);
+        }
+        body.value = parsed.to_string();
     } else if body.key == "similarity_threshold_pct" {
         // A percentage: 0–100, where 100 turns the check off.
         let parsed: u32 = body

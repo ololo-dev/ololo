@@ -58,17 +58,25 @@ fn spawn_sync_tasks(
     snap: &Arc<std::sync::Mutex<snapshot::SnapshotRepo>>,
     sink: Arc<dyn crate::tui::EventSink>,
 ) -> (
-    player_ws::MemoryChannel,
+    player_ws::SnapshotChannel,
     tokio::task::JoinHandle<()>,
     tokio::task::JoinHandle<()>,
 ) {
     let (frame_tx, frame_rx) = tokio::sync::mpsc::unbounded_channel();
+    // Every push goes through one background pusher (never blocks the
+    // reducer or the probe loop; retries and resyncs on its own).
+    let (_pusher, _push_task) = snapshot::pusher::spawn(Arc::clone(snap));
     let (handle, mem_task) = crate::memory_sync::spawn(Arc::clone(snap), frame_tx.clone());
+    let (health, _health_task) = crate::health_run::spawn(Arc::clone(snap), frame_tx.clone());
     let flag_task = crate::done_flag::spawn(Arc::clone(snap), frame_tx, Some(sink));
     (
-        player_ws::MemoryChannel {
-            handle,
+        player_ws::SnapshotChannel {
+            memory: handle,
             frames: frame_rx,
+            snapshot: Arc::clone(snap),
+            health,
+            session_id: None,
+            player_id: None,
         },
         mem_task,
         flag_task,
@@ -237,7 +245,7 @@ pub async fn run_headless_start(
         let commit = tokio::task::spawn_blocking(move || {
             let snap = snap_arc.lock().map_err(|e| anyhow!("{e}"))?;
             snap.commit_final().map_err(|e| anyhow!("{e}"))?;
-            snap.push_to_remote().map_err(|e| anyhow!("{e}"))
+            snap.push_to_remote().map(drop).map_err(|e| anyhow!("{e}"))
         });
         match tokio::time::timeout(Duration::from_secs(5), commit).await {
             Ok(Ok(Ok(()))) => {}
@@ -528,7 +536,7 @@ pub async fn run_tui_start(
         let commit = tokio::task::spawn_blocking(move || {
             let snap = snap_arc.lock().map_err(|e| anyhow!("{e}"))?;
             snap.commit_final().map_err(|e| anyhow!("{e}"))?;
-            snap.push_to_remote().map_err(|e| anyhow!("{e}"))
+            snap.push_to_remote().map(drop).map_err(|e| anyhow!("{e}"))
         });
         match tokio::time::timeout(Duration::from_secs(5), commit).await {
             Ok(Ok(Ok(()))) => {}

@@ -6,7 +6,7 @@ Guidance for AI coding agents working in this repository.
 
 ## The short version
 
-- ololo is the place where AI agents compete on real tasks: a Rust workspace (6 crates: `arena-core`, `server`, `server/migration`, `game-server`, `ololo`, `agent-tokens`; edition 2024, Rust 1.93+) plus a SvelteKit frontend (`frontend/`, pnpm). The internal codename "Arena" survives in crate names and env vars; the product name in user-facing copy is **ololo**.
+- ololo is the place where AI agents compete on real tasks: a Rust workspace (7 crates: `arena-core`, `server`, `server/migration`, `game-server`, `ololo`, `ololo-health`, `agent-tokens`; edition 2024, Rust 1.96+) plus a SvelteKit frontend (`frontend/`, pnpm). The internal codename "Arena" survives in crate names and env vars; the product name in user-facing copy is **ololo**.
 - `server` and `game-server` share one database (SQLite dev / Postgres prod) and communicate over ZeroMQ. Wire protocol types live exclusively in `arena-core/src/protocol/`; all wire structs use `#[serde(deny_unknown_fields)]`. Routes are assembled in `server/src/lib.rs::build_router`.
 - Build/test: `cargo run -p server`, `cargo nextest run --workspace` (preferred over `cargo test`), `cargo clippy --workspace --all-targets -- -D warnings`. Frontend: `pnpm dev` / `pnpm check` / `pnpm lint` (oxlint) / `pnpm test`. Copy `.env.example` → `.env` first (`JWT_SIGNING_KEY` ≥32 bytes, `ARENA_FRONTEND_ORIGINS`).
 

@@ -49,6 +49,7 @@ async fn insert_task(
         max_interval_secs: Set(Some(300)),
         fail_points: Set(0),
         no_response_points: Set(0),
+        health_points: sea_orm::ActiveValue::NotSet,
         completion_bonus_points: Set(0),
         evaluation: Set(None),
     }
@@ -67,6 +68,7 @@ async fn award(db: &DatabaseConnection, session: Uuid, player: Uuid, task: Uuid,
         answer: Set("ok".to_string()),
         created_at: Set(Utc::now()),
         point_delta: Set(points),
+        kind: Set(arena_core::entities::task_results::KIND_PROBE.to_string()),
         is_bonus: Set(false),
     }
     .insert(db)

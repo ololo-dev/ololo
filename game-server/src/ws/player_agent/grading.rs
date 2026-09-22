@@ -825,7 +825,10 @@ pub enum SleepOutcome {
 pub async fn drain_during_sleep(
     socket: &mut WebSocket,
     session_rx: &mut Option<broadcast::Receiver<ArenaFrame>>,
+    state: &GameServerState,
     session_id: Uuid,
+    player_id: Uuid,
+    join_code: &str,
     sleep_secs: u64,
 ) -> SleepOutcome {
     let inter_probe_sleep = tokio::time::sleep(Duration::from_secs(sleep_secs));
@@ -884,18 +887,30 @@ pub async fn drain_during_sleep(
                     }
                     Some(Ok(Message::Text(text))) => {
                         // The agent may announce a completion flag push while
-                        // we sleep between probes. Anything else (e.g. a late
-                        // TestResult for an expired probe) stays ignored, as
-                        // before.
-                        if let Ok(PlayerAgentClientFrame::CompletionFlagPushed { path }) =
-                            serde_json::from_str::<PlayerAgentClientFrame>(&text)
-                        {
-                            tracing::info!(
-                                session_id = %session_id,
-                                path = %path,
-                                "player_agent: completion flag pushed; cutting inter-probe sleep"
-                            );
-                            return SleepOutcome::CompletionFlag;
+                        // we sleep between probes, and its health report for
+                        // the probe just answered lands here too (the
+                        // analysis finishes after the answer). Anything else
+                        // (e.g. a late TestResult for an expired probe) stays
+                        // ignored, as before.
+                        match serde_json::from_str::<PlayerAgentClientFrame>(&text) {
+                            Ok(PlayerAgentClientFrame::CompletionFlagPushed { path }) => {
+                                tracing::info!(
+                                    session_id = %session_id,
+                                    path = %path,
+                                    "player_agent: completion flag pushed; cutting inter-probe sleep"
+                                );
+                                return SleepOutcome::CompletionFlag;
+                            }
+                            Ok(PlayerAgentClientFrame::HealthReport(report)) => {
+                                tokio::spawn(crate::health::on_report(
+                                    state.clone(),
+                                    session_id,
+                                    player_id,
+                                    join_code.to_string(),
+                                    *report,
+                                ));
+                            }
+                            _ => {}
                         }
                     }
                     _ => {}

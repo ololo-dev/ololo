@@ -256,7 +256,16 @@ pub async fn handle_player_agent_socket(
                 // SessionComplete, …) to the client while paused so the TUI
                 // reflects the paused/cancelled state instead of freezing on the
                 // last "Running" value.
-                if drain_during_sleep(&mut socket, &mut session_rx, session_id, 1).await
+                if drain_during_sleep(
+                    &mut socket,
+                    &mut session_rx,
+                    &state,
+                    session_id,
+                    player_id,
+                    &join_code,
+                    1,
+                )
+                .await
                     == SleepOutcome::Disconnected
                 {
                     return;
@@ -271,7 +280,16 @@ pub async fn handle_player_agent_socket(
                 // Flush any queued session broadcast (e.g. SessionComplete with
                 // reason "cancelled"/"time_expired") so the TUI shows the final
                 // state before the socket closes.
-                drain_during_sleep(&mut socket, &mut session_rx, session_id, 1).await;
+                drain_during_sleep(
+                    &mut socket,
+                    &mut session_rx,
+                    &state,
+                    session_id,
+                    player_id,
+                    &join_code,
+                    1,
+                )
+                .await;
                 break;
             }
         }
@@ -358,7 +376,16 @@ pub async fn handle_player_agent_socket(
                                 Some(Utc::now() + chrono::Duration::seconds(6)),
                             )
                             .await;
-                            if drain_during_sleep(&mut socket, &mut session_rx, session_id, 2).await
+                            if drain_during_sleep(
+                                &mut socket,
+                                &mut session_rx,
+                                &state,
+                                session_id,
+                                player_id,
+                                &join_code,
+                                2,
+                            )
+                            .await
                                 == SleepOutcome::Disconnected
                             {
                                 return;
@@ -399,8 +426,16 @@ pub async fn handle_player_agent_socket(
                                     Some(Utc::now() + chrono::Duration::seconds(8)),
                                 )
                                 .await;
-                                if drain_during_sleep(&mut socket, &mut session_rx, session_id, 5)
-                                    .await
+                                if drain_during_sleep(
+                                    &mut socket,
+                                    &mut session_rx,
+                                    &state,
+                                    session_id,
+                                    player_id,
+                                    &join_code,
+                                    5,
+                                )
+                                .await
                                     == SleepOutcome::Disconnected
                                 {
                                     return;
@@ -491,10 +526,28 @@ pub async fn handle_player_agent_socket(
                         };
                         if matches!(decide_probe_action(status), ProbeAction::Exit) {
                             // Flush the queued final broadcast before closing.
-                            drain_during_sleep(&mut socket, &mut session_rx, session_id, 1).await;
+                            drain_during_sleep(
+                                &mut socket,
+                                &mut session_rx,
+                                &state,
+                                session_id,
+                                player_id,
+                                &join_code,
+                                1,
+                            )
+                            .await;
                             break;
                         }
-                        if drain_during_sleep(&mut socket, &mut session_rx, session_id, 1).await
+                        if drain_during_sleep(
+                            &mut socket,
+                            &mut session_rx,
+                            &state,
+                            session_id,
+                            player_id,
+                            &join_code,
+                            1,
+                        )
+                        .await
                             == SleepOutcome::Disconnected
                         {
                             break; // client closed the socket
@@ -859,7 +912,16 @@ pub async fn handle_player_agent_socket(
         // Drain the session broadcast during the inter-probe sleep so RunningCountdown
         // (and any other session) frames reach the client without waiting for the
         // next probe dispatch. Also handles clean client disconnect and pings.
-        match drain_during_sleep(&mut socket, &mut session_rx, session_id, sleep_secs as u64).await
+        match drain_during_sleep(
+            &mut socket,
+            &mut session_rx,
+            &state,
+            session_id,
+            player_id,
+            &join_code,
+            sleep_secs as u64,
+        )
+        .await
         {
             SleepOutcome::Disconnected => return,
             // The agent pushed a completion flag file: dispatch the next

@@ -418,8 +418,33 @@ pub fn task_ranges(log_oldest_first: &[LogEntry]) -> TaskRanges {
             continue;
         };
 
-        let joins_current =
-            current.is_some_and(|i| ranges[i].task_id == task) && msg.kind != Kind::Start;
+        // A done marker for a task other than the current one closes that
+        // task's still-open range instead of opening a one-commit range:
+        // ololo commits the next task's start marker at its first probe and
+        // the previous task's `feat` a beat later, from another thread.
+        if msg.is_task_done()
+            && current.is_none_or(|i| ranges[i].task_id != task)
+            && let Some(i) = ranges
+                .iter()
+                .rposition(|r| r.task_id == task && r.end_sha.is_none())
+        {
+            let range = &mut ranges[i];
+            range.commits.push(entry.sha.clone());
+            range.end_sha = Some(entry.sha.clone());
+            range.end_at = entry.committed_at;
+            if range.title.is_none() {
+                range.title = title;
+            }
+            by_commit.insert(entry.sha.clone(), task);
+            continue;
+        }
+
+        // A start marker joins the current range when that range is the same
+        // task and still open (a reconnect re-seeded from a stale log wrote a
+        // second marker); after the task closed, it reopens the task.
+        let joins_current = current.is_some_and(|i| {
+            ranges[i].task_id == task && (msg.kind != Kind::Start || ranges[i].end_sha.is_none())
+        });
         if !joins_current {
             ranges.push(TaskRange {
                 task_id: task,
@@ -698,17 +723,57 @@ mod tests {
     }
 
     #[test]
-    fn a_repeated_start_marker_opens_a_new_range() {
+    fn a_repeated_start_marker_joins_the_open_range_and_reopens_a_closed_one() {
         let a = id(1);
         let log = vec![
             entry("a0", subject(&Kind::Start, Some(a), "A"), 0),
             entry("a1", subject(&Kind::Probe, Some(a), "#1 A"), 1),
+            // A reconnect wrote the marker again while the task was open.
             entry("a2", subject(&Kind::Start, Some(a), "A"), 2),
             entry("a3", subject(&Kind::Feat, Some(a), "A"), 3),
+            // The task revisited after it closed is a new range.
+            entry("a4", subject(&Kind::Start, Some(a), "A"), 4),
+            entry("a5", subject(&Kind::Probe, Some(a), "#2 A"), 5),
         ];
         let r = task_ranges(&log);
         assert_eq!(r.ranges.len(), 2);
-        assert!(r.ranges[0].is_open());
-        assert_eq!(r.ranges[1].commits, ["a2", "a3"]);
+        assert_eq!(r.ranges[0].commits, ["a0", "a1", "a2", "a3"]);
+        assert_eq!(r.ranges[0].end_sha.as_deref(), Some("a3"));
+        assert!(r.ranges[1].is_open());
+        assert_eq!(r.ranges[1].commits, ["a4", "a5"]);
+    }
+
+    #[test]
+    fn a_done_marker_landing_after_the_next_start_closes_its_own_range() {
+        // ololo writes start(B) at B's first probe and feat(A) a beat later,
+        // from the TUI thread — the history reads start(A) … start(B)
+        // probe(B) feat(A) probe(B). A's range closes at feat(A); B's range
+        // is one range, still open.
+        let (a, b) = (id(1), id(2));
+        let log = vec![
+            entry("a0", subject(&Kind::Start, Some(a), "A"), 0),
+            entry("a1", subject(&Kind::Probe, Some(a), "#1 A"), 1),
+            entry("b0", subject(&Kind::Start, Some(b), "B"), 2),
+            entry("b1", subject(&Kind::Probe, Some(b), "#2 B"), 3),
+            entry("a2", subject(&Kind::Feat, Some(a), "A"), 4),
+            entry("b2", subject(&Kind::Probe, Some(b), "#3 B"), 5),
+            entry("b3", subject(&Kind::Feat, Some(b), "B"), 6),
+        ];
+        let r = task_ranges(&log);
+        assert_eq!(r.ranges.len(), 2);
+        let ra = &r.ranges[0];
+        assert_eq!(
+            (ra.start_sha.as_str(), ra.end_sha.as_deref()),
+            ("a0", Some("a2"))
+        );
+        assert_eq!(ra.commits, ["a0", "a1", "a2"]);
+        let rb = &r.ranges[1];
+        assert_eq!(
+            (rb.start_sha.as_str(), rb.end_sha.as_deref()),
+            ("b0", Some("b3"))
+        );
+        assert_eq!(rb.commits, ["b0", "b1", "b2", "b3"]);
+        assert_eq!(r.task_of("a2"), Some(a));
+        assert_eq!(r.task_of("b2"), Some(b));
     }
 }

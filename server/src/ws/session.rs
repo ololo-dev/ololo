@@ -116,10 +116,26 @@ pub(crate) async fn build_session_snapshot(
     db: &sea_orm::DatabaseConnection,
     session_cache: &Arc<RwLock<SessionCacheInner>>,
 ) -> SessionSnapshotPayload {
-    let (session_id, started_at) = {
+    let (session_id, mut started_at) = {
         let cache = session_cache.read().unwrap_or_else(|e| e.into_inner());
         (cache.session_id, cache.started_at)
     };
+    // The cache learns `started_at` only from boot hydration; a session
+    // started since then (the game server flips the status, this process
+    // sees a `SessionStatus` event) keeps `None` there. The row is the truth
+    // for the score history's and the chart's clock, so read it once and
+    // remember it.
+    if started_at.is_none()
+        && let Ok(Some(row)) = arena_core::entities::sessions::Entity::find_by_id(session_id)
+            .one(db)
+            .await
+        && row.started_at.is_some()
+    {
+        started_at = row.started_at;
+        if let Ok(mut cache) = session_cache.write() {
+            cache.started_at = started_at;
+        }
+    }
     let score_history = arena_core::scoring::build_score_history(db, session_id, started_at)
         .await
         .ok()
@@ -155,7 +171,7 @@ pub(crate) async fn build_session_snapshot(
             })
             .collect(),
         leaderboard: cache.leaderboard.clone(),
-        started_at: cache.started_at,
+        started_at,
         timeline: None,
         activity: Some(activity),
         score_history,
@@ -751,6 +767,17 @@ mod tests {
             status_of(player_c),
             None,
             "revoked player has no status entry and must stay None"
+        );
+        // The cache was hydrated before the session started: the snapshot
+        // takes `started_at` from the row and remembers it, so the chart's
+        // clock and the score history are there on the first connect.
+        assert!(
+            snapshot.started_at.is_some(),
+            "started_at must fall back to the sessions row"
+        );
+        assert!(
+            cache.read().unwrap().started_at.is_some(),
+            "the fallback is written back to the cache"
         );
     }
 }

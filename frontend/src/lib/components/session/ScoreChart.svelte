@@ -303,6 +303,9 @@
     members.forEach((m, i) => {
       const ranges = hookHealth?.players[m.player_id]?.task_ranges ?? [];
       const color = seriesColor(i);
+      // The right edge of the last label drawn on this participant's row:
+      // a title that would overprint it is left to the tooltip.
+      let labelEnd = -Infinity;
       for (const r of ranges) {
         const t = r.start_t;
         if (t == null || (hookCut != null && t > hookCut)) continue;
@@ -319,11 +322,15 @@
         const title = (r.title ?? "task").slice(0, 28);
         // Stack labels per participant so two players' markers do not
         // overprint; past a few participants, the tooltip carries the title.
-        if (i < SEPARATOR_LABEL_ROWS) {
+        // Along the row, a label is skipped when the previous one is still
+        // under it (tasks closed seconds apart).
+        const labelX = x + 3 * dpr;
+        if (i < SEPARATOR_LABEL_ROWS && labelX >= labelEnd) {
           ctx.setLineDash([]);
           ctx.globalAlpha = 0.9;
           ctx.fillStyle = color;
-          ctx.fillText(title, x + 3 * dpr, top + 2 * dpr + i * 12 * dpr);
+          ctx.fillText(title, labelX, top + 2 * dpr + i * 12 * dpr);
+          labelEnd = labelX + ctx.measureText(title).width + 8 * dpr;
         }
       }
     });

@@ -123,7 +123,10 @@ fn grade_of(grade: Option<&str>) -> Option<char> {
 
 /// Seconds since the session started, the chart's x.
 pub fn elapsed_secs(started_at: Option<DateTime<Utc>>, at: DateTime<Utc>) -> Option<f64> {
-    started_at.map(|s| (at - s).num_milliseconds() as f64 / 1000.0)
+    // Clamped at 0 like the score history: a commit stamped a moment before
+    // the session's `started_at` (clock skew, the start marker racing the
+    // status flip) belongs to the session's first second, not before it.
+    started_at.map(|s| ((at - s).num_milliseconds() as f64 / 1000.0).max(0.0))
 }
 
 /// The browser's view of a checkpoint row.

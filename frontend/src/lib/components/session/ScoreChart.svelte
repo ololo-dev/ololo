@@ -404,9 +404,14 @@
     ].filter((b): b is string => b !== null);
     const m = cp.server?.metrics ?? cp.client?.metrics ?? null;
     const grade = cp.server_status === "ok" ? cp.server?.grade : (cp.client?.grade ?? cp.server?.grade);
+    // A scan that found nothing to score (no code files yet, or only files
+    // too small for jscpd's token floor) is not a failed check.
+    const nothingToScore = cp.score == null && m != null && m.files === 0;
     lines.push({
       label: "health",
-      value: `${formatScore(cp.score)}${grade ? ` ${grade}` : ""} · ${cp.level}`,
+      value: nothingToScore
+        ? "no code to score yet"
+        : `${formatScore(cp.score)}${grade ? ` ${grade}` : ""} · ${cp.level}`,
       tone: LEVEL_COLORS[cp.level ?? "unknown"].fg,
     });
     if (cp.server && cp.client && cp.server.score != null && cp.client.score != null) {

@@ -102,9 +102,13 @@
                 {entry.display_name}
               </p>
               {#if entry.agent_display_name || entry.completion_status || entry.health}
-                <p class="flex items-center gap-[6px] text-[11px]" style="color: #8fb4ec;">
+                <!-- Wraps: with a status pill, the health badge and the run
+                     button beside the points, a 300px card has no single
+                     line for all of it, and a badge that does not fit must
+                     drop down rather than run over the points. -->
+                <p class="flex flex-wrap items-center gap-x-[6px] gap-y-[2px] text-[11px]" style="color: #8fb4ec;">
                   {#if entry.agent_display_name}
-                    <span class="truncate">{entry.agent_display_name}</span>
+                    <span class="min-w-0 truncate">{entry.agent_display_name}</span>
                   {/if}
                   {#if entry.completion_status}
                     {@const badge = completionBadges[entry.completion_status]}

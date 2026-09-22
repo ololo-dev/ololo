@@ -272,7 +272,7 @@
 
   function pillWidth(ctx: CanvasRenderingContext2D, pill: Pill, dpr: number): number {
     if (pill.kind === "plain") return ctx.measureText(pill.text).width + PILL_PAD * 2 * dpr;
-    return (PILL_PAD + GRADE_BOX + 3) * dpr + ctx.measureText(formatScore(pill.score)).width + PILL_PAD * dpr;
+    return (GRADE_BOX + 3 + 2) * dpr + ctx.measureText(formatScore(pill.score)).width;
   }
 
   function roundedRect(ctx: CanvasRenderingContext2D, left: number, top: number, w: number, h: number, r: number) {
@@ -290,9 +290,10 @@
   }
 
   /** Draw a pill centred on `x`, its edge at `yEdge` (above or below the
-   * marker). A health pill is white with the level's border, the grade in
-   * a filled box and the score beside it — the same badge as the players'
-   * list. A plain pill is solid. Returns its horizontal extent. */
+   * marker). A health pill is the grade in a filled box and the score
+   * beside it, haloed in white so it reads over the line — the same badge
+   * as the players' list, no frame. A plain pill is solid. Returns its
+   * horizontal extent. */
   function drawPill(
     ctx: CanvasRenderingContext2D,
     x: number,
@@ -316,23 +317,26 @@
       ctx.fillText(pill.text, x, midY);
       return [left, left + w];
     }
-    roundedRect(ctx, left, top, w, h, 4 * dpr);
-    ctx.fillStyle = "rgba(255,255,255,0.94)";
-    ctx.fill();
-    ctx.lineWidth = 1 * dpr;
-    ctx.strokeStyle = pill.color;
-    ctx.stroke();
-    const boxLeft = left + PILL_PAD * dpr;
+    const boxLeft = left;
     const box = GRADE_BOX * dpr;
+    // A white halo under the box and the score keeps them legible where
+    // the line or the grid runs behind them.
+    ctx.lineJoin = "round";
+    ctx.lineWidth = 3 * dpr;
+    ctx.strokeStyle = "rgba(255,255,255,0.9)";
     roundedRect(ctx, boxLeft, top + (h - box) / 2, box, box, 3 * dpr);
+    ctx.stroke();
     ctx.fillStyle = pill.color;
     ctx.fill();
     ctx.fillStyle = "#ffffff";
     ctx.textAlign = "center";
     ctx.fillText(pill.grade ?? "–", boxLeft + box / 2, midY);
-    ctx.fillStyle = pill.color;
+    const score = formatScore(pill.score);
+    const scoreX = boxLeft + box + 3 * dpr;
     ctx.textAlign = "left";
-    ctx.fillText(formatScore(pill.score), boxLeft + box + 3 * dpr, midY);
+    ctx.strokeText(score, scoreX, midY);
+    ctx.fillStyle = pill.color;
+    ctx.fillText(score, scoreX, midY);
     return [left, left + w];
   }
 

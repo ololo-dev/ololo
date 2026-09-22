@@ -52,29 +52,42 @@
   let hookHealth: SessionHealthPayload | null = null;
   let hookMeta: Map<string, PointMeta> = new Map();
   let hookCut: number | null = null;
-  let hookShowLabels = true;
+  let hookShowHealthLabels = true;
+  let hookShowPointLabels = true;
 
-  /** Whether the checks' grade pills are drawn — a per-viewer convenience,
-   * remembered in this browser; the markers and the tooltip stay. */
-  const LABELS_KEY = "ololo.chart.healthLabels";
-  let showHealthLabels = $state(true);
-  if (browser) {
+  /** Whether the labels are drawn — the checks' grade pills and the points
+   * pills on judge verdicts — per-viewer conveniences remembered in this
+   * browser; the markers and the tooltip stay either way. */
+  const HEALTH_LABELS_KEY = "ololo.chart.healthLabels";
+  const POINT_LABELS_KEY = "ololo.chart.pointLabels";
+  function readLabelSetting(key: string): boolean {
     try {
-      showHealthLabels = localStorage.getItem(LABELS_KEY) !== "off";
+      return localStorage.getItem(key) !== "off";
     } catch {
       // Storage unavailable (private window, blocked site data): default on.
+      return true;
     }
   }
-  function toggleHealthLabels() {
-    showHealthLabels = !showHealthLabels;
+  function writeLabelSetting(key: string, on: boolean) {
     try {
-      localStorage.setItem(LABELS_KEY, showHealthLabels ? "on" : "off");
+      localStorage.setItem(key, on ? "on" : "off");
     } catch {
       // Ignore: the choice just does not survive this page.
     }
   }
+  let showHealthLabels = $state(browser ? readLabelSetting(HEALTH_LABELS_KEY) : true);
+  let showPointLabels = $state(browser ? readLabelSetting(POINT_LABELS_KEY) : true);
+  function toggleHealthLabels() {
+    showHealthLabels = !showHealthLabels;
+    writeLabelSetting(HEALTH_LABELS_KEY, showHealthLabels);
+  }
+  function togglePointLabels() {
+    showPointLabels = !showPointLabels;
+    writeLabelSetting(POINT_LABELS_KEY, showPointLabels);
+  }
   $effect(() => {
-    hookShowLabels = showHealthLabels;
+    hookShowHealthLabels = showHealthLabels;
+    hookShowPointLabels = showPointLabels;
     uplotInstance?.redraw();
   });
 
@@ -458,7 +471,7 @@
             ctx.strokeStyle = color;
             ctx.stroke();
           }
-          if (hookShowLabels) {
+          if (hookShowHealthLabels) {
             pill(
               x,
               y,
@@ -467,7 +480,7 @@
               true,
             );
           }
-          if (verdict !== null) {
+          if (verdict !== null && hookShowPointLabels) {
             pill(x, y, r, { kind: "plain", text: `${verdict >= 0 ? "+" : "−"}${Math.abs(verdict)}`, color }, false);
           }
           continue;
@@ -486,7 +499,9 @@
           ctx.lineWidth = 1.5 * dpr;
           ctx.strokeStyle = "#ffffff";
           ctx.stroke();
-          pill(x, y, d, { kind: "plain", text: `${verdict >= 0 ? "+" : "−"}${Math.abs(verdict)}`, color }, true);
+          if (hookShowPointLabels) {
+            pill(x, y, d, { kind: "plain", text: `${verdict >= 0 ? "+" : "−"}${Math.abs(verdict)}`, color }, true);
+          }
           continue;
         }
         ctx.beginPath();
@@ -686,24 +701,24 @@
 {#if browser}
   <div class="relative min-h-[240px]">
     {#if health}
-      <div class="absolute right-0 top-[-28px] z-10">
-        <button
-          type="button"
-          class="inline-flex items-center gap-[6px] rounded-full border border-brand-border bg-white px-[9px] py-[3px] text-[11px] font-medium transition-colors hover:bg-[#f4f8fe]"
-          style="color: {showHealthLabels ? '#363636' : '#8fb4ec'};"
-          aria-pressed={showHealthLabels}
-          onclick={toggleHealthLabels}
-          data-testid="health-labels-toggle"
-        >
-          <span
-            class="inline-block h-[8px] w-[8px] rounded-full border"
-            style="background: {showHealthLabels ? '#3aa568' : 'transparent'}; border-color: {showHealthLabels
-              ? '#3aa568'
-              : '#8fb4ec'};"
-            aria-hidden="true"
-          ></span>
-          Health labels
-        </button>
+      <div class="absolute right-0 top-[-28px] z-10 flex items-center gap-[6px]">
+        {#each [{ label: "Health labels", on: showHealthLabels, toggle: toggleHealthLabels, id: "health-labels-toggle" }, { label: "Points labels", on: showPointLabels, toggle: togglePointLabels, id: "point-labels-toggle" }] as t (t.id)}
+          <button
+            type="button"
+            class="inline-flex items-center gap-[6px] rounded-full border border-brand-border bg-white px-[9px] py-[3px] text-[11px] font-medium transition-colors hover:bg-[#f4f8fe]"
+            style="color: {t.on ? '#363636' : '#8fb4ec'};"
+            aria-pressed={t.on}
+            onclick={t.toggle}
+            data-testid={t.id}
+          >
+            <span
+              class="inline-block h-[8px] w-[8px] rounded-full border"
+              style="background: {t.on ? '#3aa568' : 'transparent'}; border-color: {t.on ? '#3aa568' : '#8fb4ec'};"
+              aria-hidden="true"
+            ></span>
+            {t.label}
+          </button>
+        {/each}
       </div>
     {/if}
     <div bind:this={chartEl} class="w-full"></div>

@@ -345,6 +345,40 @@ describe("ScoreChart with health", () => {
     localStorage.removeItem("ololo.chart.healthLabels");
   });
 
+  it("the points-labels toggle hides the judge pills, keeps the diamonds", async () => {
+    const { ctx, calls } = recordingContext();
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(() => ctx);
+    render(ScoreChart, {
+      phase: "active",
+      leaderboard: [ALICE_ENTRY],
+      reportMembers: [],
+      scoreHistory: [
+        { t: 0, scores: { p1: 0 } },
+        {
+          t: 14,
+          scores: { p1: 14 },
+          changes: [{ player_id: "p1", delta: 14, kind: "judge", label: "Performance" }],
+        },
+      ],
+      health: HEALTH,
+    });
+    await vi.waitFor(() => {
+      expect(calls.some((c) => c.name === "fillText" && c.args[0] === "+14")).toBe(true);
+    });
+    const toggle = screen.getByTestId("point-labels-toggle");
+    calls.length = 0;
+    toggle.click();
+    await vi.waitFor(() => {
+      expect(toggle.getAttribute("aria-pressed")).toBe("false");
+      expect(calls.filter((c) => c.name === "closePath").length).toBeGreaterThanOrEqual(1);
+      expect(calls.some((c) => c.name === "fillText" && c.args[0] === "+14")).toBe(false);
+      // Health pills are governed by the other switch.
+      expect(calls.some((c) => c.name === "fillText" && c.args[0] === "80.0")).toBe(true);
+    });
+    expect(localStorage.getItem("ololo.chart.pointLabels")).toBe("off");
+    localStorage.removeItem("ololo.chart.pointLabels");
+  });
+
   it("health points alone (no scores yet) still draw the chart", async () => {
     const { ctx } = recordingContext();
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(() => ctx);

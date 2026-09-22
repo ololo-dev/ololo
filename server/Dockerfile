@@ -14,6 +14,7 @@ RUN rm -rf /var/lib/apt/lists/* && for i in 1 2 3; do \
 COPY Cargo.toml Cargo.lock ./
 COPY arena-core/ arena-core/
 COPY agent-tokens/ agent-tokens/
+COPY ololo-health/ ololo-health/
 COPY email-templates/ email-templates/
 COPY server/ server/
 COPY game-server/ game-server/

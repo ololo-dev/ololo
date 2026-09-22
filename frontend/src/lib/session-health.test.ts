@@ -63,6 +63,7 @@ describe("session-health", () => {
     };
     const ind = indicatorFor(payload, "p1")!;
     expect(ind.score).toBe(80);
+    expect(ind.grade).toBe("B");
     expect(ind.level).toBe("green");
     expect(ind.trend).toBe("up");
     expect(ind.verified).toBe(true);
@@ -79,6 +80,7 @@ describe("session-health", () => {
     };
     const p = indicatorFor(pending, "p1")!;
     expect(p.verified).toBe(false);
+    expect(p.grade).toBe("D");
     expect(p.level).toBe("red");
     expect(p.trend).toBeNull();
   });

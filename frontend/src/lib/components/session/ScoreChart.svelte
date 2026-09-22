@@ -8,7 +8,7 @@
     ScoreHistoryPoint,
     SessionHealthPayload,
   } from "$lib/types/arena";
-  import { LEVEL_COLORS, formatScore, seriesColor } from "$lib/session-health";
+  import { LEVEL_COLORS, formatScore, gradeOf, seriesColor } from "$lib/session-health";
   import {
     buildChartData,
     describePoints,
@@ -260,23 +260,22 @@
     ctx.restore();
   }
 
-  /** A rounded label with white text — the health grade and score on a
-   * probe, the points a judge awarded. Returns its horizontal extent. */
-  function drawPill(
-    ctx: CanvasRenderingContext2D,
-    x: number,
-    yEdge: number,
-    text: string,
-    bg: string,
-    dpr: number,
-    above: boolean,
-  ): [number, number] {
-    const padX = 4 * dpr;
-    const h = 13 * dpr;
-    const w = ctx.measureText(text).width + padX * 2;
-    const left = x - w / 2;
-    const top = above ? yEdge - h : yEdge;
-    const r = h / 2;
+  /** What a label on the chart says: a check's grade and score, `[B] 75.4`,
+   * or a plain figure such as the points a judge awarded. */
+  type Pill =
+    | { kind: "health"; grade: string | null; score: number | null; color: string }
+    | { kind: "plain"; text: string; color: string };
+
+  const PILL_H = 14;
+  const PILL_PAD = 4;
+  const GRADE_BOX = 12;
+
+  function pillWidth(ctx: CanvasRenderingContext2D, pill: Pill, dpr: number): number {
+    if (pill.kind === "plain") return ctx.measureText(pill.text).width + PILL_PAD * 2 * dpr;
+    return (PILL_PAD + GRADE_BOX + 3) * dpr + ctx.measureText(formatScore(pill.score)).width + PILL_PAD * dpr;
+  }
+
+  function roundedRect(ctx: CanvasRenderingContext2D, left: number, top: number, w: number, h: number, r: number) {
     ctx.beginPath();
     if (typeof ctx.roundRect === "function") {
       ctx.roundRect(left, top, w, h, r);
@@ -288,20 +287,60 @@
       ctx.arcTo(left, top, left + w, top, r);
       ctx.closePath();
     }
-    ctx.fillStyle = bg;
+  }
+
+  /** Draw a pill centred on `x`, its edge at `yEdge` (above or below the
+   * marker). A health pill is white with the level's border, the grade in
+   * a filled box and the score beside it — the same badge as the players'
+   * list. A plain pill is solid. Returns its horizontal extent. */
+  function drawPill(
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    yEdge: number,
+    pill: Pill,
+    dpr: number,
+    above: boolean,
+  ): [number, number] {
+    const h = PILL_H * dpr;
+    const w = pillWidth(ctx, pill, dpr);
+    const left = x - w / 2;
+    const top = above ? yEdge - h : yEdge;
+    const midY = top + h / 2 + 0.5 * dpr;
+    ctx.textBaseline = "middle";
+    if (pill.kind === "plain") {
+      roundedRect(ctx, left, top, w, h, h / 2);
+      ctx.fillStyle = pill.color;
+      ctx.fill();
+      ctx.fillStyle = "#ffffff";
+      ctx.textAlign = "center";
+      ctx.fillText(pill.text, x, midY);
+      return [left, left + w];
+    }
+    roundedRect(ctx, left, top, w, h, 4 * dpr);
+    ctx.fillStyle = "rgba(255,255,255,0.94)";
+    ctx.fill();
+    ctx.lineWidth = 1 * dpr;
+    ctx.strokeStyle = pill.color;
+    ctx.stroke();
+    const boxLeft = left + PILL_PAD * dpr;
+    const box = GRADE_BOX * dpr;
+    roundedRect(ctx, boxLeft, top + (h - box) / 2, box, box, 3 * dpr);
+    ctx.fillStyle = pill.color;
     ctx.fill();
     ctx.fillStyle = "#ffffff";
     ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText(text, x, top + h / 2 + 0.5 * dpr);
+    ctx.fillText(pill.grade ?? "–", boxLeft + box / 2, midY);
+    ctx.fillStyle = pill.color;
+    ctx.textAlign = "left";
+    ctx.fillText(formatScore(pill.score), boxLeft + box + 3 * dpr, midY);
     return [left, left + w];
   }
 
-  /** `B 75` for a scored check, `—` when there was nothing to score. */
+  /** `B 75.4` for the tooltip, `—` when there was nothing to score. */
   function healthLabel(cp: HealthCheckpointView): string {
     if (cp.score == null) return "—";
-    const grade = cp.server_status === "ok" ? cp.server?.grade : (cp.client?.grade ?? cp.server?.grade);
-    return `${grade ? `${grade} ` : ""}${Math.round(cp.score)}`;
+    const grade = gradeOf(cp);
+    return `${grade ? `${grade} ` : ""}${formatScore(cp.score)}`;
   }
 
   function judgeDelta(meta: PointMeta): number | null {
@@ -331,10 +370,10 @@
       // line), so pills of points seconds apart do not overprint.
       let aboveEnd = -Infinity;
       let belowEnd = -Infinity;
-      const pill = (x: number, y: number, r: number, text: string, bg: string, preferAbove: boolean) => {
+      const pill = (x: number, y: number, r: number, spec: Pill, preferAbove: boolean) => {
         // Above the marker unless that would leave the plot; a pill that
         // would overprint the previous one on its row is left to the tooltip.
-        const half = (ctx.measureText(text).width + 8 * dpr) / 2;
+        const half = pillWidth(ctx, spec, dpr) / 2;
         const roomAbove = y - r - 16 * dpr >= top;
         const fits = (row: boolean) => x - half > (row ? aboveEnd : belowEnd);
         // The preferred row, else the other one, else the tooltip has it.
@@ -343,7 +382,7 @@
         else if (fits(false)) above = false;
         else if (roomAbove && fits(true)) above = true;
         else return;
-        const [, right] = drawPill(ctx, x, above ? y - r - 3 * dpr : y + r + 3 * dpr, text, bg, dpr, above);
+        const [, right] = drawPill(ctx, x, above ? y - r - 3 * dpr : y + r + 3 * dpr, spec, dpr, above);
         if (above) aboveEnd = right + 3 * dpr;
         else belowEnd = right + 3 * dpr;
       };
@@ -390,9 +429,15 @@
             ctx.strokeStyle = color;
             ctx.stroke();
           }
-          pill(x, y, r + (cp.kind === "task_final" ? 2.5 * dpr : 0), healthLabel(cp), level, true);
+          pill(
+            x,
+            y,
+            r + (cp.kind === "task_final" ? 2.5 * dpr : 0),
+            { kind: "health", grade: gradeOf(cp), score: cp.score ?? null, color: level },
+            true,
+          );
           if (verdict !== null) {
-            pill(x, y, r, `${verdict >= 0 ? "+" : "−"}${Math.abs(verdict)}`, color, false);
+            pill(x, y, r, { kind: "plain", text: `${verdict >= 0 ? "+" : "−"}${Math.abs(verdict)}`, color }, false);
           }
           continue;
         }
@@ -410,7 +455,7 @@
           ctx.lineWidth = 1.5 * dpr;
           ctx.strokeStyle = "#ffffff";
           ctx.stroke();
-          pill(x, y, d, `${verdict >= 0 ? "+" : "−"}${Math.abs(verdict)}`, color, true);
+          pill(x, y, d, { kind: "plain", text: `${verdict >= 0 ? "+" : "−"}${Math.abs(verdict)}`, color }, true);
           continue;
         }
         ctx.beginPath();

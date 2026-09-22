@@ -71,10 +71,30 @@ function byTime(a: HealthCheckpointView, b: HealthCheckpointView): number {
   return ta - tb;
 }
 
+/** jscpd's letter for a score, when neither side reported one. */
+export function gradeFromScore(score: number | null | undefined): string | null {
+  if (score == null || Number.isNaN(score)) return null;
+  if (score >= 85) return "A";
+  if (score >= 70) return "B";
+  if (score >= 55) return "C";
+  if (score >= 40) return "D";
+  return "E";
+}
+
+/** The grade shown for a checkpoint: the server's once verified, the
+ *  client's until then, derived from the score when neither says. */
+export function gradeOf(cp: HealthCheckpointView): string | null {
+  if (cp.score == null) return null;
+  const side = cp.server_status === "ok" ? cp.server : (cp.client ?? cp.server);
+  return side?.grade ?? cp.server?.grade ?? cp.client?.grade ?? gradeFromScore(cp.score);
+}
+
 /** What the indicator next to a participant shows. */
 export interface HealthIndicator {
   /** The latest server-verified score, else the latest client score. */
   score: number | null;
+  /** Its letter grade (A–E), `null` without a score. */
+  grade: string | null;
   level: HealthLevel;
   /** Direction against the previous checkpoint with a score. */
   trend: "up" | "down" | "flat" | null;
@@ -91,7 +111,7 @@ export function indicatorFor(
   if (!history || history.checkpoints.length === 0) return null;
   const scored = history.checkpoints.filter((c) => c.score != null);
   if (scored.length === 0) {
-    return { score: null, level: "unknown", trend: null, verified: false, points: 0 };
+    return { score: null, grade: null, level: "unknown", trend: null, verified: false, points: 0 };
   }
   const verified = scored.filter((c) => c.server_status === "ok");
   const line = verified.length > 0 ? verified : scored;
@@ -105,6 +125,7 @@ export function indicatorFor(
   }
   return {
     score,
+    grade: gradeOf(last),
     level: levelOf(score, payload!.thresholds),
     trend,
     verified: verified.length > 0,

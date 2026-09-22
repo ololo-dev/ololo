@@ -263,10 +263,11 @@ describe("ScoreChart with health", () => {
       expect(calls.filter((c) => c.name === "fillRect").length).toBe(0);
       // Three probe markers plus the scored change at t = 10.
       expect(calls.filter((c) => c.name === "arc").length).toBeGreaterThanOrEqual(4);
-      // Every probe wears a pill with its grade and score (no grade known
-      // for the failed one).
-      for (const label of ["B 80", "C 62", "40"]) {
-        expect(calls.some((c) => c.name === "fillText" && c.args[0] === label)).toBe(true);
+      // Every probe wears a pill: the grade in a box, the score beside it
+      // (the failed one's grade derived from its score).
+      const drawn = calls.filter((c) => c.name === "fillText").map((c) => String(c.args[0]));
+      for (const label of ["B", "80.0", "C", "62.0", "D", "40.0"]) {
+        expect(drawn, `labels drawn: ${drawn.join(" | ")}`).toContain(label);
       }
       // The judge verdict is a diamond (a closed four-point path) with the
       // points it awarded.

@@ -20,7 +20,7 @@
     if (!indicator) return "";
     const base = indicator.score == null
       ? "Code health: no score yet"
-      : `Code health: ${formatScore(indicator.score)} (${indicator.level})`;
+      : `Code health: ${indicator.grade ?? ""} ${formatScore(indicator.score)} (${indicator.level})`.replace("  ", " ");
     const verified = indicator.verified ? "server-verified" : "client-reported, verification pending";
     const trend =
       indicator.trend === "up"
@@ -45,13 +45,18 @@
     data-testid="health-badge"
     data-level={indicator.level}
   >
+    <!-- The grade in a box, filled once server-verified, outlined until then. -->
     <span
-      class="inline-block rounded-full {compact ? 'h-[6px] w-[6px]' : 'h-[8px] w-[8px]'} {indicator.verified
-        ? ''
-        : 'border'}"
-      style="background: {indicator.verified ? colors.fg : 'transparent'}; border-color: {colors.fg};"
-      aria-hidden="true"
-    ></span>
+      class="inline-flex items-center justify-center rounded-[3px] border font-bold leading-none {compact
+        ? 'h-[13px] min-w-[13px] px-[2px] text-[9px]'
+        : 'h-[16px] min-w-[16px] px-[3px] text-[10px]'}"
+      style="background: {indicator.verified ? colors.fg : 'transparent'}; border-color: {colors.fg}; color: {indicator.verified
+        ? '#ffffff'
+        : colors.fg};"
+      data-testid="health-grade"
+    >
+      {indicator.grade ?? "–"}
+    </span>
     <span>{formatScore(indicator.score)}</span>
     {#if trendGlyph}
       <span aria-label={indicator.trend ?? undefined}>{trendGlyph}</span>

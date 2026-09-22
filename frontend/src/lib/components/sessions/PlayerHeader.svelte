@@ -203,7 +203,7 @@
            colour, carries the direction against the previous check. -->
       <StatCard
         label={health.verified ? "Health" : "Health (pending)"}
-        value="{formatScore(health.score)}{health.trend === 'up' ? ' ▲' : health.trend === 'down' ? ' ▼' : ''}"
+        value="{health.grade ? `${health.grade} ` : ''}{formatScore(health.score)}{health.trend === 'up' ? ' ▲' : health.trend === 'down' ? ' ▼' : ''}"
         valueClass={health.level === "green"
           ? "text-green-600"
           : health.level === "amber"

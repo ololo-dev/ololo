@@ -292,6 +292,7 @@
     const ctx: CanvasRenderingContext2D = u.ctx;
     const dpr = window.devicePixelRatio || 1;
     const xs: number[] = u.data[0] ?? [];
+    const { top } = u.bbox;
     ctx.save();
     ctx.font = `bold ${9 * dpr}px sans-serif`;
     ctx.textAlign = "center";
@@ -353,12 +354,20 @@
           ctx.strokeStyle = color;
           ctx.stroke();
         }
-        // The health score above the marker, in the level's colour.
+        // The health score above the marker, in the level's colour — or
+        // below it when the marker sits under the task titles at the top.
         const label = formatScore(cp.score);
         const half = ctx.measureText(label).width / 2;
         if (x - half > labelEnd) {
           ctx.fillStyle = level;
-          ctx.fillText(label, x, y - r - 3 * dpr);
+          const titleRows = top + (2 + SEPARATOR_LABEL_ROWS * 12) * dpr;
+          if (y - r - 13 * dpr < titleRows) {
+            ctx.textBaseline = "top";
+            ctx.fillText(label, x, y + r + 3 * dpr);
+            ctx.textBaseline = "bottom";
+          } else {
+            ctx.fillText(label, x, y - r - 3 * dpr);
+          }
           labelEnd = x + half + 4 * dpr;
         }
       }

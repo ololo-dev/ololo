@@ -334,7 +334,35 @@ pub async fn handle_player_agent_socket(
                 // then HELD while judges investigate and any probes they
                 // register (screenshots, captures) resolve. Only then does it
                 // advance — evaluation itself continues asynchronously.
-                if open_ended.is_some() {
+                // Only the last task holds the player while its judges look:
+                // after it there is no next task to carry their requests.
+                // Earlier tasks fire their judges and move on at once — the
+                // panel keeps working, and any artifact it asks for rides the
+                // next task's queue (`earlier_task_judge_test`).
+                let hold_for_judges = open_ended.is_some()
+                    && !crate::ws::player_agent::scheduler::has_later_task(&state, &task_row).await;
+                if open_ended.is_some() && !hold_for_judges {
+                    let already_fired = crate::ws::player_agent::scheduler::judge_runs_started(
+                        &state, task_id, player_id,
+                    )
+                    .await;
+                    if !already_fired {
+                        let reason = if completed_via_probe {
+                            arena_core::protocol::SNAPSHOT_REASON_TODO_COMPLETE
+                        } else {
+                            arena_core::protocol::SNAPSHOT_REASON_DEADLINE
+                        };
+                        let frame = PlayerAgentFrame::SnapshotRequest {
+                            task_id,
+                            task_title: task_row.title.clone(),
+                            reason: reason.to_string(),
+                        };
+                        let json = serde_json::to_string(&frame).unwrap_or_default();
+                        let _ = socket.send(Message::Text(json)).await;
+                        spawn_task_judges(&state, session_id, player_id, task_id).await;
+                    }
+                }
+                if hold_for_judges {
                     match judge_wait.filter(|(t, _)| *t == task_id) {
                         None => {
                             // First finalize pass for this task (or a

@@ -12,7 +12,7 @@ use chrono::{Duration, Utc};
 use dashmap::DashMap;
 use game_server::state::GameServerState;
 use game_server::ws::player_agent::scheduler::{
-    ensure_adapted_test, open_ended_state, pick_next_adapted_test,
+    ensure_adapted_test, has_later_task, open_ended_state, pick_next_adapted_test,
 };
 use game_server::zmq_pub::NoopEventPublisher;
 use jsonwebtoken::{DecodingKey, EncodingKey};
@@ -387,4 +387,78 @@ async fn classic_task_gating_is_untouched() {
         .expect("db ok")
         .expect("a probe to ask");
     assert_eq!(picked.ordinal, 0, "classic rule asks the first section");
+}
+
+/// A judge request row for `task`, as the registrar would add it.
+async fn register_judge_request(
+    db: &DatabaseConnection,
+    session_id: Uuid,
+    task: &tasks::Model,
+) -> tests::Model {
+    tests::ActiveModel {
+        id: Set(Uuid::new_v4()),
+        command_template: Set("echo screenshot".to_string()),
+        answer_template: Set("true".to_string()),
+        fixture_definitions: Set("{}".to_string()),
+        created_at: Set(Utc::now()),
+        session_id: Set(session_id),
+        task_id: Set(task.id),
+        ordinal: Set(100),
+        prompt: Set("Send a screenshot".to_string()),
+        description: Set(None),
+        probe_config: Set(None),
+        initiator: Set("judge".to_string()),
+        registered_by_judge_id: Set(Some(Uuid::new_v4())),
+    }
+    .insert(db)
+    .await
+    .expect("judge request")
+}
+
+#[tokio::test]
+async fn a_judge_request_of_an_earlier_task_rides_the_next_tasks_queue() {
+    // The player moved on while the first task's judges were still looking:
+    // their artifact request is asked first on the next task, until it passes.
+    let db = setup_db().await;
+    let state = test_state(db.clone());
+    let (session_id, player_id, first) = seed_open_ended(&db, 3600).await;
+    let mut second: tasks::ActiveModel = first.clone().into();
+    second.id = Set(Uuid::new_v4());
+    second.ordinal = Set(1);
+    second.title = Set("The next thing".to_string());
+    let second = second.insert(&db).await.expect("second task");
+
+    assert!(
+        has_later_task(&state, &first).await,
+        "the first task is not the last"
+    );
+    assert!(
+        !has_later_task(&state, &second).await,
+        "the second task is the last"
+    );
+
+    let request = register_judge_request(&db, session_id, &first).await;
+    ensure_adapted_test(&state, second.id, session_id)
+        .await
+        .expect("db ok");
+    record_task_started(&db, session_id, player_id, &second, Utc::now()).await;
+
+    let picked = pick_next_adapted_test(&state, &second, session_id, player_id)
+        .await
+        .expect("db ok")
+        .expect("a probe to ask");
+    assert_eq!(
+        picked.id, request.id,
+        "the earlier task's judge request comes first"
+    );
+
+    record_pass(&db, session_id, player_id, request.id).await;
+    let picked = pick_next_adapted_test(&state, &second, session_id, player_id)
+        .await
+        .expect("db ok")
+        .expect("a probe to ask");
+    assert_eq!(
+        picked.task_id, second.id,
+        "once delivered, the task's own probes resume"
+    );
 }

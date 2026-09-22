@@ -17,6 +17,13 @@ pub async fn pick_next_adapted_test(
 ) -> Option<Option<tests::Model>> {
     let task_id = task_row.id;
 
+    // A judge of an earlier task may still be asking for artifacts: the
+    // player moved on without waiting for the panel, so those requests ride
+    // this task's queue, oldest first, until they pass or age out.
+    if let Some(judge_test) = earlier_task_judge_test(state, task_id, session_id, player_id).await {
+        return Some(Some(judge_test));
+    }
+
     // Open-ended task: the completion contract replaces the all-sections
     // gate. The completion probe is dispatched until it passes or the work
     // deadline expires; either way the task then completes.
@@ -325,6 +332,49 @@ pub async fn oldest_unpassed_judge_test(
     // Stable sort keeps registration order among equals.
     open.sort_by_key(|(last, _)| *last);
     open.into_iter().next().map(|(_, t)| t)
+}
+
+/// The oldest open judge request of a task other than `current_task`, for
+/// this player. Each task's requests keep their own phase cap, so a request
+/// nobody answers ages out exactly as it did while the task was held.
+pub async fn earlier_task_judge_test(
+    state: &GameServerState,
+    current_task: Uuid,
+    session_id: Uuid,
+    player_id: Uuid,
+) -> Option<tests::Model> {
+    let mut task_ids: Vec<Uuid> = tests::Entity::find()
+        .filter(tests::Column::SessionId.eq(session_id))
+        .filter(tests::Column::RegisteredByJudgeId.is_not_null())
+        .filter(tests::Column::TaskId.ne(current_task))
+        .order_by_asc(tests::Column::CreatedAt)
+        .all(&state.db)
+        .await
+        .ok()?
+        .into_iter()
+        .map(|t| t.task_id)
+        .collect();
+    task_ids.dedup();
+    for task_id in task_ids {
+        if let Some(test) = oldest_unpassed_judge_test(state, task_id, session_id, player_id).await
+        {
+            return Some(test);
+        }
+    }
+    None
+}
+
+/// Whether the project has a task after `task` — the last task is the only
+/// one whose judge phase still holds the player.
+pub async fn has_later_task(state: &GameServerState, task: &tasks::Model) -> bool {
+    tasks::Entity::find()
+        .filter(tasks::Column::ProjectIdFk.eq(task.project_id_fk))
+        .filter(tasks::Column::Ordinal.gt(task.ordinal))
+        .one(&state.db)
+        .await
+        .ok()
+        .flatten()
+        .is_some()
 }
 
 /// Any judge lifecycle row exists for this (task, player) — the finalize

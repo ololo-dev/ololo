@@ -52,6 +52,31 @@
   let hookHealth: SessionHealthPayload | null = null;
   let hookMeta: Map<string, PointMeta> = new Map();
   let hookCut: number | null = null;
+  let hookShowLabels = true;
+
+  /** Whether the checks' grade pills are drawn — a per-viewer convenience,
+   * remembered in this browser; the markers and the tooltip stay. */
+  const LABELS_KEY = "ololo.chart.healthLabels";
+  let showHealthLabels = $state(true);
+  if (browser) {
+    try {
+      showHealthLabels = localStorage.getItem(LABELS_KEY) !== "off";
+    } catch {
+      // Storage unavailable (private window, blocked site data): default on.
+    }
+  }
+  function toggleHealthLabels() {
+    showHealthLabels = !showHealthLabels;
+    try {
+      localStorage.setItem(LABELS_KEY, showHealthLabels ? "on" : "off");
+    } catch {
+      // Ignore: the choice just does not survive this page.
+    }
+  }
+  $effect(() => {
+    hookShowLabels = showHealthLabels;
+    uplotInstance?.redraw();
+  });
 
   /** Tooltip for the point under the cursor. */
   let tip = $state<{ x: number; y: number; lines: { label: string; value: string; tone?: string }[] } | null>(
@@ -433,13 +458,15 @@
             ctx.strokeStyle = color;
             ctx.stroke();
           }
-          pill(
-            x,
-            y,
-            r + (cp.kind === "task_final" ? 2.5 * dpr : 0),
-            { kind: "health", grade: gradeOf(cp), score: cp.score ?? null, color: level },
-            true,
-          );
+          if (hookShowLabels) {
+            pill(
+              x,
+              y,
+              r + (cp.kind === "task_final" ? 2.5 * dpr : 0),
+              { kind: "health", grade: gradeOf(cp), score: cp.score ?? null, color: level },
+              true,
+            );
+          }
           if (verdict !== null) {
             pill(x, y, r, { kind: "plain", text: `${verdict >= 0 ? "+" : "−"}${Math.abs(verdict)}`, color }, false);
           }
@@ -658,6 +685,27 @@
      Audit UI-M4: blank/shifting areas on the session page. -->
 {#if browser}
   <div class="relative min-h-[240px]">
+    {#if health}
+      <div class="absolute right-0 top-[-28px] z-10">
+        <button
+          type="button"
+          class="inline-flex items-center gap-[6px] rounded-full border border-brand-border bg-white px-[9px] py-[3px] text-[11px] font-medium transition-colors hover:bg-[#f4f8fe]"
+          style="color: {showHealthLabels ? '#363636' : '#8fb4ec'};"
+          aria-pressed={showHealthLabels}
+          onclick={toggleHealthLabels}
+          data-testid="health-labels-toggle"
+        >
+          <span
+            class="inline-block h-[8px] w-[8px] rounded-full border"
+            style="background: {showHealthLabels ? '#3aa568' : 'transparent'}; border-color: {showHealthLabels
+              ? '#3aa568'
+              : '#8fb4ec'};"
+            aria-hidden="true"
+          ></span>
+          Health labels
+        </button>
+      </div>
+    {/if}
     <div bind:this={chartEl} class="w-full"></div>
     {#if showEmpty}
       <div class="absolute inset-0 flex items-center justify-center">

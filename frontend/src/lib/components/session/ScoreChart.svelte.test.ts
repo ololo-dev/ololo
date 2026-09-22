@@ -318,6 +318,33 @@ describe("ScoreChart with health", () => {
     expect(calls.filter((c) => c.name === "fillRect").length).toBe(0);
   });
 
+  it("the health-labels toggle hides the grade pills, keeps the markers, and is remembered", async () => {
+    const { ctx, calls } = recordingContext();
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(() => ctx);
+    render(ScoreChart, {
+      phase: "active",
+      leaderboard: [ALICE_ENTRY],
+      reportMembers: [],
+      scoreHistory: [{ t: 0, scores: { p1: 0 } }],
+      health: HEALTH,
+    });
+    await vi.waitFor(() => {
+      expect(calls.some((c) => c.name === "fillText" && c.args[0] === "80.0")).toBe(true);
+    });
+    const toggle = screen.getByTestId("health-labels-toggle");
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    calls.length = 0;
+    toggle.click();
+    await vi.waitFor(() => {
+      expect(toggle.getAttribute("aria-pressed")).toBe("false");
+      // Redrawn: markers still there, no grade pill.
+      expect(calls.filter((c) => c.name === "arc").length).toBeGreaterThanOrEqual(3);
+      expect(calls.some((c) => c.name === "fillText" && c.args[0] === "80.0")).toBe(false);
+    });
+    expect(localStorage.getItem("ololo.chart.healthLabels")).toBe("off");
+    localStorage.removeItem("ololo.chart.healthLabels");
+  });
+
   it("health points alone (no scores yet) still draw the chart", async () => {
     const { ctx } = recordingContext();
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(() => ctx);

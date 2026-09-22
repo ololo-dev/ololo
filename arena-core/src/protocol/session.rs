@@ -69,6 +69,26 @@ pub struct LeaderboardEntry {
 pub struct ScoreHistorySample {
     pub t: f64,
     pub scores: BTreeMap<PlayerId, i64>,
+    /// What moved the totals at this instant — one entry per scored row
+    /// (a probe outcome, a bonus, a judge verdict), so the chart's tooltip
+    /// can say why the line stepped. Absent from servers predating it and
+    /// from live points the browser appends itself.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub changes: Vec<ScoreChange>,
+}
+
+/// One scored row behind a [`ScoreHistorySample`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScoreChange {
+    pub player_id: PlayerId,
+    pub delta: i64,
+    /// `probe`, `completion_bonus`, `health_bonus`, `similarity_penalty`
+    /// (the `task_results.kind` values) or `judge`.
+    pub kind: String,
+    /// The judge's display name for a `judge` change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 /// One participant in a session, reported on dashboard fan-out.

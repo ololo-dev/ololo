@@ -80,6 +80,19 @@ export interface SessionSnapshotPayload {
 export interface ScoreHistoryPoint {
   t: number;
   scores: Record<string, number>;
+  /** The scored rows behind this point (absent on live points the browser
+   *  appends itself and from servers predating the field). */
+  changes?: ScoreChange[];
+}
+
+/** One scored row behind a `ScoreHistoryPoint`. */
+export interface ScoreChange {
+  player_id: string;
+  delta: number;
+  /** `probe`, `completion_bonus`, `health_bonus`, `similarity_penalty` or `judge`. */
+  kind: string;
+  /** The judge's display name for a `judge` change. */
+  label?: string | null;
 }
 
 // ── Code health (mirrors arena-core/src/protocol/health.rs) ──────────────

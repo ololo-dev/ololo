@@ -297,6 +297,12 @@ fn score_history_sample_roundtrip() {
     let sample = ScoreHistorySample {
         t: 5.0,
         scores: std::collections::BTreeMap::from([(PlayerId(uuid::Uuid::nil()), 10)]),
+        changes: vec![ScoreChange {
+            player_id: PlayerId(uuid::Uuid::nil()),
+            delta: 10,
+            kind: "probe".to_string(),
+            label: None,
+        }],
     };
     let json = serde_json::to_string(&sample).unwrap();
     assert!(
@@ -310,6 +316,13 @@ fn score_history_sample_roundtrip() {
     let with_unknown = r#"{"t":5.0,"scores":{},"bogus":true}"#;
     let err = serde_json::from_str::<ScoreHistorySample>(with_unknown);
     assert!(err.is_err(), "expected deny_unknown_fields to reject bogus");
+
+    // A sample from before `changes` existed still parses, and an empty
+    // list is left off the wire.
+    let old = r#"{"t":5.0,"scores":{}}"#;
+    let back: ScoreHistorySample = serde_json::from_str(old).unwrap();
+    assert!(back.changes.is_empty());
+    assert!(!serde_json::to_string(&back).unwrap().contains("changes"));
 }
 
 #[test]
@@ -321,14 +334,17 @@ fn session_snapshot_score_history_roundtrip() {
         ScoreHistorySample {
             t: 0.0,
             scores: std::collections::BTreeMap::from([(player_a, 5), (player_b, 0)]),
+            changes: vec![],
         },
         ScoreHistorySample {
             t: 10.0,
             scores: std::collections::BTreeMap::from([(player_a, 5), (player_b, 3)]),
+            changes: vec![],
         },
         ScoreHistorySample {
             t: 20.0,
             scores: std::collections::BTreeMap::from([(player_a, 8), (player_b, 3)]),
+            changes: vec![],
         },
     ];
 

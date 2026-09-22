@@ -1,5 +1,7 @@
-use crate::entities::{judge_results, players, probes, task_results, tests as entity_tests};
-use crate::protocol::{LeaderboardEntry, PlayerId, ScoreHistorySample};
+use crate::entities::{
+    judge_results, judges, players, probes, task_judges, task_results, tests as entity_tests,
+};
+use crate::protocol::{LeaderboardEntry, PlayerId, ScoreChange, ScoreHistorySample};
 use sea_orm::sea_query::Expr;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, EntityTrait, FromQueryResult, QueryFilter, QueryOrder,
@@ -143,57 +145,134 @@ pub async fn build_score_history(
         .all(db)
         .await?;
 
+    if task_rows.is_empty() && judge_rows.is_empty() {
+        return Ok(None);
+    }
+
+    // The judges' names, for the tooltip's "why": judge_results → task_judges
+    // → judges. Two small lookups; a missing name just leaves the label off.
+    let judge_names = judge_names_for(db, &judge_rows).await?;
+
     // Linear merge of two individually-sorted streams by created_at.
-    let mut events: Vec<(chrono::DateTime<chrono::Utc>, Uuid, i32)> =
-        Vec::with_capacity(task_rows.len() + judge_rows.len());
+    let mut events: Vec<ScoreEvent> = Vec::with_capacity(task_rows.len() + judge_rows.len());
     let mut ti = 0;
     let mut ji = 0;
     while ti < task_rows.len() && ji < judge_rows.len() {
         if task_rows[ti].created_at <= judge_rows[ji].created_at {
-            let r = &task_rows[ti];
-            events.push((r.created_at, r.player_id_fk, r.point_delta));
+            events.push(ScoreEvent::from_task(&task_rows[ti]));
             ti += 1;
         } else {
-            let r = &judge_rows[ji];
-            events.push((r.created_at, r.player_id_fk, r.point_delta));
+            events.push(ScoreEvent::from_judge(&judge_rows[ji], &judge_names));
             ji += 1;
         }
     }
     while ti < task_rows.len() {
-        let r = &task_rows[ti];
-        events.push((r.created_at, r.player_id_fk, r.point_delta));
+        events.push(ScoreEvent::from_task(&task_rows[ti]));
         ti += 1;
     }
     while ji < judge_rows.len() {
-        let r = &judge_rows[ji];
-        events.push((r.created_at, r.player_id_fk, r.point_delta));
+        events.push(ScoreEvent::from_judge(&judge_rows[ji], &judge_names));
         ji += 1;
-    }
-
-    if events.is_empty() {
-        return Ok(None);
     }
 
     let mut cumulative: HashMap<Uuid, i64> = HashMap::new();
     let mut samples: Vec<ScoreHistorySample> = Vec::new();
+    let mut changes: Vec<ScoreChange> = Vec::new();
     for i in 0..events.len() {
-        let (created_at, player_id, delta) = events[i];
-        *cumulative.entry(player_id).or_insert(0) += delta as i64;
-        let t = ((created_at - started_at).num_seconds()).max(0) as f64;
+        let ev = &events[i];
+        *cumulative.entry(ev.player_id).or_insert(0) += ev.delta;
+        let t = ((ev.created_at - started_at).num_seconds()).max(0) as f64;
+        changes.push(ScoreChange {
+            player_id: PlayerId(ev.player_id),
+            delta: ev.delta,
+            kind: ev.kind.clone(),
+            label: ev.label.clone(),
+        });
         // Coalesce events in the same second: build the full per-player snapshot
         // only once per distinct `t`, not once per row. The chart is per-second,
         // so this preserves its shape while avoiding O(rows * players) work and
         // memory for bursty sessions.
         let next_t = events
             .get(i + 1)
-            .map(|(ca, _, _)| ((*ca - started_at).num_seconds()).max(0) as f64);
+            .map(|e| ((e.created_at - started_at).num_seconds()).max(0) as f64);
         if next_t != Some(t) {
             let scores = BTreeMap::from_iter(cumulative.iter().map(|(k, v)| (PlayerId(*k), *v)));
-            samples.push(ScoreHistorySample { t, scores });
+            samples.push(ScoreHistorySample {
+                t,
+                scores,
+                changes: std::mem::take(&mut changes),
+            });
         }
     }
 
     Ok(Some(samples))
+}
+
+/// One scored row on its way into the timeseries.
+struct ScoreEvent {
+    created_at: chrono::DateTime<chrono::Utc>,
+    player_id: Uuid,
+    delta: i64,
+    kind: String,
+    label: Option<String>,
+}
+
+impl ScoreEvent {
+    fn from_task(r: &task_results::Model) -> Self {
+        Self {
+            created_at: r.created_at,
+            player_id: r.player_id_fk,
+            delta: r.point_delta as i64,
+            kind: r.kind.clone(),
+            label: None,
+        }
+    }
+
+    fn from_judge(r: &judge_results::Model, names: &HashMap<Uuid, String>) -> Self {
+        Self {
+            created_at: r.created_at,
+            player_id: r.player_id_fk,
+            delta: r.point_delta as i64,
+            kind: "judge".to_string(),
+            label: names.get(&r.task_judge_id).cloned(),
+        }
+    }
+}
+
+/// `task_judge_id` → the judge's display name, for every judge result given.
+async fn judge_names_for(
+    db: &impl sea_orm::ConnectionTrait,
+    judge_rows: &[judge_results::Model],
+) -> Result<HashMap<Uuid, String>, sea_orm::DbErr> {
+    let task_judge_ids: Vec<Uuid> = {
+        let mut ids: Vec<Uuid> = judge_rows.iter().map(|r| r.task_judge_id).collect();
+        ids.sort();
+        ids.dedup();
+        ids
+    };
+    if task_judge_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let task_judge_rows = task_judges::Entity::find()
+        .filter(task_judges::Column::Id.is_in(task_judge_ids))
+        .all(db)
+        .await?;
+    let judge_ids: Vec<Uuid> = task_judge_rows.iter().map(|tj| tj.judge_id).collect();
+    let judge_rows_by_id: HashMap<Uuid, String> = judges::Entity::find()
+        .filter(judges::Column::Id.is_in(judge_ids))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|j| (j.id, j.name))
+        .collect();
+    Ok(task_judge_rows
+        .into_iter()
+        .filter_map(|tj| {
+            judge_rows_by_id
+                .get(&tj.judge_id)
+                .map(|n| (tj.id, n.clone()))
+        })
+        .collect())
 }
 
 pub fn read_score_rank(leaderboard: &[LeaderboardEntry], player_id: Uuid) -> (i64, usize) {

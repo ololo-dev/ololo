@@ -203,7 +203,7 @@ describe("ScoreChart with health", () => {
     vi.restoreAllMocks();
   });
 
-  it("adds a dashed health series per participant, the bands, the separators and the points", async () => {
+  it("keeps one line per participant and puts every probe on it as a labelled marker", async () => {
     const { ctx, calls } = recordingContext();
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(() => ctx);
 
@@ -213,24 +213,29 @@ describe("ScoreChart with health", () => {
       reportMembers: [],
       scoreHistory: [
         { t: 0, scores: { p1: 0 } },
-        { t: 10, scores: { p1: 5 } },
+        { t: 10, scores: { p1: 5 }, changes: [{ player_id: "p1", delta: 5, kind: "probe" }] },
       ],
       health: HEALTH,
     });
 
-    // One legend entry per series: Time, Alice, Alice · health.
+    // One legend entry per participant — no second "health" series.
     await vi.waitFor(() => {
       const labels = [...container.querySelectorAll(".u-legend .u-series")].map(
         (el) => el.textContent ?? "",
       );
-      expect(labels.some((l) => l.includes("Alice · health"))).toBe(true);
+      expect(labels.some((l) => l.includes("Alice"))).toBe(true);
+      expect(labels.some((l) => l.includes("health"))).toBe(false);
     });
     await vi.waitFor(() => {
-      // Three level bands behind the plot.
-      expect(calls.filter((c) => c.name === "fillRect").length).toBeGreaterThanOrEqual(3);
-      // Three health points drawn as circles: filled (ok), hollow (pending), dashed (failed).
-      expect(calls.filter((c) => c.name === "arc").length).toBeGreaterThanOrEqual(3);
-      // The failed point's dashed ring.
+      // No bands: the points scale is the only one.
+      expect(calls.filter((c) => c.name === "fillRect").length).toBe(0);
+      // Three probe markers plus the scored change at t = 10.
+      expect(calls.filter((c) => c.name === "arc").length).toBeGreaterThanOrEqual(4);
+      // Every probe is labelled with its health score.
+      for (const label of ["80.0", "62.0", "40.0"]) {
+        expect(calls.some((c) => c.name === "fillText" && c.args[0] === label)).toBe(true);
+      }
+      // The failed probe's dashed ring.
       expect(
         calls.some(
           (c) =>
@@ -248,7 +253,7 @@ describe("ScoreChart with health", () => {
     expect(screen.queryByText("Waiting for first scores…")).toBeNull();
   });
 
-  it("without health data the chart draws exactly as before: no health series, no bands", async () => {
+  it("without health data the chart is the plain points line: no markers, no separators", async () => {
     const { ctx, calls } = recordingContext();
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(() => ctx);
     const { container } = render(ScoreChart, {

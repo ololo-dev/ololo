@@ -391,6 +391,17 @@ async fn build_score_history_coalesces_same_second_events() {
         .1;
     assert_eq!(p1_total, 16, "p1 cumulative folds both same-second deltas");
     assert_eq!(p2_total, 4);
+    // The coalesced sample still names every row behind it, in order, so
+    // the chart's tooltip can say what moved the line.
+    let changes: Vec<(uuid::Uuid, i64, &str)> = samples[0]
+        .changes
+        .iter()
+        .map(|c| (c.player_id.as_uuid(), c.delta, c.kind.as_str()))
+        .collect();
+    assert_eq!(
+        changes,
+        vec![(p1, 10, "probe"), (p2, 4, "probe"), (p1, 6, "probe")]
+    );
 }
 
 #[tokio::test]

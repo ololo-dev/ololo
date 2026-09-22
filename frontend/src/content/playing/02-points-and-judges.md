@@ -80,7 +80,8 @@ report) and pays a share of those points: nothing below the amber threshold,
 all of them from the green threshold, a straight line in between. The
 breakdown shows the line item with the score and the reason — and when no
 verified checkpoint exists, it says so and pays zero. The bonus is never
-negative and never changes the check or judge points. The session chart draws
-health as a dashed line per player next to the points: a filled point is
+negative and never changes the check or judge points. On the session chart
+every check sits on the player's points line as a marker coloured by its
+health level, with the score written above it: a filled marker is
 server-verified, a hollow one still pending, a dashed ring a check that could
-not run.
+not run; hover it for the points it moved and the health details.

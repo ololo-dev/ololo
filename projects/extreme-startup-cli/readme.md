@@ -15,6 +15,7 @@ project:
     fail: -5
     no_response: -10
     completion_bonus: 10
+    health: 5
   intervals:
     deadline_secs: 60
     min_interval_secs: 5

@@ -86,4 +86,5 @@ health level with a pill naming its grade and score — `[B] 81.3`, the same
 badge the players' list shows — and every judge verdict
 is a diamond with the points it awarded: a filled marker is server-verified,
 a hollow one still pending, a dashed ring a check that could not run; hover
-a marker for the points it moved and why, and the health details.
+a marker for the points it moved and why, and the health details —
+duplication, complexity and dead code.

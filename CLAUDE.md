@@ -14,7 +14,7 @@ Seven Rust crates (`Cargo.toml` `members`), edition **2024**, `rust-version = 1.
 - `server/` — main web server: REST API, browser WebSocket, session/project CRUD, auth (JWT/OAuth/PAT), LLM adaptation.
 - `game-server/` — session execution: lobby/running timers, probe dispatch, scoring, judge queue. Owns the full session lifecycle for its own sessions.
 - `ololo/` — Rust CLI for participants (login / start / join, probe WebSocket, agent-hosting TUI).
-- `ololo-health/` — jscpd's Rust core (`cpd-core`/`cpd-finder`, pinned exactly) called in-process: one scan config, one score, one bonus mapping for the client and the game server. Never vendor or shell out to jscpd for health; the `analysis` probes and the similarity check still use the image's jscpd binary.
+- `ololo-health/` — jscpd's Rust core (`cpd-core`/`cpd-finder`/`basta`, pinned exactly) called in-process: one scan config, one score (duplication, complexity, dead code), one bonus mapping for the client and the game server. Never vendor or shell out to jscpd for health; the `analysis` probes and the similarity check still use the image's jscpd binary.
 - `agent-tokens/` — library + debug CLI that reads the local user's own AI-agent session logs for token-usage stats (see `agent-tokens/README.md`).
 - `server/migration/` — sea-orm migration crate.
 

@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+use basta::config::BastaConfig;
+use cpd_core::deadcode::Report as DeadCodeReport;
 use cpd_core::health::Health;
 use cpd_core::summary::{SummaryMetric, compute_summary};
 use cpd_finder::orchestrate::RunConfig;
@@ -56,6 +58,20 @@ pub struct Metrics {
     /// Share of code lines that sit in complex files, in percent.
     pub complexity_pct: Option<f64>,
     pub complex_lines: Option<u64>,
+    /// Share of the analyzable code lines that are dead (unused files,
+    /// exports, symbols, imports), in percent. `None` when no file is in a
+    /// language the analyzer reads (JavaScript, TypeScript, Python).
+    #[serde(default)]
+    pub dead_code_pct: Option<f64>,
+    #[serde(default)]
+    pub dead_lines: Option<u64>,
+    /// Dead findings (files, exports, symbols, imports) behind `dead_lines`.
+    #[serde(default)]
+    pub dead_symbols: Option<u64>,
+    /// Percent of the code lines the dead-code analyzer could read, when
+    /// that is not all of them.
+    #[serde(default)]
+    pub dead_code_coverage: Option<f64>,
     /// Files carrying a `jscpd:ignore-start` marker. jscpd honours the
     /// markers at the tokenizer level (they cannot be switched off), so a
     /// tree can hide code from the scan — this count makes that visible.
@@ -180,8 +196,8 @@ fn analyze_now(root: &Path, cfg: &HealthConfig) -> Result<HealthResult, HealthEr
         return Err(HealthError::NotADirectory(root));
     }
     let survey = survey_tree(&root, cfg)?;
-    let (health, clones) = scan(&root, cfg);
-    fold(health, clones, survey, cfg, started)
+    let (health, clones, dead_code) = scan(&root, cfg);
+    fold(health, clones, dead_code, survey, cfg, started)
 }
 
 /// What the survey learns before jscpd runs.
@@ -265,7 +281,7 @@ fn jscpd_config_present(root: &Path) -> bool {
 }
 
 /// The in-process twin of `jscpd --health` (`crates/cpd/src/dashboard.rs`).
-fn scan(root: &Path, cfg: &HealthConfig) -> (Health, u64) {
+fn scan(root: &Path, cfg: &HealthConfig) -> (Health, u64, Option<DeadCodeReport>) {
     let run_cfg = RunConfig {
         paths: vec![root.to_path_buf()],
         ignore: cfg.ignore.clone(),
@@ -295,13 +311,36 @@ fn scan(root: &Path, cfg: &HealthConfig) -> (Health, u64) {
         SummaryMetric::Complexity,
         |id| id.to_string(),
     );
-    let health = cpd_core::health::compute(&summary, &result.clones, None, &cfg.jscpd);
-    (health, result.clones.len() as u64)
+    // The third dimension: jscpd's dead-code analyzer over the same tree,
+    // with the same exclusions and size cap. Nothing to say about a tree
+    // with no file it reads; the other dimensions still stand.
+    let dead_code = dead_code_report(root, cfg);
+    let health = cpd_core::health::compute(
+        &summary,
+        &result.clones,
+        dead_code.as_ref().map(|report| &report.statistics),
+        &cfg.jscpd,
+    );
+    (health, result.clones.len() as u64, dead_code)
+}
+
+fn dead_code_report(root: &Path, cfg: &HealthConfig) -> Option<DeadCodeReport> {
+    let config = BastaConfig {
+        paths: vec![root.to_path_buf()],
+        ignore: cfg.ignore.clone(),
+        max_size: Some(cfg.max_file_bytes),
+        no_gitignore: true,
+        follow_symlinks: false,
+        workers: cfg.workers,
+        ..BastaConfig::default()
+    };
+    Some(basta::analyze::run(&config).report).filter(|report| report.statistics.files > 0)
 }
 
 fn fold(
     health: Health,
     clones: u64,
+    dead_code: Option<DeadCodeReport>,
     survey: Survey,
     cfg: &HealthConfig,
     started: Instant,
@@ -309,6 +348,7 @@ fn fold(
     let dimension = |id: &str| health.dimensions.iter().find(|d| d.id == id);
     let duplication = dimension("duplication");
     let complexity = dimension("complexity");
+    let dead = dimension("dead-code");
     let metrics = Metrics {
         files: health.size.files,
         code_lines: health.size.lines,
@@ -317,6 +357,10 @@ fn fold(
         clones,
         complexity_pct: complexity.and_then(|d| d.value),
         complex_lines: complexity.and_then(|d| d.lines),
+        dead_code_pct: dead.and_then(|d| d.value),
+        dead_lines: dead.and_then(|d| d.lines),
+        dead_symbols: dead_code.as_ref().map(|r| r.findings.len() as u64),
+        dead_code_coverage: dead.and_then(|d| d.coverage),
         ignore_markers: survey.ignore_markers,
         jscpd_config_present: survey.jscpd_config_present,
     };

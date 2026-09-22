@@ -121,6 +121,15 @@ export interface HealthMetrics {
   clones: number;
   complexity_pct?: number | null;
   complex_lines?: number | null;
+  /** Dead code (unused files, exports, symbols, imports) as a share of the
+   *  analyzable lines; absent when no file is in a language the analyzer
+   *  reads (JavaScript, TypeScript, Python) or from older clients. */
+  dead_code_pct?: number | null;
+  dead_lines?: number | null;
+  dead_symbols?: number | null;
+  /** Percent of the code lines the dead-code analyzer could read, when
+   *  that is not all of them. */
+  dead_code_coverage?: number | null;
   ignore_markers: number;
   jscpd_config_present: boolean;
 }

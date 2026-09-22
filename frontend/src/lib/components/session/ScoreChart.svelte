@@ -545,12 +545,30 @@
     }
     if (m && m.files > 0) {
       lines.push({
+        label: "code",
+        value: `${m.code_lines} lines · ${m.files} file${m.files === 1 ? "" : "s"}`,
+      });
+      lines.push({
         label: "duplication",
         value: `${m.duplication_pct == null ? "—" : `${m.duplication_pct.toFixed(1)}%`} · ${
           m.duplicated_lines ?? 0
-        } of ${m.code_lines} lines · ${m.clones} clone${m.clones === 1 ? "" : "s"} · ${m.files} file${
-          m.files === 1 ? "" : "s"
-        }`,
+        } lines · ${m.clones} clone${m.clones === 1 ? "" : "s"}`,
+      });
+      lines.push({
+        label: "complexity",
+        value:
+          m.complexity_pct == null
+            ? "—"
+            : `${m.complexity_pct.toFixed(1)}% · ${m.complex_lines ?? 0} lines in complex files`,
+      });
+      lines.push({
+        label: "dead code",
+        value:
+          m.dead_code_pct == null
+            ? "not measured (JavaScript, TypeScript and Python only)"
+            : `${m.dead_code_pct.toFixed(1)}% · ${m.dead_lines ?? 0} lines${
+                m.dead_symbols != null ? ` · ${m.dead_symbols} finding${m.dead_symbols === 1 ? "" : "s"}` : ""
+              }${m.dead_code_coverage != null ? ` · ${Math.round(m.dead_code_coverage)}% of the code read` : ""}`,
       });
     }
     // Only what deserves attention: a check the server could not confirm,

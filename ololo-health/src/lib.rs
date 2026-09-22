@@ -33,13 +33,15 @@ pub use score::{Bonus, BonusReason, Level, bonus, level, scores_match};
 /// another jscpd from a genuine score disagreement. Hand-maintained next to
 /// the `=` pins in Cargo.toml; `pinned_versions_match_cargo_lock` fails the
 /// tests when they drift (jscpd exposes no version constant yet).
-pub const JSCPD_CORE_VERSION: &str = "0.1.16";
+pub const JSCPD_CORE_VERSION: &str = "0.1.17";
 /// Version of `cpd-finder` this crate links (walking, tokenizing, detection).
 pub const JSCPD_FINDER_VERSION: &str = "0.1.17";
+/// jscpd's dead-code analyzer (`basta`), the third health dimension.
+pub const BASTA_VERSION: &str = "0.3.0";
 
 /// Schema of [`HealthResult`] as ololo serializes it — not jscpd's own
 /// output, which is unversioned upstream. Bump when a field changes meaning.
-pub const HEALTH_SCHEMA: u32 = 1;
+pub const HEALTH_SCHEMA: u32 = 2;
 
 #[cfg(test)]
 mod tests {
@@ -54,6 +56,7 @@ mod tests {
         for (name, expected) in [
             ("cpd-core", JSCPD_CORE_VERSION),
             ("cpd-finder", JSCPD_FINDER_VERSION),
+            ("basta", BASTA_VERSION),
         ] {
             let resolved = locked_version(&lock, name)
                 .unwrap_or_else(|| panic!("{name} is not in Cargo.lock"));

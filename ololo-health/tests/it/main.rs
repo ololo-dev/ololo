@@ -63,6 +63,84 @@ fn copy_tree(from: &Path, to: &Path) {
     }
 }
 
+/// A module with a used and an unused export, past the 50-token floor.
+const LIBRARY: &str = r#"export function used(list) {
+  const out = [];
+  for (const item of list) {
+    if (item % 15 === 0) out.push("FizzBuzz");
+    else if (item % 3 === 0) out.push("Fizz");
+    else if (item % 5 === 0) out.push("Buzz");
+    else out.push(String(item));
+  }
+  return out;
+}
+
+export function neverCalled(n) {
+  let total = 0;
+  for (let i = 0; i < n; i++) {
+    total += i * 2 + 1;
+  }
+  return total;
+}
+"#;
+
+const ENTRY: &str = r#"import { used } from "./library.js";
+
+export function main(argv) {
+  const numbers = argv.map((value) => Number(value)).filter((value) => !Number.isNaN(value));
+  const lines = used(numbers);
+  for (const line of lines) {
+    console.log(line);
+  }
+  return lines.length;
+}
+
+main(process.argv.slice(2));
+"#;
+
+#[test]
+fn measures_complexity_and_dead_code_where_the_language_allows() {
+    let dir = tempfile::tempdir().unwrap();
+    write_tree(
+        dir.path(),
+        &[
+            (
+                "package.json",
+                r#"{ "name": "fixture", "main": "src/index.js", "type": "module" }"#,
+            ),
+            ("src/index.js", ENTRY),
+            ("src/library.js", LIBRARY),
+        ],
+    );
+    let result = analyze(dir.path(), &HealthConfig::default()).unwrap();
+    let m = &result.metrics;
+    assert_eq!(m.files, 2);
+    assert!(
+        m.complexity_pct.is_some(),
+        "complexity is measured: {:?}",
+        result.health
+    );
+    assert!(
+        m.dead_code_pct.is_some() && m.dead_lines.is_some(),
+        "JavaScript is a language the dead-code analyzer reads: {:?}",
+        result.health
+    );
+    assert!(
+        m.dead_lines.unwrap_or(0) > 0 && m.dead_symbols.unwrap_or(0) >= 1,
+        "the unused export is dead code: {:?}",
+        result.health
+    );
+
+    // A tree in a language it does not read: complexity still measured,
+    // dead code honestly absent.
+    let dir = tempfile::tempdir().unwrap();
+    write_tree(dir.path(), &[("src/a.go", DUP), ("src/b.go", UNIQUE)]);
+    let result = analyze(dir.path(), &HealthConfig::default()).unwrap();
+    assert!(result.metrics.complexity_pct.is_some());
+    assert!(result.metrics.dead_code_pct.is_none());
+    assert!(result.metrics.dead_lines.is_none());
+}
+
 #[test]
 fn scores_a_tree_and_is_deterministic_across_runs_and_paths() {
     let dir = tempfile::tempdir().unwrap();

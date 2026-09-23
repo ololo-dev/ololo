@@ -143,6 +143,42 @@ pub(crate) fn judge_phase_expired_since(
     (Utc::now() - base).num_seconds() >= cap_secs as i64
 }
 
+/// The marker line the dispatch adds to an artifact request: how long the
+/// request stays open from the moment this probe leaves. The CLI counts it
+/// down; an older CLI sees one more shell comment.
+pub const REQUEST_OPEN_PREFIX: &str = "# Open for ";
+
+/// Insert `# Open for <secs>s more.` after an artifact request's header
+/// line. Any other command comes back unchanged.
+pub fn annotate_request_deadline(command: &str, secs_left: i64) -> String {
+    if !command.starts_with("# ARTIFACT REQUEST from ") {
+        return command.to_string();
+    }
+    let (head, rest) = command.split_once('\n').unwrap_or((command, ""));
+    format!(
+        "{head}\n{REQUEST_OPEN_PREFIX}{}s more.\n{rest}",
+        secs_left.max(0)
+    )
+}
+
+/// Seconds an open judge request has left before its phase cap ages it
+/// out: counted from its registration or the latest delivery, whichever is
+/// later — the same clock `judge_phase_expired_since` reads.
+pub async fn judge_request_secs_left(
+    state: &GameServerState,
+    test: &tests::Model,
+    session_id: Uuid,
+    player_id: Uuid,
+) -> i64 {
+    let last = last_artifact_at(state, test.task_id, session_id, player_id).await;
+    let cap = judge_phase_cap_secs(state, test.task_id, session_id).await;
+    let base = match last {
+        Some(t) if t > test.created_at => t,
+        _ => test.created_at,
+    };
+    (cap as i64 - (Utc::now() - base).num_seconds()).max(0)
+}
+
 /// The phase cap when an open request is a screencast: recording a flow
 /// means starting the app, driving it and encoding — five minutes was
 /// gone before the first frame landed (ZO34ZG).
@@ -1586,5 +1622,21 @@ mod judge_phase_tests {
             row.state,
             arena_core::session_completion::SCHEDULER_STATE_COMPLETED
         );
+    }
+}
+
+#[cfg(test)]
+mod request_deadline_tests {
+    use super::annotate_request_deadline;
+
+    #[test]
+    fn the_open_line_follows_the_header_of_an_artifact_request_only() {
+        let cmd = "# ARTIFACT REQUEST from ux: a screenshot\n# Save under x/\ntest -f x/a.png";
+        assert_eq!(
+            annotate_request_deadline(cmd, 287),
+            "# ARTIFACT REQUEST from ux: a screenshot\n# Open for 287s more.\n# Save under x/\ntest -f x/a.png"
+        );
+        assert_eq!(annotate_request_deadline("npm test", 30), "npm test");
+        assert!(annotate_request_deadline(cmd, -5).contains("# Open for 0s more."));
     }
 }

@@ -784,7 +784,17 @@ fn f3_pastes_last_failed_probe_and_focuses_agent() {
         expected: Some("Paris".to_string()),
         actual: Some("London".to_string()),
     });
+    // Two things are open — the task brief and the failed check — so F3
+    // asks which; the failed check is the second row.
     press(&mut app, crossterm::event::KeyCode::F(3));
+    let picker = app.paste_picker.as_ref().expect("picker opens");
+    assert_eq!(picker.items.len(), 2);
+    assert_eq!(
+        picker.items[1].kind,
+        crate::tui::app::PasteKind::FailedCheck
+    );
+    press(&mut app, crossterm::event::KeyCode::Char('2'));
+    assert!(app.paste_picker.is_none(), "choosing closes the picker");
     let text = app.pty_paste_pending.take().expect("paste queued");
     assert!(text.contains("Trivia"), "paste names the task: {text}");
     assert!(
@@ -1180,7 +1190,7 @@ fn chat_transcript_retells_artifact_requests_as_judge_messages() {
     assert!(
         msgs.iter().any(|m| matches!(
             m,
-            ChatMsg::Request { judge, instruction, path, delivered }
+            ChatMsg::Request { judge, instruction, path, delivered, .. }
                 if judge == "creativity"
                     && instruction.contains("Capture the game")
                     && path == ".ololo/artifacts/abc/"
@@ -1986,4 +1996,89 @@ fn live_status_pauses_with_the_session_and_ends_with_it() {
             .text
             .starts_with("all your tasks are done — Data reviewing your code")
     );
+}
+
+fn arrive_request(app: &mut TuiApp, ordinal: i32, open_secs: i64) -> Uuid {
+    let probe_id = Uuid::new_v4();
+    let command = ARTIFACT_COMMAND.replacen("\n", &format!("\n# Open for {open_secs}s more.\n"), 1);
+    app.on_event(TuiEvent::ProbeArrived(ProbeInfo {
+        probe_id,
+        rendered_command: command,
+        deadline_secs: 60,
+        task_id: Some(Uuid::new_v4()),
+        task_ordinal: ordinal,
+        task_title: "Ledger".to_string(),
+        task_description: "Build the ledger".to_string(),
+        test_ordinal: 7,
+        test_total: 7,
+        test_label: String::new(),
+        test_description: String::new(),
+        expected_answer: None,
+        answer_template: String::new(),
+        validation_kind: ValidationKind::Minijinja,
+    }));
+    probe_id
+}
+
+#[test]
+fn an_artifact_request_counts_down_in_the_chat_and_the_paste() {
+    let mut app = fresh_app();
+    app.has_pty = true;
+    arrive_request(&mut app, 0, 250);
+    let msgs = app.chat_transcript();
+    let deadline = msgs
+        .iter()
+        .find_map(|m| match m {
+            ChatMsg::Request { deadline, .. } => Some(*deadline),
+            _ => None,
+        })
+        .expect("the request is in the chat")
+        .expect("with its deadline");
+    let left = deadline.saturating_duration_since(std::time::Instant::now());
+    assert!(left.as_secs() > 240 && left.as_secs() <= 250, "{left:?}");
+    let (chip, _) = crate::tui::render::chat::request_chip(false, Some(deadline));
+    assert!(chip.contains("left]") && chip.contains("4:"), "{chip}");
+    let (chip, _) = crate::tui::render::chat::request_chip(false, Some(std::time::Instant::now()));
+    assert_eq!(chip, " [expired]");
+}
+
+#[test]
+fn f3_offers_the_open_request_first_with_its_deadline_and_pastes_it() {
+    let mut app = fresh_app();
+    app.has_pty = true;
+    arrive_request(&mut app, 0, 300);
+    press(&mut app, crossterm::event::KeyCode::F(3));
+    let picker = app.paste_picker.as_ref().expect("request + brief: picker");
+    assert_eq!(picker.items[0].kind, crate::tui::app::PasteKind::Request);
+    assert!(
+        picker.items[0].deadline.is_some(),
+        "the request carries its countdown"
+    );
+    assert_eq!(picker.items[1].kind, crate::tui::app::PasteKind::Brief);
+    press(&mut app, crossterm::event::KeyCode::Enter);
+    let text = app.pty_paste_pending.take().expect("paste queued");
+    assert!(text.contains("Artifact request from ux-review"), "{text}");
+    assert!(text.contains("Deadline: deliver within 4:"), "{text}");
+    assert_eq!(app.input_focus, InputFocus::Pty);
+}
+
+#[test]
+fn f3_skips_an_expired_request_and_esc_closes_the_picker() {
+    let mut app = fresh_app();
+    app.has_pty = true;
+    arrive_request(&mut app, 0, 0);
+    // Only the brief is left: pasted straight away.
+    press(&mut app, crossterm::event::KeyCode::F(3));
+    assert!(app.paste_picker.is_none());
+    let text = app.pty_paste_pending.take().expect("brief pasted");
+    assert!(text.contains("Task brief:"), "{text}");
+
+    let mut app = fresh_app();
+    app.has_pty = true;
+    arrive_request(&mut app, 0, 120);
+    press(&mut app, crossterm::event::KeyCode::F(3));
+    assert!(app.paste_picker.is_some());
+    press(&mut app, crossterm::event::KeyCode::Esc);
+    assert!(app.paste_picker.is_none());
+    assert!(app.pty_paste_pending.is_none());
 }

@@ -380,9 +380,10 @@ fn msg_lines(m: &ChatMsg<'_>, inner_w: usize, selected: bool) -> Vec<Line<'stati
             instruction,
             path,
             delivered,
+            deadline,
         } => (
             Color::Yellow,
-            request_lines(judge, instruction, path, *delivered, body_w),
+            request_lines(judge, instruction, path, *delivered, *deadline, body_w),
         ),
         ChatMsg::DoneNote(n) => (Color::Green, done_note_lines(n, body_w)),
         ChatMsg::Verdict(v) => (Color::Yellow, verdict_lines(v, body_w)),
@@ -460,6 +461,38 @@ fn tint_block(lines: Vec<Line<'static>>, inner_w: usize, bg: Color) -> Vec<Line<
         .collect()
 }
 
+/// The request's status chip: delivered, the countdown while it is open
+/// (red in its last minute), or expired.
+pub(crate) fn request_chip(
+    delivered: bool,
+    deadline: Option<std::time::Instant>,
+) -> (String, Style) {
+    if delivered {
+        return (
+            " [delivered ✓]".to_string(),
+            Style::default().fg(Color::Green),
+        );
+    }
+    match crate::tui::app::time_left(deadline) {
+        Some(left) if left.is_zero() => (" [expired]".to_string(), Style::default().fg(Color::Red)),
+        Some(left) => {
+            let color = if left.as_secs() < 60 {
+                Color::Red
+            } else {
+                Color::Yellow
+            };
+            (
+                format!(" [waiting · {} left]", crate::tui::app::fmt_countdown(left)),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            )
+        }
+        None => (
+            " [waiting]".to_string(),
+            Style::default().fg(Color::DarkGray),
+        ),
+    }
+}
+
 /// ` ⚖ Correctness asks: capture the widget… [waiting]` and the delivery
 /// folder underneath — the judge's evidence request in plain words, on its
 /// own background block.
@@ -468,16 +501,14 @@ fn request_lines(
     instruction: &str,
     path: &str,
     delivered: bool,
+    deadline: Option<std::time::Instant>,
     inner_w: usize,
 ) -> Vec<Line<'static>> {
     let name_style = Style::default()
         .fg(Color::Yellow)
         .add_modifier(Modifier::BOLD);
-    let (chip, chip_style) = if delivered {
-        (" [delivered ✓]", Style::default().fg(Color::Green))
-    } else {
-        (" [waiting]", Style::default().fg(Color::DarkGray))
-    };
+    let (chip, chip_style) = request_chip(delivered, deadline);
+    let chip = chip.as_str();
     let text_style = Style::default().fg(Color::Gray);
 
     let head = format!("{judge} asks: ");

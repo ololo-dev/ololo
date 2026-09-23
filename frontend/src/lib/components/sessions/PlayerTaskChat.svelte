@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatCountdown, requestOpenUntil } from '$lib/sessions/request-deadline'
   import { browser } from '$app/environment'
   import type {
     PlayerTaskSummaryEntry,
@@ -397,7 +398,12 @@
             instruction: latest.description?.trim() || req[2].trim(),
             path: `.ololo/artifacts/${testId}/`,
             delivered: deliveredByRequest.has(testId),
-            deadlineAt: deadlineByRequest.get(testId) ?? null,
+            // The request's own close, stamped on its latest dispatch; the
+            // in-flight probe's window when the server predates the stamp.
+            deadlineAt: (() => {
+              const until = requestOpenUntil(latest.rendered_command, latest.dispatched_at)
+              return until !== null ? new Date(until).toISOString() : (deadlineByRequest.get(testId) ?? null)
+            })(),
           }
           if (!prev) {
             requestRows.set(dedupeKey, row)
@@ -1259,9 +1265,22 @@
                     {#if req.delivered}
                       <span class="rounded-full bg-green-100 px-2 py-0.5 text-[11px] font-semibold text-green-700">delivered ✓</span>
                     {:else if req.deadlineAt}
-                      <span class="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-700">
-                        before {timeLabel(ts(req.deadlineAt))}
-                      </span>
+                      {@const left = (ts(req.deadlineAt) ?? 0) - nowMs}
+                      {#if left <= 0}
+                        <span
+                          class="rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-semibold text-red-700"
+                          data-testid="chat-request-deadline"
+                          title="The judge stopped waiting at {timeLabel(ts(req.deadlineAt))}"
+                        >expired</span>
+                      {:else}
+                        <span
+                          class="rounded-full px-2 py-0.5 text-[11px] font-semibold tabular-nums {left < 60_000
+                            ? 'bg-red-100 text-red-700'
+                            : 'bg-amber-100 text-amber-700'}"
+                          data-testid="chat-request-deadline"
+                          title="Open until {timeLabel(ts(req.deadlineAt))}"
+                        >{formatCountdown(left)} left</span>
+                      {/if}
                     {:else}
                       <span class="rounded-full bg-brand-border/40 px-2 py-0.5 text-[11px] font-semibold text-brand-muted">not delivered</span>
                     {/if}

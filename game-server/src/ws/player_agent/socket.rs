@@ -669,7 +669,21 @@ pub async fn handle_player_agent_socket(
         let secret_meta = resolved.secret_meta;
         let fixture_defs = resolved.fixture_defs;
         let fixture_scalars = resolved.fixture_scalars;
-        let rendered_command = resolved.rendered_command;
+        let rendered_command = if adapted_test.registered_by_judge_id.is_some() {
+            let secs_left = crate::ws::player_agent::scheduler::judge_request_secs_left(
+                &state,
+                &adapted_test,
+                session_id,
+                player_id,
+            )
+            .await;
+            crate::ws::player_agent::scheduler::annotate_request_deadline(
+                &resolved.rendered_command,
+                secs_left,
+            )
+        } else {
+            resolved.rendered_command
+        };
         let fixture_values_for_eval = resolved.fixture_values_for_eval;
         let expected_answer_display = resolved.expected_answer_display;
 

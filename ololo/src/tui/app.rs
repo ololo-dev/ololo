@@ -122,6 +122,8 @@ pub enum ChatMsg<'a> {
         instruction: String,
         path: String,
         delivered: bool,
+        /// When the request closes, when the server said.
+        deadline: Option<std::time::Instant>,
     },
     /// The player's message: their done-note.
     DoneNote(&'a DoneNote),
@@ -130,6 +132,49 @@ pub enum ChatMsg<'a> {
     /// Synthetic marker (member joined, session status, …) — a quiet
     /// system line.
     System { text: String },
+}
+
+/// What F3 offers to paste.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PasteKind {
+    Request,
+    Brief,
+    FailedCheck,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PasteSource {
+    Probe(Uuid),
+    /// The brief carried by this probe's task.
+    Brief(Uuid),
+}
+
+#[derive(Debug, Clone)]
+pub struct PasteItem {
+    pub kind: PasteKind,
+    pub label: String,
+    /// Artifact requests: when they close.
+    pub deadline: Option<std::time::Instant>,
+    pub source: PasteSource,
+}
+
+#[derive(Debug, Clone)]
+pub struct PastePicker {
+    pub items: Vec<PasteItem>,
+    pub cursor: usize,
+}
+
+fn first_line(text: &str) -> String {
+    text.lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("")
+        .to_string()
+}
+
+/// Sorts requests without a deadline after every one that has one.
+fn far_future() -> std::time::Instant {
+    std::time::Instant::now() + std::time::Duration::from_secs(10 * 365 * 24 * 3600)
 }
 
 /// A selectable row in the probes sidebar: a task header or a probe entry.
@@ -283,6 +328,14 @@ pub struct TuiApp {
     pub probe_popup: Option<Uuid>,
     /// Hotkey-help popup overlay (F1 / `?`).
     pub show_help: bool,
+    /// When each open artifact request closes, keyed by [`request_key`]:
+    /// the server stamps `# Open for Ns more.` on every dispatch, counted
+    /// from the moment that probe arrived. Monotonic, like `next_probe_due`.
+    pub request_deadlines: HashMap<String, std::time::Instant>,
+    /// Request dispatches whose deadline is already recorded.
+    request_probes_seen: Vec<Uuid>,
+    /// F3 with more than one thing to hand the agent: pick which.
+    pub paste_picker: Option<PastePicker>,
     /// Text queued for pasting into the agent PTY ("p" in the probe
     /// popup). The render loop owns the PTY writer and drains this.
     pub pty_paste_pending: Option<String>,
@@ -351,6 +404,9 @@ impl TuiApp {
             sidebar_cursor: None,
             probe_popup: None,
             show_help: false,
+            request_deadlines: HashMap::new(),
+            request_probes_seen: Vec::new(),
+            paste_picker: None,
             pty_paste_pending: None,
             permission_popup: None,
             permission_cursor: 0,
@@ -386,6 +442,9 @@ impl TuiApp {
             TuiEvent::ProbeArrived(p) => {
                 // The probe the clock counted down to is here.
                 self.next_probe_due = None;
+                // An artifact request starts (or resets) its countdown the
+                // moment its dispatch lands.
+                self.note_request_deadline(p.probe_id, &p.rendered_command);
                 // Track the scheduler's current task position: the highest
                 // ordinal seen in any TestPush. Tasks below it are done.
                 // Ordinal 0 is a real task (projects number tasks from 0);
@@ -542,6 +601,7 @@ impl TuiApp {
             TuiEvent::ProbeResult(r) => {
                 // A fresh probe means the phase moved on.
                 self.judging = false;
+                self.note_request_deadline(r.probe_id, &r.command);
                 if let Some(existing) = self.probes.iter_mut().find(|x| x.probe_id == r.probe_id) {
                     // Preserve task metadata if the result omits it (defensive — player_ws
                     // now always sends task_title/description, but synthetic paths may not).
@@ -1104,6 +1164,11 @@ impl TuiApp {
         if self.input_focus != InputFocus::Tui {
             return;
         }
+        // The F3 picker swallows keys until something is chosen or it closes.
+        if self.paste_picker.is_some() {
+            self.picker_key(code);
+            return;
+        }
         // Help popup swallows keys until closed (checked before the probe
         // popup — it renders on top of it).
         if self.show_help {
@@ -1354,16 +1419,176 @@ impl TuiApp {
         }
     }
 
-    /// F3: paste the last failed probe straight into the agent PTY and
-    /// hand focus over — same payload as "p" in the probe popup.
+    /// F3: hand the agent what is open. One thing — an artifact request,
+    /// the task brief, a failed check — is pasted at once, as before; several
+    /// open a picker so the player chooses which.
     fn paste_last_failed(&mut self) {
         if !self.has_pty {
             return;
         }
-        if let Some(text) = self.last_failed_probe().map(probe_paste_text) {
+        let items = self.paste_items();
+        match items.len() {
+            0 => {}
+            1 => {
+                let item = items.into_iter().next().expect("one item");
+                self.paste_item(&item);
+            }
+            _ => {
+                self.stash_focus_for_modal();
+                self.show_help = false;
+                self.paste_picker = Some(PastePicker { items, cursor: 0 });
+            }
+        }
+    }
+
+    /// Record an artifact request's deadline from its dispatch — once per
+    /// probe, so a later result frame for the same dispatch does not push
+    /// the countdown back.
+    fn note_request_deadline(&mut self, probe_id: Uuid, command: &str) {
+        if self.request_probes_seen.contains(&probe_id) {
+            return;
+        }
+        let Some(req) = parse_artifact_request(command) else {
+            return;
+        };
+        let Some(secs) = req.open_secs else {
+            return;
+        };
+        self.request_probes_seen.push(probe_id);
+        self.request_deadlines.insert(
+            request_key(req.judge, req.instruction),
+            std::time::Instant::now() + std::time::Duration::from_secs(secs.max(0) as u64),
+        );
+    }
+
+    /// When an artifact request closes, when the server said.
+    fn request_deadline(&self, req: &ArtifactRequest<'_>) -> Option<std::time::Instant> {
+        self.request_deadlines
+            .get(&request_key(req.judge, req.instruction))
+            .copied()
+    }
+
+    /// Everything F3 could paste, most urgent first: open artifact requests
+    /// (soonest deadline first), then the current task's brief, then the
+    /// last failed check.
+    pub fn paste_items(&self) -> Vec<PasteItem> {
+        use arena_core::protocol::ProbeOutcome;
+        let mut requests: Vec<PasteItem> = Vec::new();
+        let mut seen: Vec<String> = Vec::new();
+        for p in self.probes.iter().rev() {
+            let Some(req) = parse_artifact_request(&p.command) else {
+                continue;
+            };
+            let key = request_key(req.judge, req.instruction);
+            if seen.contains(&key) {
+                continue;
+            }
+            seen.push(key);
+            if matches!(p.outcome, Some(ProbeOutcome::Pass)) {
+                continue;
+            }
+            let deadline = self.request_deadline(&req);
+            if time_left(deadline).is_some_and(|l| l.is_zero()) {
+                continue;
+            }
+            requests.push(PasteItem {
+                kind: PasteKind::Request,
+                label: format!(
+                    "{} asks: {}",
+                    req.judge,
+                    first_line(&request_instruction(&p.test_description, req.instruction))
+                ),
+                deadline,
+                source: PasteSource::Probe(p.probe_id),
+            });
+        }
+        requests.sort_by_key(|i| i.deadline.unwrap_or_else(far_future));
+        let mut items = requests;
+        if let Some(p) = self.probes.iter().rev().find(|p| {
+            Some(p.task_ordinal) == self.max_task_ordinal && !p.task_description.is_empty()
+        }) {
+            items.push(PasteItem {
+                kind: PasteKind::Brief,
+                label: format!("Task #{}: {} — the brief", p.task_ordinal, p.task_title),
+                deadline: None,
+                source: PasteSource::Brief(p.probe_id),
+            });
+        }
+        if let Some(p) = self
+            .last_failed_probe()
+            .filter(|p| parse_artifact_request(&p.command).is_none())
+        {
+            let what = if p.test_label.is_empty() {
+                first_line(&p.command)
+            } else {
+                p.test_label.clone()
+            };
+            items.push(PasteItem {
+                kind: PasteKind::FailedCheck,
+                label: format!("Failed check: {what}"),
+                deadline: None,
+                source: PasteSource::Probe(p.probe_id),
+            });
+        }
+        items
+    }
+
+    /// Queue an item's text for the agent PTY and hand focus over.
+    fn paste_item(&mut self, item: &PasteItem) {
+        let text = match &item.source {
+            PasteSource::Probe(id) => self
+                .probe_by_id(*id)
+                .map(|p| probe_paste_text_with(p, time_left(item.deadline))),
+            PasteSource::Brief(id) => self.probe_by_id(*id).map(|p| {
+                format!(
+                    "Task #{}: {}\nTask brief:\n{}\n",
+                    p.task_ordinal, p.task_title, p.task_description
+                )
+            }),
+        };
+        if let Some(text) = text {
             self.pty_paste_pending = Some(text);
+            self.focus_return = None; // explicit hand-over wins
             self.set_input_focus(InputFocus::Pty);
         }
+    }
+
+    /// Keys while the F3 picker is open: move, choose (⏎ or its number),
+    /// close. The list is re-read on choose, so a request that closed while
+    /// the picker was up is not pasted as if it were open.
+    fn picker_key(&mut self, code: crossterm::event::KeyCode) {
+        use crossterm::event::KeyCode;
+        let Some(picker) = self.paste_picker.as_mut() else {
+            return;
+        };
+        let n = picker.items.len();
+        let chosen = match code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.paste_picker = None;
+                self.restore_stashed_focus();
+                return;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                picker.cursor = (picker.cursor + n - 1) % n.max(1);
+                return;
+            }
+            KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => {
+                picker.cursor = (picker.cursor + 1) % n.max(1);
+                return;
+            }
+            KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Char('p') => picker.cursor,
+            KeyCode::Char(c) if c.is_ascii_digit() && c != '0' => {
+                let i = (c as u8 - b'1') as usize;
+                if i >= n {
+                    return;
+                }
+                i
+            }
+            _ => return,
+        };
+        let item = picker.items[chosen].clone();
+        self.paste_picker = None;
+        self.paste_item(&item);
     }
 
     /// F4: show/hide the probes sidebar. The PTY inner rect depends on it,
@@ -1600,6 +1825,7 @@ impl TuiApp {
                 // check — say who asks, what for, and whether it landed.
                 if let Some(req) = parse_artifact_request(&latest.command) {
                     out.push(ChatMsg::Request {
+                        deadline: self.request_deadline(&req),
                         judge: req.judge.to_string(),
                         instruction: request_instruction(&latest.test_description, req.instruction),
                         path: req.path.clone(),
@@ -2056,6 +2282,39 @@ struct ArtifactRequest<'a> {
     instruction: &'a str,
     /// Repo-relative folder the files belong in; empty when unparseable.
     path: String,
+    /// `# Open for Ns more.` — seconds the request stays open from this
+    /// dispatch. `None` from servers that do not stamp it.
+    open_secs: Option<i64>,
+}
+
+/// One request across its re-dispatches: who asks, and what.
+fn request_key(judge: &str, instruction: &str) -> String {
+    format!("{judge}\n{instruction}")
+}
+
+/// Time left until `deadline`; `Some(ZERO)` once it passed, `None` when
+/// there is no deadline.
+pub fn time_left(deadline: Option<std::time::Instant>) -> Option<std::time::Duration> {
+    deadline.map(|d| d.saturating_duration_since(std::time::Instant::now()))
+}
+
+/// `4:07` — minutes and seconds, for countdowns.
+pub fn fmt_countdown(left: std::time::Duration) -> String {
+    let s = left.as_secs();
+    format!("{}:{:02}", s / 60, s % 60)
+}
+
+/// The paste's deadline line: how long the agent has, or that it passed.
+fn deliver_within(left: std::time::Duration) -> String {
+    if left.is_zero() {
+        "Deadline: passed — the judge has stopped waiting; deliver anyway if it is quick.\n"
+            .to_string()
+    } else {
+        format!(
+            "Deadline: deliver within {} (min:sec) — the request closes then.\n",
+            fmt_countdown(left)
+        )
+    }
 }
 
 /// What the judge asked for, in full. The command's header carries the
@@ -2085,10 +2344,18 @@ fn parse_artifact_request(command: &str) -> Option<ArtifactRequest<'_>> {
         .unwrap_or("")
         .trim()
         .to_string();
+    let open_secs = command.lines().find_map(|l| {
+        l.strip_prefix("# Open for ")?
+            .strip_suffix("s more.")?
+            .trim()
+            .parse::<i64>()
+            .ok()
+    });
     Some(ArtifactRequest {
         judge,
         instruction: instruction.trim(),
         path,
+        open_secs,
     })
 }
 
@@ -2237,9 +2504,13 @@ pub fn chat_msg_paste_text(m: &ChatMsg<'_>) -> String {
             instruction,
             path,
             delivered,
+            deadline,
         } => {
-            let mut out =
-                format!("Artifact request from {judge}\nWhat to capture: {instruction}\n");
+            let mut out = format!("Artifact request from {judge}\n");
+            if !*delivered && let Some(left) = time_left(*deadline) {
+                out.push_str(&deliver_within(left));
+            }
+            out.push_str(&format!("What to capture: {instruction}\n"));
             if !path.is_empty() {
                 out.push_str(&format!(
                     "Where: save up to 5 files into {path} — the ololo CLI commits and pushes them, do NOT run git.\n"
@@ -2262,6 +2533,11 @@ pub fn chat_msg_paste_text(m: &ChatMsg<'_>) -> String {
 }
 
 pub fn probe_paste_text(p: &ProbeResultInfo) -> String {
+    probe_paste_text_with(p, None)
+}
+
+/// [`probe_paste_text`], with the request's live countdown when known.
+pub fn probe_paste_text_with(p: &ProbeResultInfo, left: Option<std::time::Duration>) -> String {
     use arena_core::protocol::ProbeOutcome;
     let mut task = if p.task_title.is_empty() {
         format!("Task #{}", p.task_ordinal)
@@ -2285,7 +2561,9 @@ pub fn probe_paste_text(p: &ProbeResultInfo) -> String {
     // where — and none of the shell that polls for it.
     if let Some(req) = parse_artifact_request(&p.command) {
         let mut out = format!("Artifact request from {} — {task}\n", req.judge);
-        if let Some(secs) = p.deadline_secs.filter(|s| *s > 0) {
+        if let Some(left) = left {
+            out.push_str(&deliver_within(left));
+        } else if let Some(secs) = p.deadline_secs.filter(|s| *s > 0) {
             out.push_str(&format!(
                 "Deliver within {} min.\n",
                 secs.div_euclid(60).max(1)

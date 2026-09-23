@@ -13,6 +13,7 @@ pub(crate) mod header;
 mod help;
 mod main;
 mod markdown;
+mod paste_picker;
 mod permission;
 mod probes;
 mod terminal_guard;
@@ -92,6 +93,7 @@ pub fn view(f: &mut Frame, app: &TuiApp) {
     // the permission question sits on top of them all.
     probes::render_probe_popup(f, app);
     help::render_help_popup(f, app);
+    paste_picker::render_paste_picker(f, app);
     permission::render_permission_popup(f, app);
 }
 

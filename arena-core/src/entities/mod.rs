@@ -16,6 +16,7 @@ pub mod llm_pool_members;
 pub mod llm_pools;
 pub mod llm_providers;
 pub mod llm_requests;
+pub mod personal_projects;
 pub mod player_memory;
 pub mod players;
 pub mod probes;

@@ -22,6 +22,7 @@ use arena_core::protocol::{PushState, PushStatus};
 use arena_core::snapshot_message::{self as message, Kind, Trailers};
 use thiserror::Error;
 
+pub mod files;
 pub mod pusher;
 
 pub use pusher::PusherHandle;
@@ -179,6 +180,14 @@ impl SnapshotRepo {
             push: Mutex::new(PushLedger::default()),
             pusher: Mutex::new(None),
         })
+    }
+}
+
+impl SnapshotRepo {
+    /// Whether this profile already keeps a snapshot repo for the session —
+    /// i.e. this is a reconnect, not the session's first start here.
+    pub fn exists(profile: &str, join_code: &str) -> bool {
+        git_dir_for(profile, join_code).is_ok_and(|dir| dir.exists())
     }
 }
 
@@ -1013,46 +1022,31 @@ pub(crate) fn stage_all(
     repo: &gix::Repository,
     worktree: &Path,
 ) -> Result<gix::ObjectId, SnapshotError> {
-    let mut ignore_search = gix::ignore::Search::default();
-    let gitignore_path = worktree.join(".gitignore");
-    if gitignore_path.is_file() {
-        let bytes = std::fs::read(&gitignore_path)?;
-        ignore_search.add_patterns_buffer(
-            &bytes,
-            gitignore_path.clone(),
-            Some(worktree),
-            gix::ignore::search::Ignore::default(),
-        );
-    }
-
+    let listing = files::list(worktree)?;
     let empty_tree = repo.empty_tree();
     let mut editor = empty_tree.edit()?;
 
-    let mut rel_paths: Vec<PathBuf> = Vec::new();
-    collect_files(worktree, worktree, &mut rel_paths)?;
-    rel_paths.sort();
-
-    for rel in &rel_paths {
-        let rel_str = path_to_forward_slashes(rel);
-        let rel_bstr: &gix::bstr::BStr = rel_str.as_bytes().into();
-        if let Some(m) = ignore_search.pattern_matching_relative_path(
-            rel_bstr,
-            Some(false),
-            gix::glob::pattern::Case::Sensitive,
-        ) && !m.pattern.is_negative()
-        {
+    for rel in &listing.files {
+        let abs = worktree.join(rel);
+        // Follows symlinks: a link to a file ships its content; a link to a
+        // directory, a dangling one, or a file gone since the listing is
+        // left out rather than failing the whole commit.
+        let meta = match std::fs::metadata(&abs) {
+            Ok(meta) if meta.is_file() => meta,
+            _ => continue,
+        };
+        if meta.len() > MAX_FILE_BYTES {
+            warn_once(&abs, "larger than the snapshot's per-file cap; left out");
             continue;
         }
-
-        let abs = worktree.join(rel);
-        let bytes = std::fs::read(&abs)?;
-        let blob_id = repo.write_blob(&bytes)?.detach();
+        let Some(blob_id) = blob_of(repo, &abs, &meta)? else {
+            continue;
+        };
 
         #[cfg(unix)]
         let kind = {
             use std::os::unix::fs::PermissionsExt;
-            let mode = std::fs::metadata(&abs)?.permissions().mode();
-            if mode & 0o111 != 0 {
+            if meta.permissions().mode() & 0o111 != 0 {
                 gix::object::tree::EntryKind::BlobExecutable
             } else {
                 gix::object::tree::EntryKind::Blob
@@ -1061,55 +1055,97 @@ pub(crate) fn stage_all(
         #[cfg(not(unix))]
         let kind = gix::object::tree::EntryKind::Blob;
 
-        editor.upsert(rel_str.as_str(), kind, blob_id)?;
+        editor.upsert(path_to_forward_slashes(rel).as_str(), kind, blob_id)?;
     }
 
     let tree_id = editor.write()?.detach();
     Ok(tree_id)
 }
 
-/// Directory names never worth snapshotting, pruned during the walk.
-///
-/// The snapshot repo is both version control AND the artifact channel —
-/// judges read the committed code, screenshots/screencasts ride along under
-/// `.ololo/`, and even a `run.log` is wanted context. So this list is
-/// deliberately narrow: only regenerable dependency stores and build output
-/// (`npm install` / `cargo build` recreate them from the committed
-/// manifests), which would otherwise balloon every push — a single
-/// `node_modules` is tens of thousands of files, a Rust `target/` hundreds
-/// of megabytes, enough to blow the push time cap and lose the snapshot the
-/// judges were meant to see. Pruning at walk time also skips descending
-/// into those trees at all. Anything else a player writes is kept; a
-/// workspace `.gitignore` remains their tool for their own exclusions.
-///
-/// The health scan skips the same list (`ololo_health::PRUNED_DIRS` is the
-/// one source), so what is never committed is never scored either.
-const PRUNED_DIRS: &[&str] = ololo_health::PRUNED_DIRS;
+/// A file bigger than this is not code anyone reviews — a video, a dump, a
+/// model — and would blow the push on its own.
+const MAX_FILE_BYTES: u64 = 50 * 1024 * 1024;
 
-fn collect_files(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        let name = entry.file_name();
-        if name == ".git" {
-            continue;
-        }
-        let meta = entry.file_type()?;
-        if meta.is_dir() {
-            if PRUNED_DIRS.iter().any(|d| name == *d) {
-                continue;
-            }
-            collect_files(root, &path, out)?;
-        } else if meta.is_file() || meta.is_symlink() {
-            if name == ".DS_Store" {
-                continue;
-            }
-            let rel = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
-            out.push(rel);
+/// A file hashed since its last change is not read again: the TUI re-stages
+/// the whole tree every few seconds, and a real repository is too big to
+/// re-read that often. Keyed by snapshot repo and path, checked against
+/// size and mtime; a file modified in the last couple of seconds is always
+/// re-read, since a second write within the same mtime tick would
+/// otherwise go unseen.
+struct Stamp {
+    len: u64,
+    mtime: std::time::SystemTime,
+    blob: gix::ObjectId,
+}
+
+type StampKey = (PathBuf, PathBuf);
+
+static STAMPS: Mutex<Option<std::collections::HashMap<StampKey, Stamp>>> = Mutex::new(None);
+
+const RACY_WINDOW: std::time::Duration = std::time::Duration::from_secs(2);
+
+fn blob_of(
+    repo: &gix::Repository,
+    abs: &Path,
+    meta: &std::fs::Metadata,
+) -> Result<Option<gix::ObjectId>, SnapshotError> {
+    let key = (repo.git_dir().to_path_buf(), abs.to_path_buf());
+    let mtime = meta.modified().ok();
+    let settled = mtime.filter(|m| {
+        std::time::SystemTime::now()
+            .duration_since(*m)
+            .is_ok_and(|age| age > RACY_WINDOW)
+    });
+    if let Some(mtime) = settled {
+        let stamps = STAMPS.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(stamp) = stamps.as_ref().and_then(|m| m.get(&key))
+            && stamp.len == meta.len()
+            && stamp.mtime == mtime
+        {
+            return Ok(Some(stamp.blob));
         }
     }
-    Ok(())
+    let bytes = match std::fs::read(abs) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            warn_once(abs, &format!("unreadable ({e}); left out"));
+            return Ok(None);
+        }
+    };
+    let blob = repo.write_blob(&bytes)?.detach();
+    if let Some(mtime) = settled {
+        STAMPS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get_or_insert_with(Default::default)
+            .insert(
+                key,
+                Stamp {
+                    len: meta.len(),
+                    mtime,
+                    blob,
+                },
+            );
+    }
+    Ok(Some(blob))
 }
+
+/// Log a file the snapshot leaves out, once per path per process — the
+/// tree is re-staged every few seconds.
+fn warn_once(path: &Path, why: &str) {
+    static WARNED: Mutex<Option<HashSet<PathBuf>>> = Mutex::new(None);
+    let mut warned = WARNED.lock().unwrap_or_else(|e| e.into_inner());
+    if warned
+        .get_or_insert_with(HashSet::new)
+        .insert(path.to_path_buf())
+    {
+        tracing::warn!(path = %path.display(), "snapshot: {why}");
+    }
+}
+
+/// Directory names never snapshotted: dependency stores, build output and
+/// tool caches (see `files` for the whole rule).
+const PRUNED_DIRS: &[&str] = ololo_health::PRUNED_DIRS;
 
 fn path_to_forward_slashes(p: &Path) -> String {
     p.components()

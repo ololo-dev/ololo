@@ -17,6 +17,10 @@ const TOOL_TIMEOUT: Duration = Duration::from_secs(10);
 const READ_FILE_CAP: usize = 32 * 1024;
 const DIFF_CAP: usize = 64 * 1024;
 const TRUNC_MARKER: &str = "\n...[truncated]...\n";
+/// Entries one `list_files` call returns. A real repository has thousands
+/// of files; the whole listing would crowd everything else out of the
+/// judge's context, so it is cut here and narrowed with `path`.
+pub const LIST_FILES_CAP: usize = 1_000;
 
 /// Repo paths a judge's git tools must not open.
 ///
@@ -186,6 +190,35 @@ pub async fn list_files(
         Ok(entries)
     })
     .await
+}
+
+/// A listing as the judge gets it: only the files under `under` (a
+/// directory, trailing slash optional), cut at [`LIST_FILES_CAP`] with a
+/// last entry naming what was left out.
+pub fn cap_listing(entries: Vec<FileEntry>, under: Option<&str>) -> Vec<FileEntry> {
+    let prefix = under
+        .map(|p| p.trim().trim_start_matches("./").trim_matches('/'))
+        .filter(|p| !p.is_empty() && *p != ".")
+        .map(|p| format!("{p}/"));
+    let mut kept: Vec<FileEntry> = match &prefix {
+        Some(prefix) => entries
+            .into_iter()
+            .filter(|e| e.path.starts_with(prefix.as_str()))
+            .collect(),
+        None => entries,
+    };
+    if kept.len() > LIST_FILES_CAP {
+        let left_out = kept.len() - LIST_FILES_CAP;
+        kept.truncate(LIST_FILES_CAP);
+        kept.push(FileEntry {
+            path: format!(
+                "...[{left_out} more files not listed — call list_files with `path` set to a \
+                 directory to list it]"
+            ),
+            size_bytes: 0,
+        });
+    }
+    kept
 }
 
 /// `read_file(repo_dir, path, ref)` — `git cat-file blob <ref>:<path>`.
@@ -610,13 +643,17 @@ pub fn tool_defs(scope: &ToolScope) -> Vec<ToolDef> {
         },
         ToolDef {
             name: "list_files".to_string(),
-            description:
-                "List all files in the player's repo at a given ref. Returns [{path, size_bytes}]."
-                    .to_string(),
+            description: format!(
+                "List the files in the player's repo at a given ref, optionally only under a \
+                 directory. Returns [{{path, size_bytes}}], at most {LIST_FILES_CAP} entries — \
+                 on a larger tree the last entry says how many were left out; list a directory \
+                 with `path` to see them."
+            ),
             params: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "ref": {"type": "string", "description": "Git ref (commit SHA or branch). Defaults to the task commit."}
+                    "ref": {"type": "string", "description": "Git ref (commit SHA or branch). Defaults to the task commit."},
+                    "path": {"type": "string", "description": "Only files under this directory, e.g. \"src/api\"."}
                 }
             }),
             scope: scope.clone(),
@@ -706,8 +743,10 @@ pub async fn dispatch_tool(
         }),
         "list_files" => {
             let r#ref = args.get("ref").and_then(|v| v.as_str());
+            let under = args.get("path").and_then(|v| v.as_str());
             match list_files(repo_dir, r#ref, task_commit_sha, scope).await {
-                Ok(v) => serde_json::to_string(&v).unwrap_or_else(|_| "[]".to_string()),
+                Ok(v) => serde_json::to_string(&cap_listing(v, under))
+                    .unwrap_or_else(|_| "[]".to_string()),
                 Err(e) => e,
             }
         }

@@ -354,6 +354,15 @@ pub async fn run_similarity_checks(
     let Ok(Some(session)) = sessions::Entity::find_by_id(session_id).one(db).await else {
         return;
     };
+    // A personal project has one player working in their own repository:
+    // there is no one to copy from, and its corpus would be the same
+    // codebase played before.
+    if arena_core::personal::is_personal_project(db, session.project_id_fk)
+        .await
+        .unwrap_or(false)
+    {
+        return;
+    }
     let Some(repos_base) = arena_core::git_store::repos_base_dir() else {
         return;
     };

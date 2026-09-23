@@ -18,6 +18,7 @@ export * from "./api/types";
 export * from "./api/accounts";
 export * from "./api/sessions";
 export * from "./api/projects";
+export * from "./api/personal";
 export * from "./api/users";
 export * from "./api/email";
 export * from "./api/judges";

@@ -136,6 +136,16 @@ pub async fn patch_one(
         return Err(ProjectError::ProjectArchived);
     }
 
+    // A personal project is rebuilt from its owner's words by its own
+    // editor (`/api/personal-projects/:id`); here only the archive flag of
+    // one may move — anything else would leave the tasks describing a
+    // project that no longer exists, or publish someone's private work.
+    if !req.touches_only_archive()
+        && arena_core::personal::is_personal_project(&state.db, row.id).await?
+    {
+        return Err(ProjectError::PersonalProject);
+    }
+
     let new_name = match &req.name {
         Some(n) => Some(validate_name(n)?),
         None => None,
@@ -186,7 +196,9 @@ pub async fn patch_one(
             .count(&state.db)
             .await?;
         let range = compute_points_range(&state.db, row.id).await?;
-        return Ok(Json(to_summary(row, false, tc as i64, range)).into_response());
+        let mut summary = to_summary(row, false, tc as i64, range);
+        attach_kinds(&state.db, std::slice::from_mut(&mut summary)).await?;
+        return Ok(Json(summary).into_response());
     }
 
     let now = Utc::now();
@@ -310,7 +322,9 @@ pub async fn patch_one(
         .count(&state.db)
         .await?;
     let range = compute_points_range(&state.db, updated.id).await?;
-    Ok(Json(to_summary(updated, false, tc as i64, range)).into_response())
+    let mut summary = to_summary(updated, false, tc as i64, range);
+    attach_kinds(&state.db, std::slice::from_mut(&mut summary)).await?;
+    Ok(Json(summary).into_response())
 }
 
 /// `DELETE /api/projects/:id`

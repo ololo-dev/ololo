@@ -81,6 +81,12 @@ pub enum Commands {
         /// an already-populated folder is never overwritten either way.
         #[arg(long, default_value_t = false)]
         fresh: bool,
+        /// Confirm the upload of this folder without asking. A personal
+        /// project — your own work, played in your own repository — shows
+        /// what it will upload and asks first; without a terminal to ask
+        /// on, it needs this flag.
+        #[arg(long, short = 'y', default_value_t = false)]
+        yes: bool,
     },
 
     /// Join a session by its join code
@@ -119,6 +125,12 @@ pub enum Commands {
         /// an already-populated folder is never overwritten either way.
         #[arg(long, default_value_t = false)]
         fresh: bool,
+        /// Confirm the upload of this folder without asking. A personal
+        /// project — your own work, played in your own repository — shows
+        /// what it will upload and asks first; without a terminal to ask
+        /// on, it needs this flag.
+        #[arg(long, short = 'y', default_value_t = false)]
+        yes: bool,
     },
 
     /// Show the active profile's server and token fingerprint

@@ -106,7 +106,9 @@ export type HealthCheckStatus =
   | "timeout"
   | "commit_missing"
   | "unverified";
-export type HealthCheckpointKind = "probe" | "task_final";
+/** `baseline` is the tree a personal project's session started from — the
+ *  level its tasks' health is measured against. */
+export type HealthCheckpointKind = "probe" | "task_final" | "baseline";
 
 export interface HealthThresholds {
   green_min: number;

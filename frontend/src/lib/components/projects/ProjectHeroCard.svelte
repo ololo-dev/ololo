@@ -74,7 +74,9 @@
         {/if}
         {#if !project.archived_at}
           <a
-            href="/projects/{project.id}/edit"
+            href={project.kind === "personal"
+              ? `/projects/${project.id}/personal`
+              : `/projects/${project.id}/edit`}
             data-testid="edit-project-btn"
             title="Edit project"
             class="flex h-[32px] w-[32px] items-center justify-center rounded-full bg-white/20 text-white transition-opacity hover:bg-white/35"
@@ -133,7 +135,7 @@
         <span
           class="rounded-[4px] bg-white/20 px-[12px] py-[4px] text-[14px] font-semibold"
         >
-          {project.public ? "Public" : "Private"}
+          {project.kind === "personal" ? "Your project · private" : project.public ? "Public" : "Private"}
         </span>
         {#if project.archived_at}
           <span

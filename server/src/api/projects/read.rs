@@ -192,7 +192,7 @@ pub async fn get_list(
         }
     }
 
-    let projects_out: Vec<ProjectSummary> = rows
+    let mut projects_out: Vec<ProjectSummary> = rows
         .into_iter()
         .map(|r| {
             let tc = *task_counts.get(&r.id).unwrap_or(&0);
@@ -217,6 +217,7 @@ pub async fn get_list(
             summary
         })
         .collect();
+    attach_kinds(&state.db, &mut projects_out).await?;
     Ok(Json(ProjectListResp {
         projects: projects_out,
     })
@@ -261,6 +262,7 @@ pub async fn get_one(
     let mut summary = to_summary(row, active, tc as i64, range);
     summary.judge_review_count = Some(jc);
     attach_campaign_context(&state.db, &mut summary).await?;
+    attach_kinds(&state.db, std::slice::from_mut(&mut summary)).await?;
     Ok(Json(summary).into_response())
 }
 
@@ -274,11 +276,40 @@ pub async fn get_by_slug(
     optional_claims: Option<AccessClaims>,
     Path(slug): Path<String>,
 ) -> Result<Response, ProjectError> {
-    let row = projects::Entity::find()
-        .filter(projects::Column::Slug.eq(&slug))
-        .one(&state.db)
-        .await?
-        .ok_or(ProjectError::NotFound)?;
+    // Slugs are unique per owner and among public projects, so one slug can
+    // name several rows. The caller's own project wins — a personal project
+    // is started by its slug (`ololo start <slug>`) and must not be shadowed
+    // by someone else's — then the public one, then any (which the
+    // visibility check below settles).
+    let caller_id = optional_claims
+        .as_ref()
+        .and_then(|claims| parse_user_id(claims).ok());
+    let own = match caller_id {
+        Some(uid) => {
+            projects::Entity::find()
+                .filter(projects::Column::OwnerUserIdFk.eq(uid))
+                .filter(projects::Column::Slug.eq(&slug))
+                .one(&state.db)
+                .await?
+        }
+        None => None,
+    };
+    let row = match own {
+        Some(row) => row,
+        None => match projects::Entity::find()
+            .filter(projects::Column::Slug.eq(&slug))
+            .filter(projects::Column::Public.eq(true))
+            .one(&state.db)
+            .await?
+        {
+            Some(row) => row,
+            None => projects::Entity::find()
+                .filter(projects::Column::Slug.eq(&slug))
+                .one(&state.db)
+                .await?
+                .ok_or(ProjectError::NotFound)?,
+        },
+    };
 
     if !row.public {
         match optional_claims.as_ref() {
@@ -303,6 +334,7 @@ pub async fn get_by_slug(
     let mut summary = to_summary(row, active, tc as i64, range);
     summary.judge_review_count = Some(jc);
     attach_campaign_context(&state.db, &mut summary).await?;
+    attach_kinds(&state.db, std::slice::from_mut(&mut summary)).await?;
     Ok(Json(summary).into_response())
 }
 
@@ -335,6 +367,7 @@ pub async fn get_by_user_slug(
     let mut summary = to_summary(row, active, tc as i64, range);
     summary.judge_review_count = Some(jc);
     attach_campaign_context(&state.db, &mut summary).await?;
+    attach_kinds(&state.db, std::slice::from_mut(&mut summary)).await?;
     Ok(Json(summary).into_response())
 }
 
@@ -946,7 +979,7 @@ pub async fn get_categories(
 /// Estimated judge reviews for one project: total judges attached across all
 /// its tasks. Each runs once per task per player and counts toward the
 /// monthly judge-run quota, so the number is the review cost of a full run.
-async fn judge_review_count(
+pub(crate) async fn judge_review_count(
     db: &sea_orm::DatabaseConnection,
     project_id: Uuid,
 ) -> Result<i64, sea_orm::DbErr> {

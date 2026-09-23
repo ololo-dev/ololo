@@ -1053,3 +1053,66 @@ async fn the_pusher_coalesces_requests_and_reports_the_outcome() {
     // The handle is attached: request_push goes through the pusher.
     assert!(repo.lock().unwrap().pusher().is_some());
 }
+
+/// A real repository has symlinks — to directories, to nowhere. They used
+/// to fail the whole commit (and with it every snapshot of the session);
+/// now a link to a file ships its content and the rest are left out.
+#[cfg(unix)]
+#[test]
+fn stage_all_survives_directory_and_dangling_symlinks() {
+    let _g = HOME_LOCK.lock().unwrap();
+    let home = tempfile::tempdir().expect("home tempdir");
+    let worktree = tempfile::tempdir().expect("worktree tempdir");
+    let _h = HomeGuard::set(home.path().to_str().unwrap());
+    let snapshot =
+        SnapshotRepo::new("default", "LINKS1", worktree.path(), None, None).expect("new succeeds");
+
+    let w = worktree.path();
+    std::fs::create_dir_all(w.join("docs")).unwrap();
+    std::fs::write(w.join("docs/guide.md"), "guide").unwrap();
+    std::os::unix::fs::symlink(w.join("docs"), w.join("docs-link")).unwrap();
+    std::os::unix::fs::symlink(w.join("gone.txt"), w.join("dangling")).unwrap();
+    std::os::unix::fs::symlink(w.join("docs/guide.md"), w.join("guide-link.md")).unwrap();
+
+    let tree_id = snapshot
+        .stage_all()
+        .expect("symlinks do not fail the commit");
+    let repo = &snapshot.repo;
+    assert!(find_path_in_tree(repo, tree_id, "docs/guide.md").is_some());
+    assert!(find_path_in_tree(repo, tree_id, "guide-link.md").is_some());
+    assert!(find_path_in_tree(repo, tree_id, "dangling").is_none());
+    assert!(find_path_in_tree(repo, tree_id, "docs-link").is_none());
+}
+
+/// The stat cache must never hide a change: a file rewritten with another
+/// size is re-read even when its mtime says it is old.
+#[test]
+fn stage_all_rereads_a_changed_file_behind_the_stat_cache() {
+    let _g = HOME_LOCK.lock().unwrap();
+    let home = tempfile::tempdir().expect("home tempdir");
+    let worktree = tempfile::tempdir().expect("worktree tempdir");
+    let _h = HomeGuard::set(home.path().to_str().unwrap());
+    let snapshot =
+        SnapshotRepo::new("default", "STAMP1", worktree.path(), None, None).expect("new succeeds");
+
+    let path = worktree.path().join("app.js");
+    let an_hour_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    let write_old = |body: &str| {
+        std::fs::write(&path, body).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(an_hour_ago)
+            .unwrap();
+    };
+    write_old("v1");
+    let first = snapshot.stage_all().unwrap();
+    // Unchanged: the cached blob, the same tree.
+    assert_eq!(snapshot.stage_all().unwrap(), first);
+    write_old("version two");
+    let second = snapshot.stage_all().unwrap();
+    assert_ne!(second, first);
+    let blob = find_path_in_tree(&snapshot.repo, second, "app.js").expect("app.js");
+    assert_eq!(read_blob(&snapshot.repo, blob), b"version two");
+}

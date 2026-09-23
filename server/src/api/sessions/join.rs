@@ -1,6 +1,6 @@
 use crate::auth::jwt::AccessClaims;
 use crate::state::AppState;
-use arena_core::entities::{players, sessions, users};
+use arena_core::entities::{players, projects, sessions, users};
 use arena_core::protocol::ZmqEvent;
 use arena_core::session_status::SessionStatus;
 use axum::Json;
@@ -50,6 +50,18 @@ pub async fn post_join(
     // FR-JC-006: reject terminal sessions.
     if session.status == SessionStatus::Finished || session.status == SessionStatus::Cancelled {
         return Err(SessionError::SessionClosed);
+    }
+
+    // A personal project is its owner's own work: nobody else plays it,
+    // whoever the join code reached.
+    if arena_core::personal::is_personal_project(&state.db, session.project_id_fk).await? {
+        let owner = projects::Entity::find_by_id(session.project_id_fk)
+            .one(&state.db)
+            .await?
+            .map(|p| p.owner_user_id_fk);
+        if owner != Some(caller_id) {
+            return Err(SessionError::PersonalProject);
+        }
     }
 
     // Idempotent re-join: if the caller already has a player row (including when

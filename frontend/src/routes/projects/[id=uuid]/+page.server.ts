@@ -18,8 +18,9 @@ export const load: PageServerLoad = async ({ params, fetch, url, locals }) => {
   const message = url.searchParams.get("message");
   try {
     const project = await getProject(params.id, { fetch });
-    // Redirect to the canonical slug URL when a slug is set.
-    if (project.slug) {
+    // Redirect to the canonical slug URL when a slug is set. A personal
+    // project keeps its id URL: its slug is its owner's, not the site's.
+    if (project.slug && project.kind !== "personal") {
       throw redirect(301, `/projects/${project.slug}`);
     }
     // No slug yet — render the project detail page directly.

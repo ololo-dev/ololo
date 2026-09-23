@@ -179,6 +179,22 @@ pub fn build_router(state: AppState) -> Router {
             "/api/projects/categories",
             get(api::projects::get_categories),
         )
+        .route(
+            "/api/personal-projects",
+            post(api::personal_projects::post_create),
+        )
+        .route(
+            "/api/personal-projects/options",
+            get(api::personal_projects::get_options),
+        )
+        .route(
+            "/api/personal-projects/suggest-tasks",
+            post(api::personal_projects::suggest_tasks),
+        )
+        .route(
+            "/api/personal-projects/:project_id",
+            get(api::personal_projects::get_one).put(api::personal_projects::put_one),
+        )
         .route("/api/categories", get(api::categories::get_list))
         .route("/api/admin/categories", post(api::categories::post_create))
         .route(

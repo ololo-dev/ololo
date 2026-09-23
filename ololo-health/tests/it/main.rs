@@ -371,6 +371,29 @@ fn refuses_trees_over_the_caps() {
 }
 
 #[test]
+fn only_code_the_scan_reads_counts_towards_the_caps() {
+    // A real repository is mostly not code: images, fixtures, docs, lock
+    // files. None of that is scanned, so none of it may refuse the scan.
+    let dir = tempfile::tempdir().unwrap();
+    let mut files: Vec<(String, &str)> = vec![("src/a.js".into(), DUP), ("src/b.js".into(), DUP)];
+    for i in 0..40 {
+        files.push((format!("assets/pic-{i}.png"), "not really a png"));
+    }
+    let refs: Vec<(&str, &str)> = files.iter().map(|(p, c)| (p.as_str(), *c)).collect();
+    write_tree(dir.path(), &refs);
+    let big = "x".repeat(4096);
+    std::fs::write(dir.path().join("src/bundle.min.js"), &big).unwrap();
+
+    let cfg = HealthConfig {
+        max_files: 2,
+        max_file_bytes: 1024,
+        ..HealthConfig::default()
+    };
+    let result = analyze(dir.path(), &cfg).expect("two code files fit a cap of two");
+    assert_eq!(result.metrics.files, 2);
+}
+
+#[test]
 fn an_empty_tree_has_no_score() {
     let dir = tempfile::tempdir().unwrap();
     let result = analyze(dir.path(), &HealthConfig::default()).unwrap();

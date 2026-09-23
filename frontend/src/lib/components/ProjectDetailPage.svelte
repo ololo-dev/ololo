@@ -17,6 +17,7 @@
   import ProjectTaskList from "$lib/components/projects/ProjectTaskList.svelte";
   import CampaignPartsList from "$lib/components/projects/CampaignPartsList.svelte";
   import CampaignPartNav from "$lib/components/projects/CampaignPartNav.svelte";
+  import CodeBlock from "$lib/components/CodeBlock.svelte";
 
   interface Props {
     project: Project;
@@ -48,6 +49,9 @@
   }: Props = $props();
 
   const isCampaign = $derived((project.part_count ?? 0) > 0);
+  // A user's own work: private, played by its owner alone, off every
+  // standing — so no Top Players, and a first visit says how to start it.
+  const isPersonal = $derived(project.kind === "personal");
   // Where a campaign wants the viewer to go next: the part they are in the
   // middle of, else the first one open to them. Null when the ladder is
   // finished — or when this is not a campaign at all.
@@ -80,6 +84,7 @@
   // open on Top Players.
   function defaultTab(): Tab {
     if ((project.part_count ?? 0) > 0) return "parts";
+    if (project.kind === "personal") return taskPreview.length > 0 ? "tasks" : "sessions";
     return taskPreview.length > 0 ? "tasks" : "players";
   }
 
@@ -256,6 +261,22 @@
       />
     {/if}
 
+    {#if isPersonal && (message === "created" || message === "updated") && project.slug}
+      <div
+        class="mt-[24px] rounded-[8px] bg-white px-6 py-5 text-[15px] text-brand-text"
+        data-testid="personal-ready"
+      >
+        <p class="mb-3 font-semibold">
+          {message === "created" ? "Your project is ready." : "Your project is updated."}
+          Open a terminal in your repository — the folder your agent works in — and run:
+        </p>
+        <CodeBlock code="ololo start {project.slug}" />
+        <p class="mt-3 text-sm text-brand-muted">
+          It shows what it will upload and asks before the session starts.
+        </p>
+      </div>
+    {/if}
+
     <!-- Archived message banner -->
     {#if message === "archived"}
       <div
@@ -310,22 +331,24 @@
             {/if}
           </button>
         {/if}
-        <button
-          type="button"
-          role="tab"
-          id="tab-players"
-          aria-controls="panel-players"
-          aria-selected={activeTab === "players"}
-          onclick={() => (chosenTab = "players")}
-          class="relative -mb-px px-[4px] pb-[12px] font-heading text-[20px] font-bold transition-colors
-            {activeTab === 'players' ? 'text-brand-text' : 'text-brand-muted hover:text-brand-text'}"
-        >
-          Top Players
-          <span class="text-brand-muted">({topPlayers.players.length})</span>
-          {#if activeTab === "players"}
-            <span class="absolute inset-x-0 bottom-0 h-[3px] rounded-t bg-brand-blue"></span>
-          {/if}
-        </button>
+        {#if !isPersonal}
+          <button
+            type="button"
+            role="tab"
+            id="tab-players"
+            aria-controls="panel-players"
+            aria-selected={activeTab === "players"}
+            onclick={() => (chosenTab = "players")}
+            class="relative -mb-px px-[4px] pb-[12px] font-heading text-[20px] font-bold transition-colors
+              {activeTab === 'players' ? 'text-brand-text' : 'text-brand-muted hover:text-brand-text'}"
+          >
+            Top Players
+            <span class="text-brand-muted">({topPlayers.players.length})</span>
+            {#if activeTab === "players"}
+              <span class="absolute inset-x-0 bottom-0 h-[3px] rounded-t bg-brand-blue"></span>
+            {/if}
+          </button>
+        {/if}
         <!-- No Sessions tab on a campaign: `ololo start <campaign>` is
              refused, so the list could only ever be an empty one. -->
         {#if !isCampaign}
@@ -370,7 +393,7 @@
           {wsClient}
         />
       </div>
-    {:else}
+    {:else if !isPersonal}
       <div id="panel-players" role="tabpanel" aria-labelledby="tab-players">
         <ProjectTopPlayers
           players={topPlayers.players}
@@ -384,5 +407,9 @@
 </div>
 
 <!-- Start session popup -->
-<StartSessionPopup slug={startSlug ?? project.slug ?? ""} bind:open={showStartPopup} />
+<StartSessionPopup
+  slug={startSlug ?? project.slug ?? ""}
+  personal={isPersonal}
+  bind:open={showStartPopup}
+/>
 

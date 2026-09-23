@@ -1,4 +1,5 @@
 use crate::auth::AuthError;
+use crate::auth::jwt::AccessClaims;
 use crate::state::AppState;
 use arena_core::entities::{
     judge_results, players, projects, sessions, task_agent_stats, task_results, users,
@@ -58,6 +59,9 @@ pub struct PublicSessionEntry {
     pub agent: Option<String>,
     /// Models observed in client-reported stats, if any.
     pub models: Vec<String>,
+    /// A session of the user's own personal project. Only the user sees
+    /// these; everyone else's listing leaves them out.
+    pub personal: bool,
 }
 
 #[derive(Serialize)]
@@ -96,6 +100,7 @@ pub async fn get_by_username(
 #[tracing::instrument(level = "info", skip_all, fields(username = %username))]
 pub async fn get_sessions_by_username(
     State(state): State<AppState>,
+    optional_claims: Option<AccessClaims>,
     Path(username): Path<String>,
     Query(params): Query<SessionsQuery>,
 ) -> Result<Json<PublicSessionsResponse>, AuthError> {
@@ -108,13 +113,28 @@ pub async fn get_sessions_by_username(
     let page = params.page.unwrap_or(1).max(1);
     let per_page = params.per_page.unwrap_or(20).clamp(1, 50);
 
-    let total = players::Entity::find()
-        .filter(players::Column::UserIdFk.eq(user.id))
-        .count(&state.db)
-        .await?;
+    // Personal sessions are the user's own work on their own code — their
+    // names alone can say more than the user means to publish. Listed for
+    // the user, left out for every other viewer.
+    let own_profile = optional_claims
+        .as_ref()
+        .and_then(|claims| claims.user_id().ok())
+        == Some(user.id);
+    let memberships = || {
+        let q = players::Entity::find().filter(players::Column::UserIdFk.eq(user.id));
+        if own_profile {
+            q
+        } else {
+            q.filter(
+                players::Column::SessionIdFk
+                    .not_in_subquery(arena_core::personal::personal_session_ids_query()),
+            )
+        }
+    };
 
-    let members = players::Entity::find()
-        .filter(players::Column::UserIdFk.eq(user.id))
+    let total = memberships().count(&state.db).await?;
+
+    let members = memberships()
         .order_by_desc(players::Column::JoinedAt)
         .paginate(&state.db, per_page)
         .fetch_page(page - 1)
@@ -191,6 +211,19 @@ pub async fn get_sessions_by_username(
         }
     }
 
+    let personal_projects: std::collections::HashSet<Uuid> = if own_profile {
+        let project_ids: Vec<Uuid> = sessions::Entity::find()
+            .filter(sessions::Column::Id.is_in(members.iter().map(|m| m.session_id_fk)))
+            .all(&state.db)
+            .await?
+            .into_iter()
+            .map(|s| s.project_id_fk)
+            .collect();
+        arena_core::personal::personal_project_ids(&state.db, &project_ids).await?
+    } else {
+        std::collections::HashSet::new()
+    };
+
     let mut session_entries = Vec::with_capacity(members.len());
     for member in members {
         if let Some(session) = sessions::Entity::find_by_id(member.session_id_fk)
@@ -230,6 +263,7 @@ pub async fn get_sessions_by_username(
                     .get(&member.id)
                     .map(|(_, m)| m.iter().cloned().collect())
                     .unwrap_or_default(),
+                personal: personal_projects.contains(&session.project_id_fk),
             });
         }
     }

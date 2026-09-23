@@ -9,6 +9,7 @@ pub mod join_code;
 pub mod judging;
 pub mod llm;
 pub mod memory;
+pub mod personal;
 pub mod probe_engine;
 pub mod protocol;
 pub mod quota;

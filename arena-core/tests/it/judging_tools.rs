@@ -327,3 +327,32 @@ fn an_undeclared_or_unreadable_blind_spot_hides_nothing() {
     assert!(ToolScope::from_json(Some(r#"[".ololo/"]"#)).hides(".ololo/tmp/x"));
     assert!(!ToolScope::from_json(Some(r#"[".ololo/"]"#)).hides(".ololorc"));
 }
+
+#[test]
+fn a_listing_is_narrowed_to_a_directory_and_cut_at_the_cap() {
+    use arena_core::judging::tools::{FileEntry, LIST_FILES_CAP, cap_listing};
+    let entry = |path: String| FileEntry {
+        path,
+        size_bytes: 1,
+    };
+    let mut tree: Vec<FileEntry> = (0..LIST_FILES_CAP + 5)
+        .map(|i| entry(format!("assets/{i}.png")))
+        .collect();
+    tree.push(entry("src/api/a.rs".into()));
+    tree.push(entry("src/api/b.rs".into()));
+    tree.push(entry("src/apiary.rs".into()));
+
+    let all = cap_listing(tree.clone(), None);
+    assert_eq!(all.len(), LIST_FILES_CAP + 1);
+    let last = &all.last().unwrap().path;
+    assert!(last.contains("8 more files not listed"), "{last}");
+
+    for under in ["src/api", "./src/api/", "src/api/"] {
+        let api: Vec<String> = cap_listing(tree.clone(), Some(under))
+            .into_iter()
+            .map(|e| e.path)
+            .collect();
+        assert_eq!(api, ["src/api/a.rs", "src/api/b.rs"], "{under}");
+    }
+    assert_eq!(cap_listing(tree.clone(), Some(".")).len(), all.len());
+}

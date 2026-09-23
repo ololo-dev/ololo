@@ -470,12 +470,20 @@
             ctx.lineWidth = 1 * dpr;
             ctx.strokeStyle = color;
             ctx.stroke();
+          } else if (cp.kind === "baseline") {
+            // The code the session started from: a square frame.
+            const half = r + 2.5 * dpr;
+            ctx.beginPath();
+            ctx.rect(x - half, y - half, half * 2, half * 2);
+            ctx.lineWidth = 1 * dpr;
+            ctx.strokeStyle = color;
+            ctx.stroke();
           }
           if (hookShowHealthLabels) {
             pill(
               x,
               y,
-              r + (cp.kind === "task_final" ? 2.5 * dpr : 0),
+              r + (cp.kind === "probe" ? 0 : 2.5 * dpr),
               { kind: "health", grade: gradeOf(cp), score: cp.score ?? null, color: level },
               true,
             );
@@ -631,7 +639,9 @@
       const what =
         cp?.kind === "task_final"
           ? "final tree"
-          : cp?.kind === "probe"
+          : cp?.kind === "baseline"
+            ? "the code you started from"
+            : cp?.kind === "probe"
             ? `check #${cp.probe_seq ?? "?"}`
             : judgeDelta(meta) !== null
               ? "judge verdict"

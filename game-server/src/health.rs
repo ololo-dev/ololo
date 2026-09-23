@@ -89,6 +89,19 @@ pub async fn on_report(
         tracing::debug!(session_id = %session_id, player_id = %player_id, "health report ignored: health is off");
         return;
     }
+    // Personal work starts from code that predates the session: score that
+    // tree once, early, so the chart shows where the player began and the
+    // first task's bonus has something to be measured against.
+    if arena_core::personal::is_personal_session(&state.db, session_id)
+        .await
+        .unwrap_or(false)
+    {
+        let baseline_state = state.clone();
+        let baseline_code = join_code.clone();
+        tokio::spawn(async move {
+            baseline(&baseline_state, session_id, player_id, &baseline_code).await;
+        });
+    }
     let now = Utc::now();
     let commit_sha = report
         .commit
@@ -393,30 +406,44 @@ pub async fn award_health_bonus(
             .find(|r| r.kind == HealthCheckpointKind::Probe.as_str())
     });
     let score = source.and_then(|r| r.server_score);
-    let bonus = ololo_health::bonus(score, &settings.thresholds, weight);
     let level = ololo_health::level(score, &settings.thresholds);
-    let note = match (source, score) {
-        (Some(r), Some(s)) if r.kind == HealthCheckpointKind::TaskFinal.as_str() => format!(
-            "health-bonus: final tree scored {s:.1} ({level:?}) → {}/{weight}",
-            bonus.points
-        ),
-        (Some(r), Some(s)) => format!(
-            "health-bonus: last verified check #{} scored {s:.1} ({level:?}) → {}/{weight}; the final tree was not verified",
-            r.probe_seq, bonus.points
-        ),
-        (Some(_), None) => {
-            format!("health-bonus: the verified tree had no code to score → 0/{weight}")
-        }
-        (None, _) => format!("health-bonus: no verified checkpoint → 0/{weight}"),
+    let personal = arena_core::personal::is_personal_session(&state.db, session_id)
+        .await
+        .unwrap_or(false);
+    // Work on an existing codebase is paid for where it left the code
+    // relative to where it found it; a challenge build, which starts from
+    // nothing, on the grade it reached.
+    let start = if personal && source.is_some() {
+        Some(task_start_score(state, session_id, player_id, task, join_code).await)
+    } else {
+        None
     };
-    let now = Utc::now();
+    let bonus = match &start {
+        Some(start) => ololo_health::delta_bonus(start.score, score, &settings.thresholds, weight),
+        None => ololo_health::bonus(score, &settings.thresholds, weight),
+    };
+    let note = match (&start, source, score) {
+        (Some(start), Some(_), Some(end)) => match start.score {
+            Some(from) => format!(
+                "health-bonus: {from:.1} at {} → {end:.1} ({:+.1}) → {}/{weight}",
+                start.label,
+                end - from,
+                bonus.points
+            ),
+            None => format!(
+                "health-bonus: no code to score at {} → {end:.1} ({level:?}) → {}/{weight}",
+                start.label, bonus.points
+            ),
+        },
+        _ => base_note(source, score, level, bonus.points, weight),
+    };
     let row = task_results::ActiveModel {
         id: Set(Uuid::new_v4()),
         session_id_fk: Set(session_id),
         player_id_fk: Set(player_id),
         task_id: Set(Some(task.id)),
         answer: Set(note.clone()),
-        created_at: Set(now),
+        created_at: Set(Utc::now()),
         point_delta: Set(bonus.points),
         is_bonus: Set(true),
         kind: Set(task_results::KIND_HEALTH_BONUS.to_string()),
@@ -445,6 +472,7 @@ pub async fn award_health_bonus(
             "score": score,
             "level": level,
             "source_checkpoint": source.map(|r| r.id),
+            "start_score": start.as_ref().and_then(|s| s.score),
             "note": note,
         }),
     )
@@ -460,6 +488,171 @@ pub async fn award_health_bonus(
         .await;
         crate::ws::player_agent::scoring::broadcast_leaderboard(state, session_id, join_code).await;
     }
+}
+
+/// The note of a bonus paid on the grade the task reached.
+fn base_note(
+    source: Option<&health_checkpoints::Model>,
+    score: Option<f64>,
+    level: ololo_health::Level,
+    points: i32,
+    weight: i32,
+) -> String {
+    match (source, score) {
+        (Some(r), Some(s)) if r.kind == HealthCheckpointKind::TaskFinal.as_str() => {
+            format!("health-bonus: final tree scored {s:.1} ({level:?}) → {points}/{weight}")
+        }
+        (Some(r), Some(s)) => format!(
+            "health-bonus: last verified check #{} scored {s:.1} ({level:?}) → {points}/{weight}; the final tree was not verified",
+            r.probe_seq
+        ),
+        (Some(_), None) => {
+            format!("health-bonus: the verified tree had no code to score → 0/{weight}")
+        }
+        (None, _) => format!("health-bonus: no verified checkpoint → 0/{weight}"),
+    }
+}
+
+/// Where a personal task's health started: the end of the task before it,
+/// when that was verified, else the tree the session started from.
+struct TaskStart {
+    score: Option<f64>,
+    /// For the bonus note: "the session start", "the end of task 2".
+    label: String,
+}
+
+async fn task_start_score(
+    state: &GameServerState,
+    session_id: Uuid,
+    player_id: Uuid,
+    task: &tasks::Model,
+    join_code: &str,
+) -> TaskStart {
+    let previous = tasks::Entity::find()
+        .filter(tasks::Column::ProjectIdFk.eq(task.project_id_fk))
+        .filter(tasks::Column::Ordinal.lt(task.ordinal))
+        .order_by_desc(tasks::Column::Ordinal)
+        .one(&state.db)
+        .await
+        .ok()
+        .flatten();
+    if let Some(previous) = previous {
+        let final_row = health_checkpoints::Entity::find()
+            .filter(health_checkpoints::Column::SessionIdFk.eq(session_id))
+            .filter(health_checkpoints::Column::PlayerIdFk.eq(player_id))
+            .filter(health_checkpoints::Column::TaskIdFk.eq(previous.id))
+            .filter(health_checkpoints::Column::Kind.eq(HealthCheckpointKind::TaskFinal.as_str()))
+            .filter(health_checkpoints::Column::ServerStatus.eq(HealthCheckStatus::Ok.as_str()))
+            .one(&state.db)
+            .await
+            .ok()
+            .flatten();
+        if let Some(row) = final_row {
+            return TaskStart {
+                score: row.server_score,
+                label: format!("the end of task {}", previous.ordinal + 1),
+            };
+        }
+    }
+    let base = baseline(state, session_id, player_id, join_code).await;
+    TaskStart {
+        score: base
+            .filter(|r| r.server_status == HealthCheckStatus::Ok.as_str())
+            .and_then(|r| r.server_score),
+        label: "the session start".to_string(),
+    }
+}
+
+/// The player's baseline checkpoint — the session-start tree, scored —
+/// created and verified on first use. `None` when the repository has no
+/// line yet or the row cannot be written.
+async fn baseline(
+    state: &GameServerState,
+    session_id: Uuid,
+    player_id: Uuid,
+    join_code: &str,
+) -> Option<health_checkpoints::Model> {
+    let find = || {
+        health_checkpoints::Entity::find()
+            .filter(health_checkpoints::Column::SessionIdFk.eq(session_id))
+            .filter(health_checkpoints::Column::PlayerIdFk.eq(player_id))
+            .filter(health_checkpoints::Column::Kind.eq(HealthCheckpointKind::Baseline.as_str()))
+            .one(&state.db)
+    };
+    let row = match find().await.ok().flatten() {
+        Some(row) => row,
+        None => {
+            // The session-start snapshot is the root of the line; the CLI
+            // pushes it before the first probe.
+            let log = first_parent_log(&repo_dir(session_id, player_id), LOG_LIMIT)
+                .await
+                .ok()?;
+            if log.len() >= LOG_LIMIT {
+                return None;
+            }
+            let root = log.first()?;
+            let settings = HealthSettings::load(&state.db).await.unwrap_or_default();
+            let started_at = sessions::Entity::find_by_id(session_id)
+                .one(&state.db)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|s| s.started_at);
+            let now = Utc::now();
+            let am = health_checkpoints::ActiveModel {
+                id: Set(Uuid::new_v4()),
+                session_id_fk: Set(session_id),
+                player_id_fk: Set(player_id),
+                task_id_fk: Set(None),
+                probe_id_fk: Set(None),
+                kind: Set(HealthCheckpointKind::Baseline.as_str().to_string()),
+                probe_seq: Set(0),
+                commit_sha: Set(root.sha.clone()),
+                derived_task_id: Set(None),
+                score_mismatch: Set(false),
+                version_mismatch: Set(false),
+                task_mismatch: Set(false),
+                late: Set(false),
+                history_rewritten: Set(false),
+                client_status: Set(None),
+                client_score: Set(None),
+                client_grade: Set(None),
+                client_result: Set(None),
+                client_duration_ms: Set(None),
+                client_jscpd_version: Set(None),
+                client_error: Set(None),
+                client_reported_at: Set(None),
+                server_status: Set(HealthCheckStatus::Pending.as_str().to_string()),
+                server_score: Set(None),
+                server_grade: Set(None),
+                server_result: Set(None),
+                server_duration_ms: Set(None),
+                server_jscpd_version: Set(None),
+                server_error: Set(None),
+                server_verified_at: Set(None),
+                // On the chart the baseline sits where the session began.
+                created_at: Set(started_at.unwrap_or(now)),
+                updated_at: Set(now),
+            };
+            match am.insert(&state.db).await {
+                Ok(row) => {
+                    publish(state, session_id, join_code, row.id, &settings).await;
+                    row
+                }
+                // A concurrent first report won the race (unique commit).
+                Err(_) => find().await.ok().flatten()?,
+            }
+        }
+    };
+    if row.server_status != HealthCheckStatus::Pending.as_str() {
+        return Some(row);
+    }
+    verify(state.clone(), row.id, join_code.to_string(), Duration::ZERO).await;
+    health_checkpoints::Entity::find_by_id(row.id)
+        .one(&state.db)
+        .await
+        .ok()
+        .flatten()
 }
 
 /// Re-drive every checkpoint a restart left `pending`.

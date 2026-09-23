@@ -27,6 +27,47 @@ const FLAG_SUFFIX: &str = "-done.md";
 /// Poll cadence. One tick of extra latency buys write-settling detection.
 const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
 
+/// A new session in a folder that played before finds the earlier
+/// sessions' done-files — and a done-check that only asks whether its file
+/// exists would close this session's task before any work began. Move them
+/// to `.ololo/archive/<unix-seconds>/`, before the session's first
+/// snapshot. Returns what moved.
+pub fn archive_stale_flags(worktree: &Path) -> std::io::Result<Vec<PathBuf>> {
+    let flag_dir = worktree.join(FLAG_DIR);
+    let Ok(entries) = std::fs::read_dir(&flag_dir) else {
+        return Ok(Vec::new());
+    };
+    let stale: Vec<PathBuf> = entries
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+        .filter(|e| {
+            e.file_name()
+                .to_str()
+                .is_some_and(|n| n.ends_with(FLAG_SUFFIX))
+        })
+        .map(|e| e.path())
+        .collect();
+    if stale.is_empty() {
+        return Ok(Vec::new());
+    }
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or_default();
+    let archive = flag_dir.join("archive").join(stamp.to_string());
+    std::fs::create_dir_all(&archive)?;
+    let mut moved = Vec::with_capacity(stale.len());
+    for path in stale {
+        let Some(name) = path.file_name() else {
+            continue;
+        };
+        let target = archive.join(name);
+        std::fs::rename(&path, &target)?;
+        moved.push(target);
+    }
+    Ok(moved)
+}
+
 /// Per-file memory across polls: the size/mtime at last sight and whether
 /// the file was already published.
 #[derive(Default)]
@@ -252,6 +293,32 @@ mod tests {
     fn write_flag(dir: &Path, name: &str, contents: &str) {
         std::fs::create_dir_all(dir.join(FLAG_DIR)).unwrap();
         std::fs::write(dir.join(FLAG_DIR).join(name), contents).unwrap();
+    }
+
+    #[test]
+    fn earlier_sessions_done_files_move_to_the_archive() {
+        let dir = tempfile::tempdir().unwrap();
+        let w = dir.path();
+        write_flag(w, "task-1-done.md", "an earlier session's note");
+        write_flag(w, "task-2-done.md", "another");
+        write_flag(w, "settings.json", "{}");
+
+        let moved = archive_stale_flags(w).unwrap();
+        assert_eq!(moved.len(), 2);
+        assert!(!w.join(".ololo/task-1-done.md").exists());
+        assert!(
+            w.join(".ololo/settings.json").exists(),
+            "only done-files move"
+        );
+        for path in &moved {
+            assert!(path.starts_with(w.join(".ololo/archive")), "{path:?}");
+            assert!(path.exists());
+        }
+        // The watcher sees no flag left to baseline: a new one is fresh.
+        let state = FlagWatchState::baseline(w);
+        assert!(state.seen.is_empty());
+        assert!(archive_stale_flags(w).unwrap().is_empty(), "nothing left");
+        assert!(archive_stale_flags(&w.join("nowhere")).unwrap().is_empty());
     }
 
     #[test]

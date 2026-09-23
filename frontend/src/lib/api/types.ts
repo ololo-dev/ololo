@@ -152,6 +152,10 @@ export interface RegisterAgentBody {
 export interface Project {
   id: string;
   name: string;
+  /** `challenge` — a catalog project — or `personal`: a user's own work,
+   *  private to them and off every global standing. Absent from servers
+   *  older than personal projects (read as `challenge`). */
+  kind?: ProjectKind;
   owner_user_id: string;
   public: boolean;
   archived_at: string | null;
@@ -191,6 +195,68 @@ export interface Project {
   parts_duration_secs?: number;
   parent_project_slug?: string | null;
   parent_project_name?: string | null;
+}
+
+export type ProjectKind = "challenge" | "personal";
+
+/** One entry of a personal project's navigation map. */
+export interface PersonalTask {
+  title: string;
+  description?: string;
+}
+
+/** What creating (or rebuilding) a personal project sends. Only the
+ *  description is required: no name derives one, no tasks make the whole
+ *  description one task, no judges take the default panel. */
+export interface PersonalProjectRequest {
+  name?: string;
+  description: string;
+  tasks: PersonalTask[];
+  judges?: string[];
+  session_duration_secs?: number;
+}
+
+/** A personal project as its owner asked for it. */
+export interface PersonalSpec {
+  version: number;
+  name: string;
+  description: string;
+  tasks: { title: string; description: string }[];
+  judges: string[];
+  session_duration_secs: number;
+}
+
+export interface PersonalProjectDetail {
+  project: Project;
+  spec: PersonalSpec;
+  session_count: number;
+  /** Tasks can still be rebuilt: no session has played them yet. */
+  editable: boolean;
+}
+
+export interface PersonalJudgeOption {
+  slug: string;
+  name: string;
+  description: string;
+  criteria: string[];
+  avatar_url: string | null;
+  default: boolean;
+}
+
+export interface PersonalProjectOptions {
+  creation_allowed: boolean;
+  judges: PersonalJudgeOption[];
+  limits: {
+    max_tasks: number;
+    max_judges: number;
+    max_name_chars: number;
+    max_description_chars: number;
+    max_task_title_chars: number;
+    max_task_description_chars: number;
+  };
+  session: { min_secs: number; max_secs: number; default_secs: number };
+  suggest_available: boolean;
+  task_points: number;
 }
 
 /** Per-caller progression state of one campaign part. */
@@ -362,6 +428,8 @@ export interface PublicSessionEntry {
   agent: string | null;
   /** Models observed in client-reported stats. */
   models: string[];
+  /** A session of the viewer's own personal project (listed only to them). */
+  personal?: boolean;
 }
 
 export interface PublicSessionsResponse {

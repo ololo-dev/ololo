@@ -97,6 +97,10 @@ pub(crate) struct TaskListResp {
 pub enum ProjectTaskError {
     #[error("project_frozen")]
     ProjectFrozen,
+    /// A personal project's tasks are built from its owner's words and are
+    /// rebuilt only through `/api/personal-projects/:id`.
+    #[error("personal_project")]
+    PersonalProject,
     #[error("not_found")]
     NotFound,
     #[error("forbidden")]
@@ -129,6 +133,7 @@ impl From<sea_orm::DbErr> for ProjectTaskError {
 
 crate::api::error::impl_api_error!(ProjectTaskError {
     Self::ProjectFrozen => (CONFLICT, "project_frozen"),
+    Self::PersonalProject => (CONFLICT, "personal_project"),
     Self::NotFound => (NOT_FOUND, "not_found"),
     Self::Forbidden => (FORBIDDEN, "forbidden"),
     Self::InvalidTitle => (UNPROCESSABLE_ENTITY, "invalid_title"),
@@ -240,13 +245,17 @@ pub(crate) fn to_summary(
     })
 }
 
-/// Returns `ProjectFrozen` if any session references this project.
+/// Returns `ProjectFrozen` if any session references this project, and
+/// `PersonalProject` for a personal one (its tasks are generated).
 /// Write operations (create/patch/delete/reorder) must call this after
 /// confirming ownership.
 pub(crate) async fn freeze_guard(
     db: &DatabaseConnection,
     project_id: Uuid,
 ) -> Result<(), ProjectTaskError> {
+    if arena_core::personal::is_personal_project(db, project_id).await? {
+        return Err(ProjectTaskError::PersonalProject);
+    }
     let session_exists = sessions::Entity::find()
         .filter(sessions::Column::ProjectIdFk.eq(project_id))
         .one(db)

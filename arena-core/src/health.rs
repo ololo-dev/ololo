@@ -21,6 +21,7 @@ impl HealthCheckpointKind {
         match self {
             HealthCheckpointKind::Probe => "probe",
             HealthCheckpointKind::TaskFinal => "task_final",
+            HealthCheckpointKind::Baseline => "baseline",
         }
     }
 
@@ -28,6 +29,7 @@ impl HealthCheckpointKind {
         match s {
             "probe" => Some(Self::Probe),
             "task_final" => Some(Self::TaskFinal),
+            "baseline" => Some(Self::Baseline),
             _ => None,
         }
     }
@@ -418,7 +420,11 @@ mod tests {
         ] {
             assert_eq!(HealthCheckStatus::parse(s.as_str()), Some(s));
         }
-        for s in [HealthCheckpointKind::Probe, HealthCheckpointKind::TaskFinal] {
+        for s in [
+            HealthCheckpointKind::Probe,
+            HealthCheckpointKind::TaskFinal,
+            HealthCheckpointKind::Baseline,
+        ] {
             assert_eq!(HealthCheckpointKind::parse(s.as_str()), Some(s));
         }
         for s in [

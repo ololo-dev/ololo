@@ -26,7 +26,7 @@ pub use analyze::{HealthError, HealthResult, Metrics, analyze, analyze_async};
 pub use config::{
     ALWAYS_IGNORED_DIRS, ConfigError, HealthConfig, PRUNED_DIRS, Thresholds, default_ignore_globs,
 };
-pub use score::{Bonus, BonusReason, Level, bonus, level, scores_match};
+pub use score::{Bonus, BonusReason, DELTA_SPAN, Level, bonus, delta_bonus, level, scores_match};
 
 /// Version of `cpd-core` this crate links — the health formula lives there.
 /// Reported in every result so the server can tell a client built against
@@ -38,6 +38,9 @@ pub const JSCPD_CORE_VERSION: &str = "0.1.17";
 pub const JSCPD_FINDER_VERSION: &str = "0.1.17";
 /// jscpd's dead-code analyzer (`basta`), the third health dimension.
 pub const BASTA_VERSION: &str = "0.3.0";
+/// Version of `cpd-tokenizer`, whose format table decides which files a
+/// scan reads.
+pub const JSCPD_TOKENIZER_VERSION: &str = "0.1.17";
 
 /// Schema of [`HealthResult`] as ololo serializes it — not jscpd's own
 /// output, which is unversioned upstream. Bump when a field changes meaning.
@@ -57,6 +60,7 @@ mod tests {
             ("cpd-core", JSCPD_CORE_VERSION),
             ("cpd-finder", JSCPD_FINDER_VERSION),
             ("basta", BASTA_VERSION),
+            ("cpd-tokenizer", JSCPD_TOKENIZER_VERSION),
         ] {
             let resolved = locked_version(&lock, name)
                 .unwrap_or_else(|| panic!("{name} is not in Cargo.lock"));

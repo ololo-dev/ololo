@@ -110,6 +110,10 @@ pub enum HealthCheckpointKind {
     /// The task's final tree (`feat(<task>)` commit) — the one the bonus is
     /// paid on.
     TaskFinal,
+    /// The tree the session started from (the root of the player's line).
+    /// Scored for personal projects, where the code predates the session
+    /// and each task's health is measured against where it began.
+    Baseline,
 }
 
 /// Where the server's own verification of a checkpoint stands.

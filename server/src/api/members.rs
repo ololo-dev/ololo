@@ -56,6 +56,8 @@ pub enum MemberError {
     UnknownUser,
     AlreadyMember,
     CannotRemoveOwner,
+    /// A personal project's sessions have one player: its owner.
+    PersonalProject,
     Db(DbErr),
 }
 
@@ -72,6 +74,7 @@ crate::api::error::impl_api_error!(MemberError {
     Self::UnknownUser => (UNPROCESSABLE_ENTITY, "unknown_user"),
     Self::AlreadyMember => (CONFLICT, "already_member"),
     Self::CannotRemoveOwner => (CONFLICT, "cannot_remove_owner"),
+    Self::PersonalProject => (FORBIDDEN, "personal_project"),
     Self::Db(_) => (INTERNAL_SERVER_ERROR, "database_error"),
 });
 
@@ -177,6 +180,9 @@ pub async fn post_add(
     let canonical_role = canonicalise_role(req.role.as_str()).ok_or(MemberError::InvalidRole)?;
 
     let session = load_for_owner(&state.db, session_id, user_id).await?;
+    if arena_core::personal::is_personal_project(&state.db, session.project_id_fk).await? {
+        return Err(MemberError::PersonalProject);
+    }
 
     let target = users::Entity::find_by_id(req.user_id)
         .one(&state.db)

@@ -40,6 +40,7 @@ mod llm_providers_api;
 mod llm_telemetry_api;
 mod members_crud;
 mod migration_sqlite_file;
+mod personal_projects;
 mod player_artifacts_authz;
 mod player_memory_api;
 mod player_page_admin_access;

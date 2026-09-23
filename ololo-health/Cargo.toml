@@ -14,6 +14,8 @@ description = "Code-health analysis shared by the ololo client and servers: jscp
 cpd-core = "=0.1.17"
 basta = "=0.3.0"
 cpd-finder = "=0.1.17"
+# Format detection — which files the scan reads, so what the size caps count.
+cpd-tokenizer = "=0.1.17"
 serde = { version = "1.0.203", features = ["derive"] }
 serde_json = "1.0.117"
 thiserror = "2.0"

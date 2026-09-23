@@ -203,17 +203,31 @@ fn analyze_now(root: &Path, cfg: &HealthConfig) -> Result<HealthResult, HealthEr
 /// What the survey learns before jscpd runs.
 #[derive(Debug, Default)]
 struct Survey {
+    /// Code files the scan will read, and their bytes — what the caps bound.
     files: u64,
     bytes: u64,
     ignore_markers: u64,
     jscpd_config_present: bool,
 }
 
+/// Whether jscpd reads this file: a format it knows by extension, within
+/// the per-file size cap. (jscpd also sniffs shebangs of extensionless
+/// files; the survey does not open files to find them, so those few are
+/// read without counting towards the caps.)
+fn scanned(path: &Path, len: u64, cfg: &HealthConfig) -> bool {
+    len <= cfg.max_file_bytes
+        && path
+            .extension()
+            .and_then(|e| e.to_str())
+            .and_then(cpd_tokenizer::formats::get_format_by_extension)
+            .is_some()
+}
+
 const IGNORE_MARKER: &[u8] = b"jscpd:ignore-start";
 
-/// Walk the tree once, cheaply: count what the scan would read (after the
-/// directory exclusions, without jscpd's format filter — a coarse bound),
-/// refuse past the caps, count marker files, note a jscpd config.
+/// Walk the tree once, cheaply: count the code files the scan would read
+/// (after the directory exclusions, through jscpd's format table), refuse
+/// past the caps, count marker files, note a jscpd config.
 fn survey_tree(root: &Path, cfg: &HealthConfig) -> Result<Survey, HealthError> {
     let mut survey = Survey {
         jscpd_config_present: jscpd_config_present(root),
@@ -241,6 +255,9 @@ fn survey_tree(root: &Path, cfg: &HealthConfig) -> Result<Survey, HealthError> {
                 continue;
             }
             let len = entry.metadata()?.len();
+            if !scanned(&entry.path(), len, cfg) {
+                continue;
+            }
             survey.files += 1;
             survey.bytes += len;
             if survey.files > cfg.max_files || survey.bytes > cfg.max_total_bytes {
@@ -251,8 +268,8 @@ fn survey_tree(root: &Path, cfg: &HealthConfig) -> Result<Survey, HealthError> {
                     max_bytes: cfg.max_total_bytes,
                 });
             }
-            // Only files jscpd would read can carry a marker it would honour.
-            if len > 0 && len <= cfg.max_file_bytes && has_marker(&entry.path())? {
+            // Only files jscpd reads can carry a marker it would honour.
+            if len > 0 && has_marker(&entry.path())? {
                 survey.ignore_markers += 1;
             }
         }

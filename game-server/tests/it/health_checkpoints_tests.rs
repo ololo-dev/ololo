@@ -866,3 +866,132 @@ async fn without_a_verified_checkpoint_the_bonus_is_zero_and_says_why() {
             .all(|e| !matches!(e, ZmqEvent::ScoreChange { .. }))
     );
 }
+
+/// Wait for the health-bonus row of `task`.
+async fn bonus_row_of(rig: &Rig, task: Uuid) -> arena_core::entities::task_results::Model {
+    use arena_core::entities::task_results;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let found = task_results::Entity::find()
+            .filter(task_results::Column::SessionIdFk.eq(rig.session_id))
+            .filter(task_results::Column::TaskId.eq(task))
+            .filter(task_results::Column::Kind.eq(task_results::KIND_HEALTH_BONUS))
+            .one(&rig.state.db)
+            .await
+            .unwrap();
+        if let Some(r) = found {
+            return r;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "no health bonus row for {task}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[tokio::test]
+async fn a_personal_task_is_paid_for_not_making_the_code_worse() {
+    let rig = setup().await;
+    let session = sessions::Entity::find_by_id(rig.session_id)
+        .one(&rig.state.db)
+        .await
+        .unwrap()
+        .unwrap();
+    arena_core::entities::personal_projects::ActiveModel {
+        project_id_fk: Set(session.project_id_fk),
+        spec: Set(serde_json::json!({})),
+        created_at: Set(Utc::now()),
+        updated_at: Set(Utc::now()),
+    }
+    .insert(&rig.state.db)
+    .await
+    .expect("mark personal");
+    let thresholds = ololo_health::Thresholds::default();
+
+    // The codebase the session starts from.
+    rig.write("src/a.js", CODE);
+    let root = rig.commit(&Kind::Session, None, "session start @ x", None);
+    let start = score_of(&[("src/a.js", CODE)]).score;
+
+    // The first report of the session scores the start as the baseline.
+    rig.commit(&Kind::Start, Some(rig.task_a), "Task A", None);
+    let probe_commit = rig.commit(
+        &Kind::Probe,
+        Some(rig.task_a),
+        "#1",
+        Some((Uuid::new_v4(), 1)),
+    );
+    let report = rig.report(Uuid::new_v4(), 1, rig.task_a, &probe_commit, start);
+    game_server::health::on_report(
+        rig.state.clone(),
+        rig.session_id,
+        rig.player_id,
+        rig.join_code.clone(),
+        report,
+    )
+    .await;
+    let baseline = rig.checkpoint(&root).await;
+    assert_eq!(baseline.kind, "baseline");
+    assert_eq!(baseline.server_status, "ok");
+    assert_eq!(baseline.server_score, start);
+    assert_eq!(baseline.task_id_fk, None);
+
+    // Task A pastes the code twice more: worse than it found it.
+    rig.write("src/b.js", CODE);
+    rig.write("src/c.js", CODE);
+    let feat_a = rig.commit(&Kind::Feat, Some(rig.task_a), "Task A", None);
+    let worse = score_of(&[("src/a.js", CODE), ("src/b.js", CODE), ("src/c.js", CODE)]).score;
+    assert!(
+        worse < start,
+        "duplication must cost: {worse:?} vs {start:?}"
+    );
+    let task_a = tasks::Entity::find_by_id(rig.task_a)
+        .one(&rig.state.db)
+        .await
+        .unwrap()
+        .unwrap();
+    game_server::health::on_task_closed(
+        rig.state.clone(),
+        rig.session_id,
+        rig.player_id,
+        rig.join_code.clone(),
+        task_a,
+    )
+    .await;
+    assert_eq!(rig.checkpoint(&feat_a).await.server_score, worse);
+    let paid_a = bonus_row_of(&rig, rig.task_a).await;
+    let expected_a = ololo_health::delta_bonus(start, worse, &thresholds, 20);
+    assert!(expected_a.points < 20, "{expected_a:?}");
+    assert_eq!(paid_a.point_delta, expected_a.points);
+    assert!(
+        paid_a.answer.contains("at the session start"),
+        "{}",
+        paid_a.answer
+    );
+
+    // Task B leaves the tree as task A left it: held the line, paid in
+    // full — measured from the end of task A, not from the session start.
+    let feat_b = rig.commit(&Kind::Feat, Some(rig.task_b), "Task B", None);
+    let task_b = tasks::Entity::find_by_id(rig.task_b)
+        .one(&rig.state.db)
+        .await
+        .unwrap()
+        .unwrap();
+    game_server::health::on_task_closed(
+        rig.state.clone(),
+        rig.session_id,
+        rig.player_id,
+        rig.join_code.clone(),
+        task_b,
+    )
+    .await;
+    assert_eq!(rig.checkpoint(&feat_b).await.server_score, worse);
+    let paid_b = bonus_row_of(&rig, rig.task_b).await;
+    assert_eq!(paid_b.point_delta, 20, "{}", paid_b.answer);
+    assert!(
+        paid_b.answer.contains("at the end of task 1"),
+        "{}",
+        paid_b.answer
+    );
+}

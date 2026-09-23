@@ -89,6 +89,41 @@ pub struct PatchProjectReq {
     pub memory_schema: Option<Option<serde_json::Value>>,
 }
 
+impl PatchProjectReq {
+    /// Whether the request does nothing but archive or unarchive.
+    pub(crate) fn touches_only_archive(&self) -> bool {
+        let PatchProjectReq {
+            name,
+            public,
+            archived: _,
+            description,
+            slug,
+            category,
+            tags,
+            cover_image_url,
+            clear_cover_image,
+            points,
+            intervals,
+            session_duration_secs,
+            idle_timeout_secs,
+            memory_schema,
+        } = self;
+        name.is_none()
+            && public.is_none()
+            && description.is_none()
+            && slug.is_none()
+            && category.is_none()
+            && tags.is_none()
+            && cover_image_url.is_none()
+            && clear_cover_image.is_none()
+            && points.is_none()
+            && intervals.is_none()
+            && session_duration_secs.is_none()
+            && idle_timeout_secs.is_none()
+            && memory_schema.is_none()
+    }
+}
+
 /// Validate a memory-schema JSON value (object of scalar defaults, capped
 /// key/value sizes) and return its canonical JSON string for storage.
 pub(crate) fn validate_memory_schema_json(v: &serde_json::Value) -> Result<String, ProjectError> {
@@ -112,6 +147,11 @@ pub struct ProjectSummary {
     pub id: Uuid,
     pub name: String,
     pub slug: Option<String>,
+    /// `challenge` — a project from the catalog — or `personal`: a user's
+    /// own work, private to them and kept off every global standing.
+    /// Endpoints that serve a project fill it via [`attach_kinds`];
+    /// everything else reports the default.
+    pub kind: &'static str,
     pub description: String,
     pub category: Option<String>,
     pub tags: Vec<String>,
@@ -211,6 +251,11 @@ pub enum ProjectError {
     InvalidMemorySchema(String),
     #[error("project creation is currently restricted to administrators")]
     CreationRestricted,
+    /// A personal project is edited through `/api/personal-projects`, which
+    /// rebuilds its tasks from the owner's words; the generic editors would
+    /// leave the two out of step.
+    #[error("personal_project")]
+    PersonalProject,
     #[error("database error: {0}")]
     Db(#[from] sea_orm::DbErr),
 }
@@ -237,6 +282,7 @@ crate::api::error::impl_api_error!(ProjectError {
         FORBIDDEN,
         "project creation is currently restricted to administrators",
     ),
+    Self::PersonalProject => (CONFLICT, "personal_project"),
     Self::Db(_) => (INTERNAL_SERVER_ERROR, "database_error"),
 });
 
@@ -393,6 +439,7 @@ pub fn to_summary_with_sessions(
         id: m.id,
         name: m.name,
         slug: m.slug,
+        kind: KIND_CHALLENGE,
         description: m.description,
         category: m.category,
         tags,
@@ -435,6 +482,28 @@ pub fn to_summary_with_sessions(
         parent_project_slug: None,
         parent_project_name: None,
     }
+}
+
+/// [`ProjectSummary::kind`] of a catalog project.
+pub const KIND_CHALLENGE: &str = "challenge";
+/// [`ProjectSummary::kind`] of a user's own project.
+pub const KIND_PERSONAL: &str = "personal";
+
+/// Mark the personal projects among `summaries` — one query for the lot.
+pub async fn attach_kinds(
+    db: &DatabaseConnection,
+    summaries: &mut [ProjectSummary],
+) -> Result<(), sea_orm::DbErr> {
+    let ids: Vec<Uuid> = summaries.iter().map(|s| s.id).collect();
+    let personal = arena_core::personal::personal_project_ids(db, &ids).await?;
+    for summary in summaries {
+        summary.kind = if personal.contains(&summary.id) {
+            KIND_PERSONAL
+        } else {
+            KIND_CHALLENGE
+        };
+    }
+    Ok(())
 }
 
 /// Fill the campaign fields an endpoint chose to pay for: how many parts this

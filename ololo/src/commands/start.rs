@@ -38,6 +38,50 @@ fn project_slug_for_display(project: &serde_json::Value) -> String {
         .unwrap_or_else(|| "<unknown>".to_string())
 }
 
+/// The workspace switches `start` and `join` share.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct StartFlags {
+    /// Pre-approve every probe command in this workspace.
+    pub allow_all: bool,
+    /// Start a campaign part empty instead of importing the previous part.
+    pub fresh: bool,
+    /// Confirm a personal project's upload without asking.
+    pub yes: bool,
+}
+
+/// Whether the project a lookup returned is someone's own work, played in
+/// their own repository.
+fn is_personal(project: &serde_json::Value) -> bool {
+    project.get("kind").and_then(|v| v.as_str()) == Some("personal")
+}
+
+/// Before the session's first snapshot of this folder: old sessions'
+/// done-files move aside (they would close this session's tasks at once),
+/// and in a personal project's repository `.ololo/` is kept out of the
+/// user's own commits.
+fn prepare_fresh_workspace(personal: bool) {
+    let Ok(worktree) = std::env::current_dir() else {
+        return;
+    };
+    match crate::done_flag::archive_stale_flags(&worktree) {
+        Ok(moved) if !moved.is_empty() => ui::step(format!(
+            "Moved {} done-file(s) of an earlier session to .ololo/archive/",
+            moved.len()
+        )),
+        Ok(_) => {}
+        Err(e) => tracing::warn!("archiving earlier done-files failed: {e}"),
+    }
+    if personal {
+        match crate::snapshot::files::exclude_platform_dir_locally(&worktree) {
+            Ok(true) => {
+                ui::step("Added .ololo/ to .git/info/exclude, so it stays out of your commits")
+            }
+            Ok(false) => {}
+            Err(e) => tracing::warn!("could not add .ololo/ to .git/info/exclude: {e}"),
+        }
+    }
+}
+
 pub async fn run_start(
     profile: &str,
     slug: String,
@@ -46,9 +90,13 @@ pub async fn run_start(
     debug: bool,
     tui: bool,
     agent: Option<String>,
-    allow_all: bool,
-    fresh: bool,
+    flags: StartFlags,
 ) -> Result<()> {
+    let StartFlags {
+        allow_all,
+        fresh,
+        yes,
+    } = flags;
     let cfg = load_credentials(profile)?;
     crate::auth::validate_token(&cfg.server_url, &cfg.token).await?;
     let base = cfg.server_url.trim_end_matches('/').to_string();
@@ -97,6 +145,14 @@ pub async fn run_start(
         .get("id")
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow!("project response missing 'id' field"))?;
+
+    // A personal project uploads the user's own code: say what and ask,
+    // before a session exists to abandon.
+    let personal = is_personal(&project);
+    if personal {
+        let worktree = std::env::current_dir().context("reading the working directory")?;
+        crate::upload_consent::confirm(&worktree, &base, yes)?;
+    }
 
     let session_name = name
         .or_else(|| {
@@ -217,6 +273,8 @@ pub async fn run_start(
     // baseline snapshot contains the imported codebase rather than an empty
     // tree followed by a mystery bulk commit.
     crate::campaign::prepare_part_workspace(&client, &base, &cfg.token, &project, fresh).await?;
+    // A new session: its first snapshot of this folder is about to be made.
+    prepare_fresh_workspace(personal);
     // Only now: the rule file would otherwise count as work and skip the
     // carry-over above.
     crate::prepare_probe_permissions(tui, allow_all);
@@ -300,9 +358,13 @@ pub async fn run_join(
     debug: bool,
     tui: bool,
     agent: Option<String>,
-    allow_all: bool,
-    fresh: bool,
+    flags: StartFlags,
 ) -> Result<()> {
+    let StartFlags {
+        allow_all,
+        fresh,
+        yes,
+    } = flags;
     let cfg = load_credentials(profile)?;
     crate::auth::validate_token(&cfg.server_url, &cfg.token).await?;
     let base = cfg.server_url.trim_end_matches('/').to_string();
@@ -335,11 +397,20 @@ pub async fn run_join(
 
     // Same carry-over as `start`, before any snapshot work: a player who
     // joins a campaign part in a fresh folder gets the previous part's code.
-    if let Some(project) =
-        project_of_session(&client, &base, &cfg.token, &join_outcome.session_id).await
-    {
-        crate::campaign::prepare_part_workspace(&client, &base, &cfg.token, &project, fresh)
-            .await?;
+    let project = project_of_session(&client, &base, &cfg.token, &join_outcome.session_id).await;
+    if let Some(project) = &project {
+        crate::campaign::prepare_part_workspace(&client, &base, &cfg.token, project, fresh).await?;
+    }
+    // The first join of this session from here — not a reconnect, which
+    // finds the snapshot repo it made before and must leave the workspace
+    // exactly as the agent left it.
+    if !crate::snapshot::SnapshotRepo::exists(profile, &code) {
+        let personal = project.as_ref().is_some_and(is_personal);
+        if personal {
+            let worktree = std::env::current_dir().context("reading the working directory")?;
+            crate::upload_consent::confirm(&worktree, &base, yes)?;
+        }
+        prepare_fresh_workspace(personal);
     }
     // After the carry-over, for the same reason as in `run_start`.
     crate::prepare_probe_permissions(tui, allow_all);

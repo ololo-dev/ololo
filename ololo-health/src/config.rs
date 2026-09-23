@@ -113,11 +113,13 @@ pub struct HealthConfig {
     /// Files larger than this are skipped by jscpd (a generated bundle or a
     /// data dump is not the player's code) and by the marker survey.
     pub max_file_bytes: u64,
-    /// Refuse to scan a tree with more files than this (after the directory
-    /// exclusions): the bound on jscpd's memory is the size of its input.
+    /// Refuse to scan a tree with more code files than this: the bound on
+    /// jscpd's memory is the size of its input. Only files the scan reads
+    /// count — a format jscpd knows, at most `max_file_bytes` — so a real
+    /// repository's images, fixtures and docs do not push it over.
     pub max_files: u64,
-    /// Refuse to scan a tree whose files (after the exclusions) exceed this
-    /// many bytes in total.
+    /// Refuse to scan a tree whose code files exceed this many bytes in
+    /// total (the same files `max_files` counts).
     pub max_total_bytes: u64,
     /// jscpd worker threads; `None` lets rayon decide. Never affects the
     /// result — detection output is sorted.
@@ -138,8 +140,8 @@ impl Default for HealthConfig {
             timeout: Duration::from_secs(30),
             ignore: default_ignore_globs(),
             max_file_bytes: 512 * 1024,
-            max_files: 5_000,
-            max_total_bytes: 64 * 1024 * 1024,
+            max_files: 20_000,
+            max_total_bytes: 128 * 1024 * 1024,
             workers: None,
             thresholds: Thresholds::default(),
             tolerance: 0.05,

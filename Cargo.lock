@@ -5472,7 +5472,7 @@ dependencies = [
 
 [[package]]
 name = "ololo"
-version = "0.27.0"
+version = "0.28.0"
 dependencies = [
  "agent-tokens",
  "anyhow",
@@ -5518,6 +5518,7 @@ dependencies = [
  "basta",
  "cpd-core",
  "cpd-finder",
+ "cpd-tokenizer",
  "serde",
  "serde_json",
  "tempfile",

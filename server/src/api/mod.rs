@@ -16,6 +16,7 @@ pub mod llm_admin;
 pub mod llm_pools;
 pub mod members;
 pub mod pats;
+pub mod personal_projects;
 pub mod players;
 pub mod points;
 pub mod project_ai;

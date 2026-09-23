@@ -78,7 +78,24 @@
   // five chapters of one story would crowd out everything else here. Every
   // derivation below reads this list, so the rule holds for the cards, the
   // sidebar counts and the duration buckets alike.
-  const catalogProjects = $derived(data.projects.filter((p) => !p.parent_project_id));
+  const catalogProjects = $derived(
+    data.projects.filter((p) => !p.parent_project_id && p.kind !== "personal"),
+  );
+
+  // A user's own work is not a catalog entry — private, uncategorized,
+  // played in their repository — so it gets its own shelf above the
+  // catalog. Someone else's never shows here, admins included.
+  const ownPersonal = $derived(
+    data.projects.filter(
+      (p) => p.kind === "personal" && p.owner_user_id === data.currentUserId,
+    ),
+  );
+  const personalProjects = $derived(
+    ownPersonal.filter((p) => !p.archived_at && matchesSearch(p)),
+  );
+  const canCreate = $derived(
+    !!data.currentUserId && (data.isAdmin || data.allowProjectCreation),
+  );
 
   // What "how long is this" means for a card: a campaign answers with its
   // parts added up, everything else with one session.
@@ -148,7 +165,9 @@
 
   // Archived projects — shown in a separate collapsible section.
   const myArchivedProjects = $derived(
-    catalogProjects.filter((p) => p.archived_at !== null && p.owner_user_id === data.currentUserId),
+    [...catalogProjects, ...ownPersonal].filter(
+      (p) => p.archived_at !== null && p.owner_user_id === data.currentUserId,
+    ),
   );
   const otherArchivedProjects = $derived(
     data.isAdmin
@@ -325,6 +344,36 @@
 
       <!-- card area -->
       <div class="min-w-0 flex-1">
+        {#if canCreate || personalProjects.length > 0}
+          <section class="mb-[48px]" data-testid="your-projects">
+            <div class="mb-[16px] flex items-center justify-between gap-4">
+              <h2 class="font-heading text-[24px] font-bold text-[#363636]">Your projects</h2>
+              {#if canCreate}
+                <a
+                  href="/projects/new"
+                  data-testid="new-personal-project"
+                  class="whitespace-nowrap rounded-[8px] border border-dashed border-[#0269fb] px-[14px] py-[8px] text-[14px] font-semibold text-[#0269fb] transition-colors hover:bg-[#e2ecfc]"
+                >
+                  + New project
+                </a>
+              {/if}
+            </div>
+            {#if personalProjects.length > 0}
+              {@render projectGrid(personalProjects, null)}
+            {:else}
+              <a
+                href="/projects/new"
+                class="block rounded-[8px] bg-white px-6 py-5 text-[15px] leading-relaxed text-[#363636] transition-colors hover:bg-[#f5f9ff]"
+              >
+                <span class="font-semibold text-[#0269fb]">Bring your own work.</span>
+                Describe a task from your own repository — split into steps if you like — and
+                play it as a session: judges review every task, code health is tracked at each
+                step.
+              </a>
+            {/if}
+          </section>
+        {/if}
+
         {#if catalogProjects.length > 0}
           <!-- toolbar: search + sort + create (kept out of the card grid so a
                game card and an admin affordance never read as the same thing) -->
@@ -345,12 +394,12 @@
               <option value="newest">Newest</option>
               <option value="played">Most played</option>
             </select>
-            {#if data.isAdmin || data.allowProjectCreation}
+            {#if data.isAdmin}
               <a
-                href="/projects/new"
+                href="/projects/new/challenge"
                 class="whitespace-nowrap rounded-[8px] border border-dashed border-[#0269fb] px-[14px] py-[8px] text-[14px] font-semibold text-[#0269fb] transition-colors hover:bg-[#e2ecfc] sm:ml-auto"
               >
-                + Add new project
+                + Add challenge project
               </a>
             {/if}
           </div>

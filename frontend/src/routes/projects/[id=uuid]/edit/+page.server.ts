@@ -43,6 +43,11 @@ export const load: PageServerLoad = async ({ params, fetch, locals, parent }) =>
       listProjectTasks(params.id, { fetch }),
       getProjectCategories({ fetch }).catch(() => [] as string[]),
     ]);
+    // A personal project has its own editor, which rebuilds its tasks from
+    // the owner's words.
+    if (project.kind === "personal") {
+      throw redirect(303, `/projects/${params.id}/personal`);
+    }
     if (locals.userId !== project.owner_user_id && !isAdmin) {
       throw error(403, "Access denied");
     }

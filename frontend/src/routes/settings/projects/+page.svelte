@@ -122,7 +122,13 @@
   </div>
 
   {#snippet visibilityBadge(project: Project)}
-    {#if project.public}
+    {#if project.kind === "personal"}
+      <span
+        class="rounded-full bg-violet-100 px-2 py-0.5 text-xs font-semibold text-violet-700"
+        title="A user's own project: private, off every standing"
+        >Personal</span
+      >
+    {:else if project.public}
       <span class="rounded-full bg-green-100 px-2 py-0.5 text-xs font-semibold text-green-700">Public</span>
     {:else}
       <span class="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-semibold text-gray-600">Private</span>

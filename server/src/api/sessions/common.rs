@@ -212,6 +212,9 @@ pub enum SessionError {
         required_project: String,
         required_part_ordinal: i32,
     },
+    /// The session runs someone's personal project: its owner is the only
+    /// player, whoever holds the join code.
+    PersonalProject,
     Db(DbErr),
 }
 
@@ -243,6 +246,7 @@ crate::api::error::impl_api_error!(SessionError {
     Self::CampaignParent => (CONFLICT, "campaign_project"),
     Self::PartLocked { required_project, required_part_ordinal } =>
         (CONFLICT, "part_locked", "required_project": required_project, "required_part_ordinal": required_part_ordinal),
+    Self::PersonalProject => (FORBIDDEN, "personal_project"),
     Self::Db(_) => (INTERNAL_SERVER_ERROR, "database_error"),
 });
 pub(crate) fn parse_user_id(claims: &AccessClaims) -> Result<Uuid, SessionError> {

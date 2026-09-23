@@ -1,0 +1,79 @@
+import { describe, it, expect } from "vitest";
+import { ApiError } from "$lib/api";
+import { parsePersonalForm, personalFailure } from "./personal-project-form";
+
+function form(fields: Record<string, string>): FormData {
+  const data = new FormData();
+  for (const [k, v] of Object.entries(fields)) data.set(k, v);
+  return data;
+}
+
+describe("parsePersonalForm", () => {
+  it("builds the request from the fields and the JSON map", () => {
+    const { request, values } = parsePersonalForm(
+      form({
+        name: "  CSV export ",
+        description: " Add a CSV export. ",
+        tasks_json: JSON.stringify([
+          { title: " Endpoint ", description: " GET /x.csv " },
+          { title: "Button", description: "" },
+          { title: "   ", description: "dropped: no title" },
+        ]),
+        judges_json: JSON.stringify(["correctness", "code-quality"]),
+        session_duration_secs: "3600",
+      }),
+    );
+    expect(request).toEqual({
+      name: "CSV export",
+      description: "Add a CSV export.",
+      tasks: [{ title: "Endpoint", description: "GET /x.csv" }, { title: "Button" }],
+      judges: ["correctness", "code-quality"],
+      session_duration_secs: 3600,
+    });
+    expect(values.tasks).toHaveLength(2);
+  });
+
+  it("leaves out what the user left empty and survives garbage", () => {
+    const { request } = parsePersonalForm(
+      form({ description: "d", tasks_json: "{not json", judges_json: "null" }),
+    );
+    expect(request).toEqual({ description: "d", tasks: [], judges: [] });
+  });
+});
+
+describe("personalFailure", () => {
+  it("carries the field and detail the server named", () => {
+    const err = new ApiError(422, "invalid_personal_project", {
+      error: "invalid_personal_project",
+      field: "tasks",
+      detail: "a navigation map holds at most 10 tasks",
+    });
+    const values = {
+      name: "",
+      description: "d",
+      tasks: [],
+      judges: [],
+      session_duration_secs: 0,
+    };
+    const result = personalFailure(err, values);
+    expect(result.status).toBe(422);
+    expect(result.data).toEqual({
+      error: "invalid_personal_project",
+      field: "tasks",
+      detail: "a navigation map holds at most 10 tasks",
+      values,
+    });
+  });
+
+  it("names the creation switch", () => {
+    const err = new ApiError(403, "project creation is currently restricted to administrators", {});
+    const result = personalFailure(err, {
+      name: "",
+      description: "d",
+      tasks: [],
+      judges: [],
+      session_duration_secs: 0,
+    });
+    expect(result.data.error).toBe("creation_restricted");
+  });
+});

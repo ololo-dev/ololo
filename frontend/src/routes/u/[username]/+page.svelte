@@ -115,9 +115,18 @@
             <span class="flex min-w-0 flex-col leading-tight">
               {#if session.project_name}
                 <a
-                  href="/projects/{session.project_slug ?? session.project_id}"
+                  href={session.personal
+                    ? `/projects/${session.project_id}`
+                    : `/projects/${session.project_slug ?? session.project_id}`}
                   class="truncate hover:text-brand-blue hover:underline"
                 >{session.project_name}</a>
+                {#if session.personal}
+                  <span
+                    class="mt-0.5 w-fit rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-semibold text-gray-600"
+                    title="Your own project: only you see this session"
+                    >Private</span
+                  >
+                {/if}
               {:else}
                 <span class="truncate">{session.name}</span>
               {/if}

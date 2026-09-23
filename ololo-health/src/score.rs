@@ -93,9 +93,102 @@ pub fn bonus(score: Option<f64>, thresholds: &Thresholds, weight: i32) -> Bonus 
     }
 }
 
+/// How far a task may take the score below where it started before its
+/// bonus is gone: [`delta_bonus`] ramps from the full weight at "no worse"
+/// down to nothing at this many points worse.
+pub const DELTA_SPAN: f64 = 10.0;
+
+/// jscpd rounds its score to one decimal; a smaller drop is no drop.
+const DELTA_EPSILON: f64 = 0.05;
+
+/// The health bonus of a task measured against where it started — for work
+/// on an existing codebase, where the absolute score says more about the
+/// code the task inherited than about the task. The whole `weight` when the
+/// task left the code no worse than it found it; a linear share down to
+/// nothing at [`DELTA_SPAN`] points worse. Improving earns no more than
+/// holding the line (the job was the task, not a cleanup), and nothing the
+/// task inherited is charged to it.
+///
+/// With no score to start from (the tree had no code yet) the task is paid
+/// on its result, as [`bonus`] pays it; with no score at the end there is
+/// nothing to pay on.
+pub fn delta_bonus(
+    start: Option<f64>,
+    end: Option<f64>,
+    thresholds: &Thresholds,
+    weight: i32,
+) -> Bonus {
+    if weight <= 0 {
+        return Bonus {
+            points: 0,
+            factor: 0.0,
+            reason: BonusReason::NoWeight,
+        };
+    }
+    let Some(end) = end.filter(|s| s.is_finite()) else {
+        return Bonus {
+            points: 0,
+            factor: 0.0,
+            reason: BonusReason::NoScore,
+        };
+    };
+    let Some(start) = start.filter(|s| s.is_finite()) else {
+        return bonus(Some(end), thresholds, weight);
+    };
+    let drop = start - end;
+    let factor = if drop < DELTA_EPSILON {
+        1.0
+    } else {
+        (1.0 - drop / DELTA_SPAN).clamp(0.0, 1.0)
+    };
+    Bonus {
+        points: ((factor * f64::from(weight)).round() as i32).max(0),
+        factor,
+        reason: BonusReason::Scored,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_task_that_holds_the_line_earns_the_whole_delta_bonus() {
+        let full = delta_bonus(Some(62.0), Some(62.0), &T, 20);
+        assert_eq!((full.points, full.reason), (20, BonusReason::Scored));
+        // Improving is no better than holding.
+        assert_eq!(delta_bonus(Some(40.0), Some(90.0), &T, 20).points, 20);
+        // A rounding-sized dip is no dip.
+        assert_eq!(delta_bonus(Some(62.0), Some(61.96), &T, 20).points, 20);
+    }
+
+    #[test]
+    fn the_delta_bonus_ramps_down_to_nothing_over_ten_points() {
+        assert_eq!(delta_bonus(Some(80.0), Some(75.0), &T, 20).points, 10);
+        assert_eq!(delta_bonus(Some(80.0), Some(78.0), &T, 20).points, 16);
+        assert_eq!(delta_bonus(Some(80.0), Some(70.0), &T, 20).points, 0);
+        assert_eq!(delta_bonus(Some(80.0), Some(10.0), &T, 20).points, 0);
+    }
+
+    #[test]
+    fn the_delta_bonus_does_not_care_where_the_codebase_stands() {
+        // A red legacy tree kept red is paid in full; the absolute ramp
+        // would pay nothing for it.
+        assert_eq!(delta_bonus(Some(31.0), Some(31.0), &T, 20).points, 20);
+        assert_eq!(bonus(Some(31.0), &T, 20).points, 0);
+    }
+
+    #[test]
+    fn without_a_start_the_result_pays_as_usual_and_without_an_end_nothing_does() {
+        assert_eq!(
+            delta_bonus(None, Some(62.5), &T, 20),
+            bonus(Some(62.5), &T, 20)
+        );
+        let none = delta_bonus(Some(70.0), None, &T, 20);
+        assert_eq!((none.points, none.reason), (0, BonusReason::NoScore));
+        let unpaid = delta_bonus(Some(70.0), Some(70.0), &T, 0);
+        assert_eq!(unpaid.reason, BonusReason::NoWeight);
+    }
 
     const T: Thresholds = Thresholds {
         green_min: 70.0,

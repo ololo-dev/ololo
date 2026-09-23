@@ -24,6 +24,7 @@ mod snapshot;
 mod task_stats;
 mod tui;
 mod ui;
+mod upload_consent;
 mod util;
 
 #[cfg(test)]
@@ -184,6 +185,7 @@ async fn main() {
             agent,
             allow_all,
             fresh,
+            yes,
         } => {
             let tui = tui && !no_tui;
             if tui && !std::io::stdout().is_terminal() {
@@ -197,8 +199,11 @@ async fn main() {
                 cli.debug,
                 tui,
                 agent,
-                allow_all,
-                fresh,
+                commands::StartFlags {
+                    allow_all,
+                    fresh,
+                    yes,
+                },
             )
             .await
         }
@@ -210,6 +215,7 @@ async fn main() {
             agent,
             allow_all,
             fresh,
+            yes,
         } => {
             let tui = tui && !no_tui;
             if tui && !std::io::stdout().is_terminal() {
@@ -222,8 +228,11 @@ async fn main() {
                 cli.debug,
                 tui,
                 agent,
-                allow_all,
-                fresh,
+                commands::StartFlags {
+                    allow_all,
+                    fresh,
+                    yes,
+                },
             )
             .await
         }

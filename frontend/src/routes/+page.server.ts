@@ -19,7 +19,12 @@ export const load: PageServerLoad = async ({ fetch }) => {
     listActiveSessions({ fetch }).catch(() => []),
     getProjectCategories({ fetch }).catch(() => []),
   ]);
-  return { projects, activeSessions, categories };
+  return {
+    // Personal projects are their owners' own work, not the catalog.
+    projects: projects.filter((p) => p.kind !== "personal"),
+    activeSessions,
+    categories,
+  };
 };
 
 export const actions: Actions = {

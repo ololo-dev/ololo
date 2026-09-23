@@ -4,9 +4,12 @@
   let {
     slug,
     open = $bindable(),
+    personal = false,
   }: {
     slug: string;
     open: boolean;
+    /** A personal project runs in the user's own repository. */
+    personal?: boolean;
   } = $props();
 </script>
 
@@ -52,9 +55,16 @@
       >
         Start session
       </h3>
-      <p class="mb-[24px] text-[15px] text-brand-muted">
-        Enter this command in your console to start the session.
-      </p>
+      {#if personal}
+        <p class="mb-[24px] text-[15px] text-brand-muted" data-testid="start-personal-note">
+          Run this in your repository — the folder your agent works in. It shows what it will
+          upload and asks before the session starts.
+        </p>
+      {:else}
+        <p class="mb-[24px] text-[15px] text-brand-muted">
+          Enter this command in your console to start the session.
+        </p>
+      {/if}
 
       <CodeBlock code="ololo start {slug}" />
     </div>

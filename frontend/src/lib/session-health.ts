@@ -6,8 +6,10 @@
 import type {
   HealthCheckpointView,
   HealthLevel,
+  HealthTestsView,
   HealthThresholds,
   SessionHealthPayload,
+  SuiteResult,
 } from "$lib/types/arena";
 
 /** Participant series colours, shared by every chart and indicator so one
@@ -81,10 +83,12 @@ export function gradeFromScore(score: number | null | undefined): string | null 
   return "E";
 }
 
-/** The grade shown for a checkpoint: the server's once verified, the
- *  client's until then, derived from the score when neither says. */
+/** The grade shown for a checkpoint: the score's own (the tests composed
+ *  in), else the server's once verified, the client's until then, derived
+ *  from the score when neither says. */
 export function gradeOf(cp: HealthCheckpointView): string | null {
   if (cp.score == null) return null;
+  if (cp.grade) return cp.grade;
   const side = cp.server_status === "ok" ? cp.server : (cp.client ?? cp.server);
   return side?.grade ?? cp.server?.grade ?? cp.client?.grade ?? gradeFromScore(cp.score);
 }
@@ -140,4 +144,65 @@ export function shortSha(sha: string): string {
 
 export function formatScore(score: number | null | undefined): string {
   return score == null ? "—" : score.toFixed(1);
+}
+
+/** A tooltip row: what, the value, and the level colour to paint it in. */
+export interface TooltipLine {
+  label: string;
+  value: string;
+  tone?: HealthLevel;
+}
+
+/** What a run of the tests said, in words: the counts when the output had
+ *  them, else the exit code. */
+export function testsVerdict(result: SuiteResult): string {
+  const c = result.counts;
+  if (c && c.passed + c.failed > 0) {
+    const parts = [`${c.passed} passed`];
+    if (c.failed > 0) parts.push(`${c.failed} failed`);
+    if (c.skipped) parts.push(`${c.skipped} skipped`);
+    return parts.join(" · ");
+  }
+  if (c) return "no tests ran";
+  if (result.exit_code === 0) return "passed (exit 0)";
+  return result.exit_code == null ? "killed" : `failed (exit ${result.exit_code})`;
+}
+
+function failing(result: SuiteResult): boolean {
+  const c = result.counts;
+  if (c) return c.failed > 0;
+  return result.exit_code !== 0;
+}
+
+/** The project's tests in a checkpoint's tooltip: what the counted run
+ *  said and scored, where its log is, and a check's own run that ended
+ *  without numbers. */
+export function testsLines(tests: HealthTestsView | null | undefined): TooltipLine[] {
+  if (!tests) return [];
+  const lines: TooltipLine[] = [];
+  const run = tests.counted;
+  if (run) {
+    let value = testsVerdict(run.result);
+    if (tests.tests_score != null) value += ` · score ${Math.round(tests.tests_score)}`;
+    if (run.inherited) value += ` · from check #${run.probe_seq}`;
+    lines.push({ label: "tests", value, tone: failing(run.result) ? "red" : undefined });
+    const pct = run.result.coverage_pct;
+    if (pct != null) {
+      const score =
+        tests.coverage_score != null ? ` · score ${Math.round(tests.coverage_score)}` : "";
+      lines.push({ label: "coverage", value: `${pct.toFixed(1)}%${score}` });
+    }
+    if (run.log) lines.push({ label: "log", value: run.log });
+  }
+  const attempt = tests.attempt;
+  if (attempt) {
+    const what =
+      attempt.status === "timeout"
+        ? "this check's run timed out"
+        : attempt.status === "declined"
+          ? `not allowed by .ololo/settings.json (${attempt.command})`
+          : `could not start${attempt.error ? `: ${attempt.error}` : ""}`;
+    lines.push({ label: run ? "this run" : "tests", value: what.slice(0, 120), tone: "amber" });
+  }
+  return lines;
 }

@@ -50,7 +50,7 @@ describe("attributeCommits", () => {
     expect(r.attributed.size).toBe(0);
   });
 
-  it("attributes task-addressed auxiliary commits (wip/artifact/flag/memory/start/probe)", () => {
+  it("attributes task-addressed auxiliary commits (wip/artifact/flag/memory/start/probe/tests)", () => {
     const result = attributeCommits([
       mkCommit({ message: "feat(t1): impl", sha: "f" }),
       mkCommit({ message: "wip(t1): checkpoint", sha: "w" }),
@@ -60,6 +60,7 @@ describe("attributeCommits", () => {
       mkCommit({ message: "start(t1): impl", sha: "s" }),
       // Format 1: the trailer block after the subject changes nothing here.
       mkCommit({ message: "probe(t1): #3 impl\n\nOlolo-Format: 1\nOlolo-Task: t1", sha: "p" }),
+      mkCommit({ message: "tests(t1): #3 12 passed, 1 failed", sha: "t" }),
       mkCommit({ message: "artifact: sync", sha: "legacy" }),
     ]);
     expect(
@@ -67,7 +68,7 @@ describe("attributeCommits", () => {
         .get("t1")
         ?.map((c) => c.sha)
         .sort(),
-    ).toEqual(["a", "f", "g", "m", "p", "s", "w"]);
+    ).toEqual(["a", "f", "g", "m", "p", "s", "t", "w"]);
     // The legacy un-addressed form stays unattributed.
     expect(result.unattributed.map((c) => c.sha)).toEqual(["legacy"]);
   });

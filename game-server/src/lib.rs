@@ -2,6 +2,7 @@ pub mod analysis;
 pub mod api;
 pub mod artifacts;
 pub mod health;
+pub mod health_tests;
 pub mod heartbeat;
 pub mod idle_sweep;
 pub mod judge_exec;

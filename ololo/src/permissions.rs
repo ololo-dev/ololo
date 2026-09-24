@@ -64,7 +64,16 @@ pub fn settings_path() -> PathBuf {
 /// Check `command` against the workspace settings file. A `deny` rule still
 /// wins over the session-wide approval — deny is an explicit human "never".
 pub fn check(command: &str) -> Verdict {
-    let (allow, deny) = load_lists(&settings_path());
+    check_at(&settings_path(), command)
+}
+
+/// [`check`] against the settings of the workspace at `workspace`.
+pub fn check_in(workspace: &Path, command: &str) -> Verdict {
+    check_at(&workspace.join(".ololo").join("settings.json"), command)
+}
+
+fn check_at(settings: &Path, command: &str) -> Verdict {
+    let (allow, deny) = load_lists(settings);
     let v = verdict(&allow, &deny, command);
     if v == Verdict::Ask && session_allow_all() {
         return Verdict::Allowed;

@@ -48,6 +48,15 @@ pub struct Model {
     pub server_jscpd_version: Option<String>,
     pub server_error: Option<String>,
     pub server_verified_at: Option<ChronoDateTimeUtc>,
+    /// How the client's run of the project's tests after this probe ended
+    /// (`ok` | `timeout` | `failed` | `declined`); NULL when none was
+    /// reported for this commit — the checkpoint then counts the last run
+    /// before it.
+    pub tests_status: Option<String>,
+    /// That run's `TestReportPayload`.
+    #[sea_orm(column_type = "JsonBinary", nullable)]
+    pub tests_result: Option<Json>,
+    pub tests_reported_at: Option<ChronoDateTimeUtc>,
     pub created_at: ChronoDateTimeUtc,
     pub updated_at: ChronoDateTimeUtc,
 }

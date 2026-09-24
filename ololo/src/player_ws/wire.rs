@@ -162,6 +162,10 @@ pub enum PlayerAgentFrame {
         #[serde(default)]
         error: Option<String>,
     },
+    /// The commands that run the project's tests (and their coverage), as
+    /// the player's docs name them; the suite runner runs one after each
+    /// probe's health analysis.
+    HealthTests(arena_core::protocol::HealthTestsConfig),
 }
 
 #[derive(Debug, Serialize)]

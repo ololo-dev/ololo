@@ -26,6 +26,14 @@ pub const HEALTH_AMBER_MIN_KEY: &str = "health_amber_min";
 /// How far the client's score may sit from the server's before the
 /// checkpoint is flagged `score_mismatch`.
 pub const HEALTH_MISMATCH_TOLERANCE_KEY: &str = "health_mismatch_tolerance";
+/// The project's own tests as health dimensions: read the test commands
+/// from each player's `AGENTS.md` / `README.md` and have the CLI run them
+/// after each probe's analysis. OFF unless explicitly `"true"` (and only
+/// meaningful while health itself is on): running a player's suite costs
+/// their machine real time.
+pub const HEALTH_TESTS_ENABLED_KEY: &str = "health_tests_enabled";
+/// Wall-clock budget of one test run on the player's machine, in seconds.
+pub const HEALTH_TESTS_TIMEOUT_SECS_KEY: &str = "health_tests_timeout_secs";
 
 pub const SETTING_KEYS: &[&str] = &[
     HEALTH_ENABLED_KEY,
@@ -33,11 +41,17 @@ pub const SETTING_KEYS: &[&str] = &[
     HEALTH_GREEN_MIN_KEY,
     HEALTH_AMBER_MIN_KEY,
     HEALTH_MISMATCH_TOLERANCE_KEY,
+    HEALTH_TESTS_ENABLED_KEY,
+    HEALTH_TESTS_TIMEOUT_SECS_KEY,
 ];
 
 pub const DEFAULT_TIMEOUT_SECS: u32 = 30;
 pub const MIN_TIMEOUT_SECS: u32 = 5;
 pub const MAX_TIMEOUT_SECS: u32 = 300;
+
+pub const DEFAULT_TESTS_TIMEOUT_SECS: u32 = 300;
+pub const MIN_TESTS_TIMEOUT_SECS: u32 = 10;
+pub const MAX_TESTS_TIMEOUT_SECS: u32 = 1800;
 
 /// The settings as read at runtime, defaults filled in.
 #[derive(Debug, Clone, PartialEq)]
@@ -46,6 +60,9 @@ pub struct HealthSettings {
     pub timeout: Duration,
     pub thresholds: Thresholds,
     pub tolerance: f64,
+    /// The operator's switch for the test suite; see [`Self::tests_on`].
+    pub tests_enabled: bool,
+    pub tests_timeout: Duration,
 }
 
 impl Default for HealthSettings {
@@ -56,11 +73,18 @@ impl Default for HealthSettings {
             timeout: Duration::from_secs(u64::from(DEFAULT_TIMEOUT_SECS)),
             thresholds: scan.thresholds,
             tolerance: scan.tolerance,
+            tests_enabled: false,
+            tests_timeout: Duration::from_secs(u64::from(DEFAULT_TESTS_TIMEOUT_SECS)),
         }
     }
 }
 
 impl HealthSettings {
+    /// Whether the project's tests are part of health: both switches on.
+    pub fn tests_on(&self) -> bool {
+        self.enabled && self.tests_enabled
+    }
+
     /// The scan configuration for this deployment: the shared defaults with
     /// the operator's budget and thresholds laid over.
     pub fn scan_config(&self) -> ololo_health::HealthConfig {
@@ -104,11 +128,19 @@ impl HealthSettings {
             .and_then(|v| v.trim().parse::<f64>().ok())
             .filter(|n| n.is_finite() && (0.0..=100.0).contains(n))
             .unwrap_or(defaults.tolerance);
+        let tests_enabled = get(HEALTH_TESTS_ENABLED_KEY).is_some_and(|v| v.trim() == "true");
+        let tests_timeout = get(HEALTH_TESTS_TIMEOUT_SECS_KEY)
+            .and_then(|v| v.trim().parse::<u32>().ok())
+            .filter(|n| (MIN_TESTS_TIMEOUT_SECS..=MAX_TESTS_TIMEOUT_SECS).contains(n))
+            .map(|n| Duration::from_secs(u64::from(n)))
+            .unwrap_or(defaults.tests_timeout);
         HealthSettings {
             enabled,
             timeout,
             thresholds,
             tolerance,
+            tests_enabled,
+            tests_timeout,
         }
     }
 
@@ -172,6 +204,24 @@ mod tests {
         assert!(!s.enabled);
         assert_eq!(s.timeout, Duration::from_secs(30));
         assert_eq!(s.tolerance, 0.05);
+    }
+
+    #[test]
+    fn the_test_suite_needs_both_switches_and_a_sane_budget() {
+        let s = settings(&[(HEALTH_TESTS_ENABLED_KEY, "true")]);
+        assert!(s.tests_enabled && !s.tests_on(), "health itself is off");
+        let s = settings(&[
+            (HEALTH_ENABLED_KEY, "true"),
+            (HEALTH_TESTS_ENABLED_KEY, "true"),
+            (HEALTH_TESTS_TIMEOUT_SECS_KEY, "600"),
+        ]);
+        assert!(s.tests_on());
+        assert_eq!(s.tests_timeout, Duration::from_secs(600));
+        let s = settings(&[(HEALTH_ENABLED_KEY, "true")]);
+        assert!(!s.tests_on(), "off unless asked for");
+        assert_eq!(s.tests_timeout, Duration::from_secs(300));
+        let s = settings(&[(HEALTH_TESTS_TIMEOUT_SECS_KEY, "5")]);
+        assert_eq!(s.tests_timeout, Duration::from_secs(300), "below the floor");
     }
 
     #[test]

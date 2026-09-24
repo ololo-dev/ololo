@@ -160,6 +160,13 @@ pub async fn handle_player_agent_socket(
     crate::ws::player_agent::presence::set_agent_presence(&state, &join_code, player_id, true)
         .await;
     _registry_guard.arm_presence(state.clone(), join_code.clone());
+    // The project's test commands, when health scores the suite: what the
+    // docs said so far, then a fresh read in case they changed meanwhile.
+    tokio::spawn(crate::health_tests::on_connect(
+        state.clone(),
+        session_id,
+        player_id,
+    ));
 
     let mut current_interval_secs: i32 = 1;
 
@@ -829,6 +836,18 @@ pub async fn handle_player_agent_socket(
                                     // loop, keep waiting.
                                     if let PlayerAgentClientFrame::HealthReport(report) = frame {
                                         tokio::spawn(crate::health::on_report(
+                                            state.clone(),
+                                            session_id,
+                                            player_id,
+                                            join_code.clone(),
+                                            *report,
+                                        ));
+                                        continue;
+                                    }
+                                    // Nor is a run of the project's tests:
+                                    // it lands on its checkpoint, off this loop.
+                                    if let PlayerAgentClientFrame::TestReport(report) = frame {
+                                        tokio::spawn(crate::health_tests::on_test_report(
                                             state.clone(),
                                             session_id,
                                             player_id,

@@ -1006,3 +1006,283 @@ async fn a_personal_task_is_paid_for_not_making_the_code_worse() {
         paid_b.answer
     );
 }
+
+// ── the project's own tests ──────────────────────────────────────────
+
+async fn enable_tests(rig: &Rig) {
+    app_settings::ActiveModel {
+        key: Set(arena_core::health_settings::HEALTH_TESTS_ENABLED_KEY.to_string()),
+        value: Set("true".to_string()),
+    }
+    .insert(&rig.state.db)
+    .await
+    .expect("enable the suite");
+}
+
+/// The frames the server queues for the player's CLI.
+fn agent_inbox(rig: &Rig) -> tokio::sync::mpsc::Receiver<arena_core::protocol::PlayerAgentFrame> {
+    let (tx, rx) = tokio::sync::mpsc::channel(16);
+    rig.state.player_agent_registry.insert(rig.player_id, tx);
+    rx
+}
+
+fn tests_report(
+    probe_id: Uuid,
+    seq: u32,
+    commit: &str,
+    passed: u64,
+    failed: u64,
+    coverage: Option<f64>,
+) -> arena_core::protocol::TestReportPayload {
+    use arena_core::protocol::{SuiteResult, TestCounts, TestRunStatus};
+    arena_core::protocol::TestReportPayload {
+        probe_id,
+        probe_seq: seq,
+        task_id: None,
+        commit: commit.to_string(),
+        status: TestRunStatus::Ok,
+        command: "npm run coverage".into(),
+        coverage_run: true,
+        result: Some(SuiteResult {
+            exit_code: Some(i32::from(failed > 0)),
+            counts: Some(TestCounts {
+                passed,
+                failed,
+                skipped: 0,
+            }),
+            coverage_pct: coverage,
+            coverage_source: coverage.map(|_| "coverage/lcov.info".to_string()),
+            summary: vec![],
+        }),
+        error: None,
+        duration_ms: 3_000,
+        log: Some(format!(".ololo/probes/{seq:04}-tests.log")),
+    }
+}
+
+#[tokio::test]
+async fn the_docs_name_the_test_commands_and_the_cli_is_told() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let rig = setup().await;
+    let mut inbox = agent_inbox(&rig);
+    rig.write(
+        "AGENTS.md",
+        "# Working here\n\nRun the tests with `npm test`; `npm run coverage` measures coverage.\n",
+    );
+    rig.commit(&Kind::Session, None, "session start @ x", None);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let model = |calls: Arc<AtomicUsize>, answer: &'static str| {
+        move |system: String, user: String| {
+            let calls = calls.clone();
+            async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                assert!(system.contains("untrusted content"));
+                assert!(user.contains("=== AGENTS.md ==="), "{user}");
+                Ok::<_, String>(answer.to_string())
+            }
+        }
+    };
+
+    // Off unless the operator turns the suite on.
+    game_server::health_tests::refresh_with(
+        &rig.state,
+        rig.session_id,
+        rig.player_id,
+        model(calls.clone(), "{}"),
+    )
+    .await;
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+    enable_tests(&rig).await;
+    game_server::health_tests::refresh_with(
+        &rig.state,
+        rig.session_id,
+        rig.player_id,
+        model(
+            calls.clone(),
+            r#"{"test": "npm test", "coverage": "npm run coverage"}"#,
+        ),
+    )
+    .await;
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    let row = arena_core::entities::player_test_commands::Entity::find()
+        .one(&rig.state.db)
+        .await
+        .unwrap()
+        .expect("stored");
+    assert_eq!(row.test_command.as_deref(), Some("npm test"));
+    assert_eq!(row.coverage_command.as_deref(), Some("npm run coverage"));
+    assert_eq!(row.source_list(), vec!["AGENTS.md".to_string()]);
+    match inbox.try_recv() {
+        Ok(arena_core::protocol::PlayerAgentFrame::HealthTests(cfg)) => {
+            assert_eq!(cfg.command(), Some(("npm run coverage", true)));
+            assert_eq!(cfg.timeout_secs, 300);
+        }
+        other => panic!("expected the commands, got {other:?}"),
+    }
+
+    // The same docs are not read twice.
+    game_server::health_tests::refresh_with(
+        &rig.state,
+        rig.session_id,
+        rig.player_id,
+        model(calls.clone(), "{}"),
+    )
+    .await;
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+    // Changed docs are read again (a minute after the last read) and the
+    // CLI hears the change.
+    rig.write("AGENTS.md", "Tests: `cargo test`.\n");
+    rig.commit(&Kind::Memory, None, "sources @ x", None);
+    let mut am: arena_core::entities::player_test_commands::ActiveModel = row.into();
+    am.updated_at = Set(Utc::now() - chrono::Duration::minutes(2));
+    am.update(&rig.state.db).await.unwrap();
+    game_server::health_tests::refresh_with(
+        &rig.state,
+        rig.session_id,
+        rig.player_id,
+        model(calls.clone(), r#"{"test": "cargo test", "coverage": null}"#),
+    )
+    .await;
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    match inbox.try_recv() {
+        Ok(arena_core::protocol::PlayerAgentFrame::HealthTests(cfg)) => {
+            assert_eq!(cfg.command(), Some(("cargo test", false)));
+        }
+        other => panic!("expected the new commands, got {other:?}"),
+    }
+
+    // A reconnecting CLI is told again what was read.
+    game_server::health_tests::on_connect(rig.state.clone(), rig.session_id, rig.player_id).await;
+    match inbox.try_recv() {
+        Ok(arena_core::protocol::PlayerAgentFrame::HealthTests(cfg)) => {
+            assert_eq!(cfg.test.as_deref(), Some("cargo test"));
+        }
+        other => panic!("expected the commands on connect, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_test_report_lands_on_its_checkpoint_and_rescores_it() {
+    let rig = setup().await;
+    enable_tests(&rig).await;
+    rig.write("src/a.js", CODE);
+    rig.commit(&Kind::Session, None, "session start @ x", None);
+    rig.commit(&Kind::Start, Some(rig.task_a), "Task A", None);
+    let probe = Uuid::new_v4();
+    let sha = rig.commit(
+        &Kind::Probe,
+        Some(rig.task_a),
+        "#1 Task A",
+        Some((probe, 1)),
+    );
+    let tree = score_of(&[("src/a.js", CODE)]);
+    game_server::health::on_report(
+        rig.state.clone(),
+        rig.session_id,
+        rig.player_id,
+        rig.join_code.clone(),
+        rig.report(probe, 1, rig.task_a, &sha, tree.score),
+    )
+    .await;
+    let verified = rig.checkpoint(&sha).await;
+    assert_eq!(verified.server_score, tree.score);
+    let before = rig.health_events_at_least(2).await.len();
+
+    game_server::health_tests::on_test_report(
+        rig.state.clone(),
+        rig.session_id,
+        rig.player_id,
+        rig.join_code.clone(),
+        tests_report(probe, 1, &sha, 9, 1, Some(81.0)),
+    )
+    .await;
+    let row = health_checkpoints::Entity::find_by_id(verified.id)
+        .one(&rig.state.db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.tests_status.as_deref(), Some("ok"));
+    assert_eq!(row.server_score, tree.score, "the tree's own score stays");
+
+    let events = rig.health_events_at_least(before + 1).await;
+    let ZmqEvent::HealthUpdated { checkpoint, .. } = events.last().unwrap() else {
+        unreachable!()
+    };
+    let tests = checkpoint.tests.as_ref().expect("the suite's part");
+    assert_eq!(tests.tests_score, Some(50.0), "one test in ten failing");
+    assert_eq!(tests.coverage_score, Some(71.9), "81% covered");
+    assert!(
+        checkpoint.score.unwrap() < tree.score.unwrap(),
+        "a failing test costs: {:?} vs {:?}",
+        checkpoint.score,
+        tree.score
+    );
+    let counted = tests.counted.as_ref().unwrap();
+    assert_eq!(counted.log.as_deref(), Some(".ololo/probes/0001-tests.log"));
+}
+
+#[tokio::test]
+async fn the_bonus_is_paid_on_the_tree_with_its_tests() {
+    let rig = setup().await;
+    enable_tests(&rig).await;
+    rig.write("src/a.js", CODE);
+    rig.commit(&Kind::Session, None, "session start @ x", None);
+    rig.commit(&Kind::Start, Some(rig.task_a), "Task A", None);
+    let probe = Uuid::new_v4();
+    let sha = rig.commit(
+        &Kind::Probe,
+        Some(rig.task_a),
+        "#1 Task A",
+        Some((probe, 1)),
+    );
+    let tree = score_of(&[("src/a.js", CODE)]);
+    game_server::health::on_report(
+        rig.state.clone(),
+        rig.session_id,
+        rig.player_id,
+        rig.join_code.clone(),
+        rig.report(probe, 1, rig.task_a, &sha, tree.score),
+    )
+    .await;
+    rig.checkpoint(&sha).await;
+    // Every test failing, nothing covered: the suite is red.
+    game_server::health_tests::on_test_report(
+        rig.state.clone(),
+        rig.session_id,
+        rig.player_id,
+        rig.join_code.clone(),
+        tests_report(probe, 1, &sha, 0, 6, Some(0.0)),
+    )
+    .await;
+    let feat = rig.commit(&Kind::Feat, Some(rig.task_a), "Task A", None);
+    let task = tasks::Entity::find_by_id(rig.task_a)
+        .one(&rig.state.db)
+        .await
+        .unwrap()
+        .unwrap();
+    game_server::health::on_task_closed(
+        rig.state.clone(),
+        rig.session_id,
+        rig.player_id,
+        rig.join_code.clone(),
+        task,
+    )
+    .await;
+    assert_eq!(rig.checkpoint(&feat).await.server_score, tree.score);
+    let paid = bonus_row_of(&rig, rig.task_a).await;
+    let tree_alone =
+        ololo_health::bonus(tree.score, &ololo_health::Thresholds::default(), 20).points;
+    assert!(tree_alone > 0, "the tree alone would earn: {tree:?}");
+    assert_eq!(
+        paid.point_delta, 0,
+        "a red suite sinks the grade: {}",
+        paid.answer
+    );
+    assert!(
+        paid.answer.contains("(with tests 0, coverage 18)"),
+        "{}",
+        paid.answer
+    );
+}

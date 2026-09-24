@@ -22,6 +22,7 @@ mod player_ws;
 mod probe;
 mod project_repo;
 mod snapshot;
+mod suite_run;
 mod task_stats;
 mod tui;
 mod ui;

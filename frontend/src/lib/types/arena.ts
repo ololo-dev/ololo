@@ -157,6 +157,66 @@ export interface HealthSide {
   error?: string | null;
 }
 
+/** How one run of the project's tests ended: `ok` ran to its end
+ *  (whatever it exited with), the rest measured nothing. */
+export type TestRunStatus = "ok" | "timeout" | "failed" | "declined";
+
+export interface TestCounts {
+  passed: number;
+  failed: number;
+  skipped?: number;
+}
+
+/** What one run of the project's test command measured. */
+export interface SuiteResult {
+  exit_code?: number | null;
+  counts?: TestCounts | null;
+  /** Line coverage, in percent. */
+  coverage_pct?: number | null;
+  /** Where the coverage was read: a report file, or `output`. */
+  coverage_source?: string | null;
+  /** The output lines the numbers were read from. */
+  summary?: string[];
+}
+
+/** The run a checkpoint counts. */
+export interface TestRunView {
+  command: string;
+  coverage_run?: boolean;
+  result: SuiteResult;
+  duration_ms: number;
+  /** The run's whole output in the snapshot history (`.ololo/probes/…`). */
+  log?: string | null;
+  /** The check the run followed. */
+  probe_seq: number;
+  /** The run belongs to an earlier check: the code was not tested since. */
+  inherited?: boolean;
+}
+
+/** A check's own run that ended without numbers. */
+export interface TestAttemptView {
+  status: TestRunStatus;
+  command: string;
+  error?: string | null;
+  duration_ms: number;
+}
+
+/** The project's test suite as part of a checkpoint's score. */
+export interface HealthTestsView {
+  counted?: TestRunView | null;
+  attempt?: TestAttemptView | null;
+  tests_score?: number | null;
+  coverage_score?: number | null;
+}
+
+/** The commands a player's AGENTS.md / README.md name for the tests. */
+export interface PlayerTestCommandsView {
+  test?: string | null;
+  coverage?: string | null;
+  sources: string[];
+  updated_at: string;
+}
+
 /** One point of the health line. */
 export interface HealthCheckpointView {
   id: string;
@@ -173,9 +233,14 @@ export interface HealthCheckpointView {
   server?: HealthSide | null;
   server_status: HealthCheckStatus;
   flags?: HealthFlags;
-  /** The score to show: the server's once verified, the client's until then. */
+  /** The score to show: the server's once verified, the client's until
+   *  then — with the project's tests composed in when a run counts. */
   score?: number | null;
+  /** The grade of `score`. */
+  grade?: string | null;
   level: HealthLevel;
+  /** The test suite's part of the score, when the project's tests run. */
+  tests?: HealthTestsView | null;
 }
 
 /** A task's span in a player's history, for the chart's separators. */
@@ -194,6 +259,8 @@ export interface TaskRangeView {
 export interface PlayerHealthPayload {
   checkpoints: HealthCheckpointView[];
   task_ranges: TaskRangeView[];
+  /** The test commands the player's docs name, once they were read. */
+  test_commands?: PlayerTestCommandsView | null;
 }
 
 export interface SessionHealthPayload {

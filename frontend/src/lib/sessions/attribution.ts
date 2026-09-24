@@ -15,10 +15,11 @@ export type AttributionTask = {
 
 const BASELINE_RE = /^ololo snapshot: session start @/;
 // Any task-addressed commit belongs to that task's Changes view: the final
-// feat() snapshot, wip() checkpoints, the start() marker and probe()
-// commits of the health loop, and the auxiliary artifact/flag/memory
-// commits ololo stamps with the task in play.
-const FEAT_RE = /^(?:feat|wip|artifact|flag|memory|start|probe)\(([\w-]+)\):\s*(.+)/;
+// feat() snapshot, wip() checkpoints, the start() marker, the probe()
+// commits of the health loop and the tests() commits carrying their test
+// logs, and the auxiliary artifact/flag/memory commits ololo stamps with
+// the task in play.
+const FEAT_RE = /^(?:feat|wip|artifact|flag|memory|start|probe|tests)\(([\w-]+)\):\s*(.+)/;
 
 export function attributeCommits(
   commits: PlayerHistoryCommit[],

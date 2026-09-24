@@ -23,7 +23,8 @@ use arena_core::entities::{
     health_checkpoints, probes, session_scheduler_state, sessions, task_results, tasks,
 };
 use arena_core::health::{
-    cap_result, checkpoint_view, commit_exists, export_commit, first_parent_log,
+    cap_result, checkpoint_view, commit_exists, composed_score, counted_run_at, export_commit,
+    first_parent_log,
 };
 use arena_core::health_settings::HealthSettings;
 use arena_core::protocol::{
@@ -228,6 +229,9 @@ pub async fn on_report(
                 server_jscpd_version: Set(None),
                 server_error: Set(server_error),
                 server_verified_at: Set(None),
+                tests_status: Set(None),
+                tests_result: Set(None),
+                tests_reported_at: Set(None),
                 created_at: Set(now),
                 updated_at: Set(now),
             };
@@ -241,6 +245,15 @@ pub async fn on_report(
 
     log_checkpoint(&state, session_id, player_id, id, "health_report", &report).await;
     publish(&state, session_id, &join_code, id, &settings).await;
+    // Every report is a chance the player's docs changed what runs their
+    // tests; reading them is cheap when they did not.
+    if settings.tests_on() {
+        tokio::spawn(crate::health_tests::refresh(
+            state.clone(),
+            session_id,
+            player_id,
+        ));
+    }
     if server_status == HealthCheckStatus::Pending {
         let verifier = state.clone();
         tokio::spawn(async move {
@@ -341,6 +354,9 @@ pub async fn on_task_closed(
                     server_jscpd_version: Set(None),
                     server_error: Set(error),
                     server_verified_at: Set(None),
+                    tests_status: Set(None),
+                    tests_result: Set(None),
+                    tests_reported_at: Set(None),
                     created_at: Set(now),
                     updated_at: Set(now),
                 };
@@ -406,7 +422,23 @@ pub async fn award_health_bonus(
             .iter()
             .find(|r| r.kind == HealthCheckpointKind::Probe.as_str())
     });
-    let score = source.and_then(|r| r.server_score);
+    // The tree's verified score with the project's tests composed in: the
+    // last run the player's CLI completed at or before this checkpoint.
+    let end = match source {
+        Some(row) => {
+            let counted = counted_run_at(
+                &state.db,
+                session_id,
+                player_id,
+                row.created_at,
+                &row.commit_sha,
+            )
+            .await;
+            Some(composed_score(row, counted.as_ref()))
+        }
+        None => None,
+    };
+    let score = end.as_ref().and_then(|c| c.score);
     let level = ololo_health::level(score, &settings.thresholds);
     let existing_code =
         arena_core::project_repo::session_starts_from_existing_code(&state.db, session_id)
@@ -420,12 +452,18 @@ pub async fn award_health_bonus(
     } else {
         None
     };
+    // A start and an end are compared on the dimensions both have: a start
+    // the suite never ran on is compared with the end's tree alone.
+    let (start_score, end_score) = match (&start, &end) {
+        (Some(start), Some(end)) => ololo_health::compose::comparable(&start.composed, end),
+        _ => (None, score),
+    };
     let bonus = match &start {
-        Some(start) => ololo_health::delta_bonus(start.score, score, &settings.thresholds, weight),
+        Some(_) => ololo_health::delta_bonus(start_score, end_score, &settings.thresholds, weight),
         None => ololo_health::bonus(score, &settings.thresholds, weight),
     };
-    let note = match (&start, source, score) {
-        (Some(start), Some(_), Some(end)) => match start.score {
+    let note = match (&start, source, end_score) {
+        (Some(start), Some(_), Some(end)) => match start_score {
             Some(from) => format!(
                 "health-bonus: {from:.1} at {} → {end:.1} ({:+.1}) → {}/{weight}",
                 start.label,
@@ -438,6 +476,29 @@ pub async fn award_health_bonus(
             ),
         },
         _ => base_note(source, score, level, bonus.points, weight),
+    };
+    // Name the suite's part when it counted: always for a grade, for a
+    // comparison only when the start was measured with it too.
+    let counted = |id: &str| -> Option<f64> {
+        let end = end.as_ref()?;
+        let in_start = start
+            .as_ref()
+            .is_none_or(|s| s.composed.sub_score(id).is_some());
+        end.sub_score(id).filter(|_| in_start)
+    };
+    let note = match (
+        counted(ololo_health::suite::TESTS_ID),
+        counted(ololo_health::suite::COVERAGE_ID),
+    ) {
+        (None, None) => note,
+        (tests, coverage) => {
+            let part = |name: &str, s: Option<f64>| s.map(|s| format!("{name} {s:.0}"));
+            let parts: Vec<String> = [part("tests", tests), part("coverage", coverage)]
+                .into_iter()
+                .flatten()
+                .collect();
+            format!("{note} (with {})", parts.join(", "))
+        }
     };
     let row = task_results::ActiveModel {
         id: Set(Uuid::new_v4()),
@@ -474,7 +535,9 @@ pub async fn award_health_bonus(
             "score": score,
             "level": level,
             "source_checkpoint": source.map(|r| r.id),
-            "start_score": start.as_ref().and_then(|s| s.score),
+            "start_score": start_score,
+            "tests_score": end.as_ref().and_then(|e| e.sub_score(ololo_health::suite::TESTS_ID)),
+            "coverage_score": end.as_ref().and_then(|e| e.sub_score(ololo_health::suite::COVERAGE_ID)),
             "note": note,
         }),
     )
@@ -518,7 +581,8 @@ fn base_note(
 /// Where a personal task's health started: the end of the task before it,
 /// when that was verified, else the tree the session started from.
 struct TaskStart {
-    score: Option<f64>,
+    /// The start's score, with the test run it counted composed in.
+    composed: ololo_health::compose::Composed,
     /// For the bonus note: "the session start", "the end of task 2".
     label: String,
 }
@@ -550,17 +614,27 @@ async fn task_start_score(
             .ok()
             .flatten();
         if let Some(row) = final_row {
+            let counted = counted_run_at(
+                &state.db,
+                session_id,
+                player_id,
+                row.created_at,
+                &row.commit_sha,
+            )
+            .await;
             return TaskStart {
-                score: row.server_score,
+                composed: composed_score(&row, counted.as_ref()),
                 label: format!("the end of task {}", previous.ordinal + 1),
             };
         }
     }
+    // The session's first tree: scored before the suite ever ran on it.
     let base = baseline(state, session_id, player_id, join_code).await;
     TaskStart {
-        score: base
+        composed: base
             .filter(|r| r.server_status == HealthCheckStatus::Ok.as_str())
-            .and_then(|r| r.server_score),
+            .map(|r| composed_score(&r, None))
+            .unwrap_or_default(),
         label: "the session start".to_string(),
     }
 }
@@ -632,6 +706,9 @@ async fn baseline(
                 server_jscpd_version: Set(None),
                 server_error: Set(None),
                 server_verified_at: Set(None),
+                tests_status: Set(None),
+                tests_result: Set(None),
+                tests_reported_at: Set(None),
                 // On the chart the baseline sits where the session began.
                 created_at: Set(started_at.unwrap_or(now)),
                 updated_at: Set(now),
@@ -943,6 +1020,18 @@ async fn log_checkpoint(
     .await;
 }
 
+/// Publish the checkpoint's current view to the dashboards (for the test
+/// reports, which rescore checkpoints after the fact).
+pub(crate) async fn publish_view(
+    state: &GameServerState,
+    session_id: Uuid,
+    join_code: &str,
+    checkpoint_id: Uuid,
+    settings: &HealthSettings,
+) {
+    publish(state, session_id, join_code, checkpoint_id, settings).await;
+}
+
 /// Publish the checkpoint's current view to the dashboards.
 async fn publish(
     state: &GameServerState,
@@ -1005,11 +1094,20 @@ pub async fn view_of(
             .map(|t| t.title),
         None => None,
     };
+    let counted = counted_run_at(
+        &state.db,
+        row.session_id_fk,
+        row.player_id_fk,
+        row.created_at,
+        &row.commit_sha,
+    )
+    .await;
     Some(checkpoint_view(
         &row,
         title,
         started_at,
         &settings.thresholds,
+        counted.as_ref(),
     ))
 }
 

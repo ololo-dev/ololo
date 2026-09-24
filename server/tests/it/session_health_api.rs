@@ -102,6 +102,9 @@ async fn insert_checkpoint(
         server_jscpd_version: Set(Some(ololo_health_version())),
         server_error: Set(None),
         server_verified_at: Set(Some(now)),
+        tests_status: Set(None),
+        tests_result: Set(None),
+        tests_reported_at: Set(None),
         created_at: Set(now),
         updated_at: Set(now),
     }
@@ -220,4 +223,157 @@ async fn the_history_is_served_with_the_sessions_visibility_and_omitted_when_off
         .expect("get");
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     let _ = code;
+}
+
+/// A tree's result as a verifier stores it: jscpd's dimensions included,
+/// so the suite's dimensions can be composed in.
+fn tree_result(score: f64) -> serde_json::Value {
+    serde_json::json!({
+        "schema": 2, "jscpd_version": "0.1.17", "score": score, "grade": "B", "level": "green",
+        "health": {"score": score, "grade": "B", "dimensions": [
+            {"id": "duplication", "source": "jscpd", "weight": 1.0, "score": score},
+            {"id": "complexity", "source": "jscpd", "weight": 1.0, "score": score}
+        ]},
+        "metrics": {"files": 2, "code_lines": 40, "clones": 0,
+                    "ignore_markers": 0, "jscpd_config_present": false},
+        "duration_ms": 5
+    })
+}
+
+#[tokio::test]
+async fn the_history_composes_the_last_completed_test_run_into_every_later_checkpoint() {
+    use arena_core::protocol::{
+        PlayerId, SuiteResult, TestCounts, TestReportPayload, TestRunStatus,
+    };
+    let state = test_state().await;
+    let app = build_router(state.clone());
+    let (_, owner) = register_and_login_default(app.clone(), "own-t@x.test").await;
+    let (_, joiner) = register_and_login_default(app.clone(), "join-t@x.test").await;
+    let (session_id, _code, player_id) = session_with_player(&app, &owner, &joiner).await;
+
+    let run = |seq: u32, status: TestRunStatus, failed: u64| TestReportPayload {
+        probe_id: Uuid::new_v4(),
+        probe_seq: seq,
+        task_id: None,
+        commit: format!("{seq:040}"),
+        status,
+        command: "npm test".into(),
+        coverage_run: false,
+        result: (status == TestRunStatus::Ok).then(|| SuiteResult {
+            exit_code: Some(i32::from(failed > 0)),
+            counts: Some(TestCounts {
+                passed: 10 - failed,
+                failed,
+                skipped: 0,
+            }),
+            ..SuiteResult::default()
+        }),
+        error: (status != TestRunStatus::Ok).then(|| "timed out after 300s".to_string()),
+        duration_ms: 900,
+        log: Some(format!(".ololo/probes/{seq:04}-tests.log")),
+    };
+    // #1 before any run, #2 with one test in ten failing, #3 untested
+    // (unchanged code), #4 whose own run timed out.
+    let base = chrono::Utc::now() - chrono::Duration::seconds(40);
+    for (seq, tests) in [
+        (1, None),
+        (2, Some(run(2, TestRunStatus::Ok, 1))),
+        (3, None),
+        (4, Some(run(4, TestRunStatus::Timeout, 0))),
+    ] {
+        let at = base + chrono::Duration::seconds(i64::from(seq) * 5);
+        health_checkpoints::ActiveModel {
+            id: Set(Uuid::new_v4()),
+            session_id_fk: Set(session_id),
+            player_id_fk: Set(player_id),
+            task_id_fk: Set(None),
+            probe_id_fk: Set(None),
+            kind: Set("probe".into()),
+            probe_seq: Set(seq),
+            commit_sha: Set(format!("{seq:040}")),
+            derived_task_id: Set(None),
+            score_mismatch: Set(false),
+            version_mismatch: Set(false),
+            task_mismatch: Set(false),
+            late: Set(false),
+            history_rewritten: Set(false),
+            client_status: Set(Some("ok".into())),
+            client_score: Set(Some(80.0)),
+            client_grade: Set(Some("B".into())),
+            client_result: Set(Some(tree_result(80.0))),
+            client_duration_ms: Set(Some(10)),
+            client_jscpd_version: Set(Some(ololo_health_version())),
+            client_error: Set(None),
+            client_reported_at: Set(Some(at)),
+            server_status: Set("ok".into()),
+            server_score: Set(Some(80.0)),
+            server_grade: Set(Some("B".into())),
+            server_result: Set(Some(tree_result(80.0))),
+            server_duration_ms: Set(Some(20)),
+            server_jscpd_version: Set(Some(ololo_health_version())),
+            server_error: Set(None),
+            server_verified_at: Set(Some(at)),
+            tests_status: Set(tests.as_ref().map(|t| t.status.as_str().to_string())),
+            tests_result: Set(tests.map(|t| serde_json::to_value(t).unwrap())),
+            tests_reported_at: Set(None),
+            created_at: Set(at),
+            updated_at: Set(at),
+        }
+        .insert(&state.db)
+        .await
+        .expect("checkpoint");
+    }
+    arena_core::entities::player_test_commands::ActiveModel {
+        id: Set(Uuid::new_v4()),
+        session_id_fk: Set(session_id),
+        player_id_fk: Set(player_id),
+        test_command: Set(Some("npm test".into())),
+        coverage_command: Set(None),
+        sources: Set(r#"["README.md"]"#.into()),
+        source_hash: Set("h".into()),
+        created_at: Set(chrono::Utc::now()),
+        updated_at: Set(chrono::Utc::now()),
+    }
+    .insert(&state.db)
+    .await
+    .expect("commands");
+
+    let payload = server::api::sessions::load_session_health(&state.db, session_id, None)
+        .await
+        .expect("checkpoints exist");
+    let mine = &payload.players[&PlayerId(player_id)];
+    let [first, second, third, fourth] = &mine.checkpoints[..] else {
+        panic!("four checkpoints: {:?}", mine.checkpoints);
+    };
+    assert_eq!(first.score, Some(80.0), "no run yet: the tree alone");
+    assert!(first.tests.is_none());
+    // 80, 80 and the tests' 50 (one in ten failing).
+    assert_eq!(second.score, Some(68.4));
+    let counted = second.tests.as_ref().unwrap().counted.as_ref().unwrap();
+    assert!(!counted.inherited);
+    assert_eq!(counted.log.as_deref(), Some(".ololo/probes/0002-tests.log"));
+    assert_eq!(
+        third.score,
+        Some(68.4),
+        "the run carries over to untested code"
+    );
+    assert!(
+        third
+            .tests
+            .as_ref()
+            .unwrap()
+            .counted
+            .as_ref()
+            .unwrap()
+            .inherited
+    );
+    let fourth_tests = fourth.tests.as_ref().unwrap();
+    assert_eq!(
+        fourth_tests.attempt.as_ref().map(|a| a.status),
+        Some(TestRunStatus::Timeout)
+    );
+    assert_eq!(fourth_tests.counted.as_ref().unwrap().probe_seq, 2);
+    let commands = mine.test_commands.as_ref().expect("the docs were read");
+    assert_eq!(commands.test.as_deref(), Some("npm test"));
+    assert_eq!(commands.sources, vec!["README.md".to_string()]);
 }

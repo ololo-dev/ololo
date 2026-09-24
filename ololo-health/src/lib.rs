@@ -19,8 +19,10 @@
 //! the directory happens to sit inside a git repository.
 
 mod analyze;
+pub mod compose;
 pub mod config;
 pub mod score;
+pub mod suite;
 
 pub use analyze::{HealthError, HealthResult, Metrics, analyze, analyze_async};
 pub use config::{

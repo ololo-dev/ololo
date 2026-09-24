@@ -201,6 +201,8 @@ pub struct SnapshotChannel {
     pub snapshot: Arc<std::sync::Mutex<crate::snapshot::SnapshotRepo>>,
     /// Scores the tree of each probe commit and reports, off this loop.
     pub health: crate::health_run::HealthRunnerHandle,
+    /// Runs the project's tests after each probe's health report.
+    pub suite: crate::suite_run::SuiteRunnerHandle,
     /// Who we are, for the reports (learned from the resolve endpoint).
     pub session_id: Option<Uuid>,
     pub player_id: Option<Uuid>,
@@ -495,6 +497,7 @@ async fn connect_once(
                                 probe_id,
                                 probe_seq,
                                 task_id,
+                                task_title: task_title.clone(),
                                 session_id: m.session_id,
                                 player_id: m.player_id,
                                 commit: committed,
@@ -905,6 +908,12 @@ async fn connect_once(
                                 judge_name,
                             },
                         );
+                    }
+                    wire::PlayerAgentFrame::HealthTests(cfg) => {
+                        // The runner narrates the commands itself.
+                        if let Some(m) = memory.as_ref() {
+                            m.suite.set_commands(cfg);
+                        }
                     }
                 }
             }

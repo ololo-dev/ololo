@@ -5,8 +5,10 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use arena_core::entities::{health_checkpoints, sessions, tasks};
-use arena_core::health::{checkpoint_view, elapsed_secs, first_parent_log};
+use arena_core::entities::{health_checkpoints, player_test_commands, sessions, tasks};
+use arena_core::health::{
+    checkpoint_view, counted_runs, elapsed_secs, first_parent_log, test_commands_view,
+};
 use arena_core::health_settings::HealthSettings;
 use arena_core::protocol::{PlayerHealthPayload, PlayerId, SessionHealthPayload, TaskRangeView};
 use arena_core::snapshot_message::task_ranges;
@@ -60,22 +62,41 @@ pub async fn load_session_health(
         .map(|t| (t.id, (t.title, t.ordinal)))
         .collect();
 
-    let mut players: BTreeMap<PlayerId, PlayerHealthPayload> = BTreeMap::new();
+    // Each player's checkpoints, oldest first, with the test run each one
+    // counts: its own, or the last one completed before it.
+    let mut by_player: BTreeMap<Uuid, Vec<&health_checkpoints::Model>> = BTreeMap::new();
     for row in &rows {
-        let title = row
-            .task_id_fk
-            .and_then(|t| titles.get(&t))
-            .map(|(title, _)| title.clone());
-        players
-            .entry(PlayerId(row.player_id_fk))
-            .or_default()
-            .checkpoints
-            .push(checkpoint_view(
+        by_player.entry(row.player_id_fk).or_default().push(row);
+    }
+    let mut players: BTreeMap<PlayerId, PlayerHealthPayload> = BTreeMap::new();
+    for (player_id, player_rows) in &by_player {
+        let counted = counted_runs(player_rows);
+        let entry = players.entry(PlayerId(*player_id)).or_default();
+        for (row, counted) in player_rows.iter().zip(counted.iter()) {
+            let title = row
+                .task_id_fk
+                .and_then(|t| titles.get(&t))
+                .map(|(title, _)| title.clone());
+            entry.checkpoints.push(checkpoint_view(
                 row,
                 title,
                 session.started_at,
                 &settings.thresholds,
+                counted.as_ref(),
             ));
+        }
+    }
+    // The test commands each player's docs name, once they were read.
+    let mut commands = player_test_commands::Entity::find()
+        .filter(player_test_commands::Column::SessionIdFk.eq(session_id));
+    if let Some(player) = only_player {
+        commands = commands.filter(player_test_commands::Column::PlayerIdFk.eq(player));
+    }
+    for row in commands.all(db).await.unwrap_or_default() {
+        players
+            .entry(PlayerId(row.player_id_fk))
+            .or_default()
+            .test_commands = Some(test_commands_view(&row));
     }
     // Task ranges come from each player's history; a player with no
     // checkpoints yet still gets ranges once they have pushed.

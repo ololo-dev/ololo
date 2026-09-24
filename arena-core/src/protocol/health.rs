@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+pub use ololo_health::suite::{SuiteResult, TestCounts};
 pub use ololo_health::{HealthResult, Level, Metrics, Thresholds};
 
 use super::PlayerId;
@@ -99,6 +100,169 @@ pub struct HealthReportPayload {
     #[serde(default)]
     pub health_schema: u32,
     pub push: PushStatus,
+}
+
+/// Server → ololo: the project's test commands, as the player's docs name
+/// them. Both absent means the docs name none — nothing runs, and health
+/// is scored without the suite, as before.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HealthTestsConfig {
+    /// Runs the project's test suite.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub test: Option<String>,
+    /// Runs the suite with coverage measured. Preferred when both are
+    /// named: one run gives both numbers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coverage: Option<String>,
+    /// The docs the commands were read from (`AGENTS.md`, `README.md`).
+    #[serde(default)]
+    pub sources: Vec<String>,
+    /// Wall-clock budget of one run, in seconds.
+    pub timeout_secs: u32,
+}
+
+impl HealthTestsConfig {
+    /// The command a run uses: the coverage one when named, else the test one.
+    pub fn command(&self) -> Option<(&str, bool)> {
+        match (&self.coverage, &self.test) {
+            (Some(c), _) => Some((c.as_str(), true)),
+            (None, Some(t)) => Some((t.as_str(), false)),
+            (None, None) => None,
+        }
+    }
+}
+
+/// How one run of the test command ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TestRunStatus {
+    /// The command ran to its end, whatever it exited with — its numbers
+    /// count.
+    Ok,
+    /// Killed at the budget; nothing is known.
+    Timeout,
+    /// It could not be started.
+    Failed,
+    /// The player's permission rules (`.ololo/settings.json`) do not allow
+    /// the command, so it did not run.
+    Declined,
+}
+
+impl TestRunStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TestRunStatus::Ok => "ok",
+            TestRunStatus::Timeout => "timeout",
+            TestRunStatus::Failed => "failed",
+            TestRunStatus::Declined => "declined",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "ok" => Some(Self::Ok),
+            "timeout" => Some(Self::Timeout),
+            "failed" => Some(Self::Failed),
+            "declined" => Some(Self::Declined),
+            _ => None,
+        }
+    }
+}
+
+/// ololo → game-server: one run of the project's test command, made after
+/// a probe's health analysis, for the checkpoint of that probe's commit.
+/// The run happens in the player's working folder (where the suite's
+/// dependencies are), so it measures the code as it stood right after the
+/// commit. Carries the parsed numbers only — never the output itself.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TestReportPayload {
+    pub probe_id: uuid::Uuid,
+    #[serde(default)]
+    pub probe_seq: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<uuid::Uuid>,
+    /// The `probe(<task>)` commit the run followed — its checkpoint's key.
+    pub commit: String,
+    pub status: TestRunStatus,
+    pub command: String,
+    /// `command` is the coverage one.
+    #[serde(default)]
+    pub coverage_run: bool,
+    /// What the run measured, when `status` is `ok`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<SuiteResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    pub duration_ms: u64,
+    /// Where the run's whole output was committed to the snapshot history:
+    /// a path under `.ololo/probes/`. The server keeps the numbers; the log
+    /// is the evidence behind them, for anyone who reads the history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log: Option<String>,
+}
+
+/// A completed run as a checkpoint counts it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TestRunView {
+    pub command: String,
+    #[serde(default)]
+    pub coverage_run: bool,
+    pub result: SuiteResult,
+    pub duration_ms: u64,
+    /// The run's log in the snapshot history (`.ololo/probes/…`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log: Option<String>,
+    /// The check the run followed.
+    pub probe_seq: u32,
+    /// The run belongs to an earlier check: the code has not been tested
+    /// since (it did not change, or this check's own run has not finished).
+    #[serde(default)]
+    pub inherited: bool,
+}
+
+/// A check's own run that ended without numbers.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TestAttemptView {
+    pub status: TestRunStatus,
+    pub command: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    pub duration_ms: u64,
+}
+
+/// The test suite's part of a checkpoint.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HealthTestsView {
+    /// The run the score counts — this check's own, or the last one that
+    /// completed before it; none until a run completes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub counted: Option<TestRunView>,
+    /// This check's own run, when it ended without numbers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt: Option<TestAttemptView>,
+    /// The sub-scores the counted run added.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tests_score: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coverage_score: Option<f64>,
+}
+
+/// The test commands a player's docs name, for the dashboards.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlayerTestCommandsView {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub test: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coverage: Option<String>,
+    #[serde(default)]
+    pub sources: Vec<String>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
 /// Which commit a checkpoint scores.
@@ -201,11 +365,18 @@ pub struct HealthCheckpointView {
     #[serde(default)]
     pub flags: HealthFlags,
     /// The score to show: the server's once verified, the client's until
-    /// then, none when neither scored.
+    /// then, none when neither scored — with the test suite's dimensions
+    /// composed in when a run counts (see `tests`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub score: Option<f64>,
+    /// The grade of `score`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grade: Option<char>,
     /// The colour of `score`.
     pub level: Level,
+    /// The test suite's part of the score, when the project's tests run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tests: Option<HealthTestsView>,
 }
 
 /// A task's span in a player's history, derived from the commit messages
@@ -242,6 +413,9 @@ pub struct PlayerHealthPayload {
     pub checkpoints: Vec<HealthCheckpointView>,
     #[serde(default)]
     pub task_ranges: Vec<TaskRangeView>,
+    /// The test commands the player's docs name, once they were read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub test_commands: Option<PlayerTestCommandsView>,
 }
 
 /// Every participant's health history, as carried in the session snapshot
@@ -317,10 +491,13 @@ mod tests {
                 ..Default::default()
             },
             score: Some(74.3),
+            grade: Some('B'),
             level: Level::Green,
+            tests: None,
         };
         let json = serde_json::to_string(&view).unwrap();
         assert!(json.contains("\"kind\":\"task_final\""));
+        assert!(!json.contains("\"tests\""), "absent until the suite runs");
         assert!(json.contains("\"grade\":\"B\""));
         let back: HealthCheckpointView = serde_json::from_str(&json).unwrap();
         assert_eq!(back, view);
@@ -339,5 +516,79 @@ mod tests {
     fn unknown_fields_are_rejected() {
         let json = r#"{"timeout_secs":30,"extra":1}"#;
         assert!(serde_json::from_str::<HealthProbeConfig>(json).is_err());
+    }
+
+    #[test]
+    fn the_test_commands_travel_as_their_own_agent_frame() {
+        let frame = crate::protocol::PlayerAgentFrame::HealthTests(HealthTestsConfig {
+            test: Some("npm test".into()),
+            coverage: None,
+            sources: vec!["README.md".into()],
+            timeout_secs: 300,
+        });
+        let json = serde_json::to_string(&frame).unwrap();
+        assert!(json.contains("\"type\":\"health_tests\""), "{json}");
+        assert!(
+            !json.contains("coverage"),
+            "absent commands are omitted: {json}"
+        );
+        let back: crate::protocol::PlayerAgentFrame = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, frame);
+    }
+
+    #[test]
+    fn a_run_prefers_the_coverage_command() {
+        let mut cfg = HealthTestsConfig {
+            test: Some("npm test".into()),
+            coverage: Some("npm run coverage".into()),
+            sources: vec![],
+            timeout_secs: 300,
+        };
+        assert_eq!(cfg.command(), Some(("npm run coverage", true)));
+        cfg.coverage = None;
+        assert_eq!(cfg.command(), Some(("npm test", false)));
+        cfg.test = None;
+        assert_eq!(cfg.command(), None);
+    }
+
+    #[test]
+    fn a_test_report_round_trips_as_a_client_frame() {
+        let report = TestReportPayload {
+            probe_id: uuid::Uuid::new_v4(),
+            probe_seq: 4,
+            task_id: None,
+            commit: "abc123".into(),
+            status: TestRunStatus::Ok,
+            command: "npm run coverage".into(),
+            coverage_run: true,
+            result: Some(SuiteResult {
+                exit_code: Some(1),
+                counts: Some(TestCounts {
+                    passed: 12,
+                    failed: 1,
+                    skipped: 0,
+                }),
+                coverage_pct: Some(81.2),
+                coverage_source: Some("coverage/lcov.info".into()),
+                summary: vec!["Tests:       1 failed, 12 passed, 13 total".into()],
+            }),
+            error: None,
+            duration_ms: 4_200,
+            log: Some(".ololo/probes/0004-tests.log".into()),
+        };
+        let frame = crate::protocol::PlayerAgentClientFrame::TestReport(Box::new(report));
+        let json = serde_json::to_string(&frame).unwrap();
+        assert!(json.contains("\"type\":\"test_report\""), "{json}");
+        assert!(json.contains("\"status\":\"ok\""), "{json}");
+        let back: crate::protocol::PlayerAgentClientFrame = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, frame);
+        for status in [
+            TestRunStatus::Ok,
+            TestRunStatus::Timeout,
+            TestRunStatus::Failed,
+            TestRunStatus::Declined,
+        ] {
+            assert_eq!(TestRunStatus::parse(status.as_str()), Some(status));
+        }
     }
 }

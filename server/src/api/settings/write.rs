@@ -45,6 +45,8 @@ pub async fn put_settings(
         arena_core::health_settings::HEALTH_GREEN_MIN_KEY,
         arena_core::health_settings::HEALTH_AMBER_MIN_KEY,
         arena_core::health_settings::HEALTH_MISMATCH_TOLERANCE_KEY,
+        arena_core::health_settings::HEALTH_TESTS_ENABLED_KEY,
+        arena_core::health_settings::HEALTH_TESTS_TIMEOUT_SECS_KEY,
         "email.provider",
         "email.ses_region",
         "email.access_key_id",
@@ -80,6 +82,7 @@ pub async fn put_settings(
         || body.key == crate::api::settings::SESSION_REPLAY_KEY
         || body.key == arena_core::quota::PLANS_ENABLED_KEY
         || body.key == arena_core::health_settings::HEALTH_ENABLED_KEY
+        || body.key == arena_core::health_settings::HEALTH_TESTS_ENABLED_KEY
     {
         if !is_valid_bool_value(&body.value) {
             return Err(SettingsError::InvalidProjectCreationValue);
@@ -103,6 +106,20 @@ pub async fn put_settings(
             .map_err(|_| SettingsError::InvalidPlanLimitValue)?;
         if !(arena_core::health_settings::MIN_TIMEOUT_SECS
             ..=arena_core::health_settings::MAX_TIMEOUT_SECS)
+            .contains(&parsed)
+        {
+            return Err(SettingsError::InvalidPlanLimitValue);
+        }
+        body.value = parsed.to_string();
+    } else if body.key == arena_core::health_settings::HEALTH_TESTS_TIMEOUT_SECS_KEY {
+        // Seconds one run of the player's test suite may take.
+        let parsed: u32 = body
+            .value
+            .trim()
+            .parse()
+            .map_err(|_| SettingsError::InvalidPlanLimitValue)?;
+        if !(arena_core::health_settings::MIN_TESTS_TIMEOUT_SECS
+            ..=arena_core::health_settings::MAX_TESTS_TIMEOUT_SECS)
             .contains(&parsed)
         {
             return Err(SettingsError::InvalidPlanLimitValue);

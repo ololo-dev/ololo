@@ -7,12 +7,16 @@
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
+use ololo_health::compose::{Composed, compose, static_dimensions};
+use ololo_health::suite::{COVERAGE_ID, TESTS_ID, metrics};
 use ololo_health::{Level, Thresholds, level};
+use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder};
 
-use crate::entities::health_checkpoints;
+use crate::entities::{health_checkpoints, player_test_commands};
 use crate::protocol::{
     HealthCheckStatus, HealthCheckpointKind, HealthCheckpointView, HealthFlags, HealthReportStatus,
-    HealthSide, Metrics,
+    HealthSide, HealthTestsView, Metrics, PlayerTestCommandsView, TestAttemptView,
+    TestReportPayload, TestRunStatus, TestRunView,
 };
 use crate::snapshot_message::LogEntry;
 
@@ -131,12 +135,171 @@ pub fn elapsed_secs(started_at: Option<DateTime<Utc>>, at: DateTime<Utc>) -> Opt
     started_at.map(|s| ((at - s).num_milliseconds() as f64 / 1000.0).max(0.0))
 }
 
-/// The browser's view of a checkpoint row.
+// ────────────────────────────── the test suite ──────────────────────────────
+
+/// A completed run of the project's tests, as a checkpoint counts it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CountedRun {
+    pub report: TestReportPayload,
+    /// The run belongs to an earlier checkpoint.
+    pub inherited: bool,
+}
+
+/// The test report stored on a checkpoint row, if any.
+pub fn test_report_of(row: &health_checkpoints::Model) -> Option<TestReportPayload> {
+    row.tests_result
+        .as_ref()
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+}
+
+/// A run whose numbers count: it ran to its end and measured something.
+fn completed(report: &TestReportPayload) -> bool {
+    report.status == TestRunStatus::Ok && report.result.is_some()
+}
+
+/// What each of one player's checkpoints (oldest first) counts: its own
+/// completed run, else the last completed run before it. Runs happen after
+/// a probe's analysis and only when the code changed since the last one,
+/// so "the last run before" is the suite's verdict on the code as it then
+/// stood.
+pub fn counted_runs(rows: &[&health_checkpoints::Model]) -> Vec<Option<CountedRun>> {
+    let mut last: Option<TestReportPayload> = None;
+    rows.iter()
+        .map(|row| match test_report_of(row).filter(completed) {
+            Some(own) => {
+                last = Some(own.clone());
+                Some(CountedRun {
+                    report: own,
+                    inherited: false,
+                })
+            }
+            None => last.clone().map(|report| CountedRun {
+                report,
+                inherited: true,
+            }),
+        })
+        .collect()
+}
+
+/// The run a checkpoint made at `at` counts: the player's last completed
+/// run at or before it. `own_commit` marks the checkpoint's own run as not
+/// inherited.
+pub async fn counted_run_at<C: ConnectionTrait>(
+    db: &C,
+    session_id: uuid::Uuid,
+    player_id: uuid::Uuid,
+    at: DateTime<Utc>,
+    own_commit: &str,
+) -> Option<CountedRun> {
+    let row = health_checkpoints::Entity::find()
+        .filter(health_checkpoints::Column::SessionIdFk.eq(session_id))
+        .filter(health_checkpoints::Column::PlayerIdFk.eq(player_id))
+        .filter(health_checkpoints::Column::TestsStatus.eq(TestRunStatus::Ok.as_str()))
+        .filter(health_checkpoints::Column::CreatedAt.lte(at))
+        .order_by_desc(health_checkpoints::Column::CreatedAt)
+        .one(db)
+        .await
+        .ok()
+        .flatten()?;
+    let report = test_report_of(&row).filter(completed)?;
+    Some(CountedRun {
+        inherited: row.commit_sha != own_commit,
+        report,
+    })
+}
+
+/// The side whose numbers a checkpoint shows: the server's once verified,
+/// the client's until then.
+fn shown_side(
+    row: &health_checkpoints::Model,
+) -> (Option<f64>, Option<char>, Option<&serde_json::Value>) {
+    let verified = HealthCheckStatus::parse(&row.server_status).is_some_and(|s| s.is_verified());
+    if verified {
+        (
+            row.server_score,
+            grade_of(row.server_grade.as_deref()),
+            row.server_result.as_ref(),
+        )
+    } else {
+        (
+            row.client_score,
+            grade_of(row.client_grade.as_deref()),
+            row.client_result.as_ref(),
+        )
+    }
+}
+
+/// The checkpoint's tree scored together with the run it counts. Without
+/// a run — or without dimensions to compose with — it is the tree's own
+/// score.
+pub fn composed_score(row: &health_checkpoints::Model, counted: Option<&CountedRun>) -> Composed {
+    let (score, grade, result) = shown_side(row);
+    let dims = result.and_then(static_dimensions);
+    let extra = counted
+        .and_then(|c| c.report.result.as_ref())
+        .map(metrics)
+        .unwrap_or_default();
+    match dims {
+        Some(dims) => compose(Some(&dims), &extra),
+        None => Composed {
+            score,
+            grade,
+            dimensions: Vec::new(),
+        },
+    }
+}
+
+/// The test suite's part of a checkpoint's view.
+fn tests_view(
+    row: &health_checkpoints::Model,
+    counted: Option<&CountedRun>,
+    composed: &Composed,
+) -> Option<HealthTestsView> {
+    let attempt = test_report_of(row)
+        .filter(|r| !completed(r))
+        .map(|r| TestAttemptView {
+            status: r.status,
+            command: r.command,
+            error: r.error,
+            duration_ms: r.duration_ms,
+        });
+    let counted = counted.and_then(|c| {
+        Some(TestRunView {
+            command: c.report.command.clone(),
+            coverage_run: c.report.coverage_run,
+            result: c.report.result.clone()?,
+            duration_ms: c.report.duration_ms,
+            log: c.report.log.clone(),
+            probe_seq: c.report.probe_seq,
+            inherited: c.inherited,
+        })
+    });
+    (attempt.is_some() || counted.is_some()).then(|| HealthTestsView {
+        counted,
+        attempt,
+        tests_score: composed.sub_score(TESTS_ID),
+        coverage_score: composed.sub_score(COVERAGE_ID),
+    })
+}
+
+/// A player's test commands, for the dashboards.
+pub fn test_commands_view(row: &player_test_commands::Model) -> PlayerTestCommandsView {
+    PlayerTestCommandsView {
+        test: row.test_command.clone(),
+        coverage: row.coverage_command.clone(),
+        sources: row.source_list(),
+        updated_at: row.updated_at,
+    }
+}
+
+/// The browser's view of a checkpoint row. `counted` is the test run the
+/// checkpoint counts (see [`counted_runs`] / [`counted_run_at`]).
 pub fn checkpoint_view(
     row: &health_checkpoints::Model,
     task_title: Option<String>,
     session_started_at: Option<DateTime<Utc>>,
     thresholds: &Thresholds,
+    counted: Option<&CountedRun>,
 ) -> HealthCheckpointView {
     let server_status =
         HealthCheckStatus::parse(&row.server_status).unwrap_or(HealthCheckStatus::Pending);
@@ -164,12 +327,11 @@ pub fn checkpoint_view(
         metrics: metrics_of(row.server_result.as_ref()),
         error: row.server_error.clone(),
     });
-    // The server's number once verified, the client's until then.
-    let score = if server_status.is_verified() {
-        row.server_score
-    } else {
-        row.client_score
-    };
+    // The server's number once verified, the client's until then — with
+    // the test run it counts composed in.
+    let composed = composed_score(row, counted);
+    let tests = tests_view(row, counted, &composed);
+    let score = composed.score;
     HealthCheckpointView {
         id: row.id,
         kind: HealthCheckpointKind::parse(&row.kind).unwrap_or(HealthCheckpointKind::Probe),
@@ -196,6 +358,8 @@ pub fn checkpoint_view(
             Level::Unknown
         },
         score,
+        grade: composed.grade,
+        tests,
     }
 }
 
@@ -435,5 +599,169 @@ mod tests {
         ] {
             assert_eq!(HealthReportStatus::parse(s.as_str()), Some(s));
         }
+    }
+
+    // ── the test suite in a checkpoint ───────────────────────────────
+
+    fn tree_result(score: f64) -> serde_json::Value {
+        serde_json::json!({
+            "schema": 2, "jscpd_version": "0.1.17", "score": score, "grade": "B",
+            "level": "green",
+            "health": {"score": score, "grade": "B", "dimensions": [
+                {"id": "duplication", "source": "jscpd", "weight": 1.0, "score": score},
+                {"id": "complexity", "source": "jscpd", "weight": 1.0, "score": score}
+            ]},
+            "metrics": {"files": 2, "code_lines": 40, "clones": 0,
+                        "ignore_markers": 0, "jscpd_config_present": false},
+            "duration_ms": 5
+        })
+    }
+
+    fn row(seq: i32, commit: &str, tests: Option<TestReportPayload>) -> health_checkpoints::Model {
+        let now = Utc::now();
+        health_checkpoints::Model {
+            id: uuid::Uuid::new_v4(),
+            session_id_fk: uuid::Uuid::nil(),
+            player_id_fk: uuid::Uuid::nil(),
+            task_id_fk: None,
+            probe_id_fk: None,
+            kind: "probe".into(),
+            probe_seq: seq,
+            commit_sha: commit.into(),
+            derived_task_id: None,
+            score_mismatch: false,
+            version_mismatch: false,
+            task_mismatch: false,
+            late: false,
+            history_rewritten: false,
+            client_status: Some("ok".into()),
+            client_score: Some(80.0),
+            client_grade: Some("B".into()),
+            client_result: Some(tree_result(80.0)),
+            client_duration_ms: Some(5),
+            client_jscpd_version: Some("0.1.17".into()),
+            client_error: None,
+            client_reported_at: Some(now),
+            server_status: "ok".into(),
+            server_score: Some(80.0),
+            server_grade: Some("B".into()),
+            server_result: Some(tree_result(80.0)),
+            server_duration_ms: Some(5),
+            server_jscpd_version: Some("0.1.17".into()),
+            server_error: None,
+            server_verified_at: Some(now),
+            tests_status: tests.as_ref().map(|t| t.status.as_str().to_string()),
+            tests_result: tests.map(|t| serde_json::to_value(t).unwrap()),
+            tests_reported_at: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    fn run(seq: u32, status: TestRunStatus, passed: u64, failed: u64) -> TestReportPayload {
+        TestReportPayload {
+            probe_id: uuid::Uuid::new_v4(),
+            probe_seq: seq,
+            task_id: None,
+            commit: format!("c{seq}"),
+            status,
+            command: "npm test".into(),
+            coverage_run: false,
+            result: (status == TestRunStatus::Ok).then(|| crate::protocol::SuiteResult {
+                exit_code: Some(i32::from(failed > 0)),
+                counts: Some(crate::protocol::TestCounts {
+                    passed,
+                    failed,
+                    skipped: 0,
+                }),
+                ..Default::default()
+            }),
+            error: (status != TestRunStatus::Ok).then(|| "timeout after 300s".to_string()),
+            duration_ms: 1_000,
+            log: Some(format!(".ololo/probes/{seq:04}-tests.log")),
+        }
+    }
+
+    #[test]
+    fn a_checkpoint_counts_its_own_run_else_the_last_one_before_it() {
+        let rows = [
+            row(1, "c1", None),
+            row(2, "c2", Some(run(2, TestRunStatus::Ok, 9, 1))),
+            row(3, "c3", None),
+            row(4, "c4", Some(run(4, TestRunStatus::Timeout, 0, 0))),
+            row(5, "c5", Some(run(5, TestRunStatus::Ok, 10, 0))),
+        ];
+        let refs: Vec<&health_checkpoints::Model> = rows.iter().collect();
+        let counted = counted_runs(&refs);
+        assert!(counted[0].is_none(), "nothing ran yet");
+        let own = counted[1].as_ref().unwrap();
+        assert_eq!((own.report.probe_seq, own.inherited), (2, false));
+        let carried = counted[2].as_ref().unwrap();
+        assert_eq!((carried.report.probe_seq, carried.inherited), (2, true));
+        // A run that timed out counts the last completed one.
+        let after_timeout = counted[3].as_ref().unwrap();
+        assert_eq!(
+            (after_timeout.report.probe_seq, after_timeout.inherited),
+            (2, true)
+        );
+        assert_eq!(counted[4].as_ref().unwrap().report.probe_seq, 5);
+    }
+
+    #[test]
+    fn the_view_composes_the_counted_run_into_the_score() {
+        let t = Thresholds::default();
+        let plain = row(1, "c1", None);
+        let view = checkpoint_view(&plain, None, None, &t, None);
+        assert_eq!(view.score, Some(80.0));
+        assert!(view.tests.is_none(), "no suite, no tests part");
+
+        let tested = row(2, "c2", Some(run(2, TestRunStatus::Ok, 9, 1)));
+        let counted = CountedRun {
+            report: test_report_of(&tested).unwrap(),
+            inherited: false,
+        };
+        let view = checkpoint_view(&tested, None, None, &t, Some(&counted));
+        let tests = view.tests.as_ref().unwrap();
+        assert_eq!(tests.tests_score, Some(50.0), "one in ten failing");
+        assert_eq!(tests.coverage_score, None, "coverage was not measured");
+        // geometric mean of 80, 80 and 50
+        assert_eq!(view.score, Some(68.4));
+        assert_eq!(view.grade, Some('C'));
+        assert_eq!(view.level, Level::Amber);
+        assert_eq!(
+            view.server.as_ref().unwrap().score,
+            Some(80.0),
+            "the tree's own score stays"
+        );
+
+        // A check whose own run timed out shows the attempt and counts the earlier run.
+        let timed_out = row(3, "c3", Some(run(3, TestRunStatus::Timeout, 0, 0)));
+        let inherited = CountedRun {
+            inherited: true,
+            ..counted
+        };
+        let view = checkpoint_view(&timed_out, None, None, &t, Some(&inherited));
+        let tests = view.tests.unwrap();
+        assert_eq!(
+            tests.attempt.as_ref().unwrap().status,
+            TestRunStatus::Timeout
+        );
+        assert!(tests.counted.as_ref().unwrap().inherited);
+        assert_eq!(view.score, Some(68.4));
+    }
+
+    #[test]
+    fn a_tree_with_nothing_to_score_stays_unscored_whatever_the_tests_say() {
+        let mut empty = row(1, "c1", Some(run(1, TestRunStatus::Ok, 5, 0)));
+        empty.server_score = None;
+        empty.server_grade = None;
+        empty.server_result = Some(serde_json::json!({"score": null, "metrics": {}}));
+        let counted = CountedRun {
+            report: test_report_of(&empty).unwrap(),
+            inherited: false,
+        };
+        let view = checkpoint_view(&empty, None, None, &Thresholds::default(), Some(&counted));
+        assert_eq!(view.score, None);
+        assert_eq!(view.level, Level::Unknown);
     }
 }

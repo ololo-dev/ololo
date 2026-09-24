@@ -910,6 +910,17 @@ pub async fn drain_during_sleep(
                                     *report,
                                 ));
                             }
+                            // The test run after a probe finishes whenever
+                            // the suite does — usually between probes.
+                            Ok(PlayerAgentClientFrame::TestReport(report)) => {
+                                tokio::spawn(crate::health_tests::on_test_report(
+                                    state.clone(),
+                                    session_id,
+                                    player_id,
+                                    join_code.to_string(),
+                                    *report,
+                                ));
+                            }
                             _ => {}
                         }
                     }

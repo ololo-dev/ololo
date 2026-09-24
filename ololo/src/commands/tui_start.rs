@@ -67,7 +67,10 @@ fn spawn_sync_tasks(
     // reducer or the probe loop; retries and resyncs on its own).
     let (_pusher, _push_task) = snapshot::pusher::spawn(Arc::clone(snap));
     let (handle, mem_task) = crate::memory_sync::spawn(Arc::clone(snap), frame_tx.clone());
-    let (health, _health_task) = crate::health_run::spawn(Arc::clone(snap), frame_tx.clone());
+    let (suite, _suite_task) =
+        crate::suite_run::spawn(Arc::clone(snap), frame_tx.clone(), Some(Arc::clone(&sink)));
+    let (health, _health_task) =
+        crate::health_run::spawn(Arc::clone(snap), frame_tx.clone(), Some(suite.clone()));
     let flag_task = crate::done_flag::spawn(Arc::clone(snap), frame_tx, Some(sink));
     (
         player_ws::SnapshotChannel {
@@ -75,6 +78,7 @@ fn spawn_sync_tasks(
             frames: frame_rx,
             snapshot: Arc::clone(snap),
             health,
+            suite,
             session_id: None,
             player_id: None,
         },

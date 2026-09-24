@@ -203,6 +203,14 @@ pub enum PlayerAgentFrame {
         /// See the `SNAPSHOT_REASON_*` constants.
         reason: String,
     },
+    /// Server → player agent: the commands that run the project's tests
+    /// and its coverage, as the player's `AGENTS.md` / `README.md` name
+    /// them (read by the same model that reads session memory). Sent when
+    /// they change and on connect; the agent runs one after each probe's
+    /// health analysis and answers with `TestReport`. Only sent while code
+    /// health tracks tests, so a fielded binary that predates the variant
+    /// logs an unparseable frame now and then and carries on.
+    HealthTests(super::HealthTestsConfig),
 }
 
 /// `reason` values for [`PlayerAgentFrame::SnapshotRequest`].
@@ -280,6 +288,12 @@ pub enum PlayerAgentClientFrame {
     /// delay it; sent on failure and timeout too, never skipped silently.
     /// Pre-upgrade servers fail to parse the variant and drop the frame.
     HealthReport(Box<super::HealthReportPayload>),
+    /// One run of the project's test command (see
+    /// [`PlayerAgentFrame::HealthTests`]) after a probe's health analysis:
+    /// what the suite reported, for the checkpoint of that probe's commit.
+    /// Only sent to a server that sent `HealthTests`, so it never reaches
+    /// one that would reject the variant.
+    TestReport(Box<super::TestReportPayload>),
     /// The player edited a memory source file (`AGENTS.md` / `README.md`)
     /// and the agent has pushed a commit carrying it.
     ///

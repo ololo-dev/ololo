@@ -743,7 +743,8 @@ async fn session_replay_switch_refuses_non_boolean() {
 async fn settings_put_health_keys_validate_and_persist() {
     use arena_core::health_settings::{
         HEALTH_AMBER_MIN_KEY, HEALTH_ENABLED_KEY, HEALTH_GREEN_MIN_KEY,
-        HEALTH_MISMATCH_TOLERANCE_KEY, HEALTH_TIMEOUT_SECS_KEY, HealthSettings,
+        HEALTH_MISMATCH_TOLERANCE_KEY, HEALTH_TESTS_ENABLED_KEY, HEALTH_TESTS_TIMEOUT_SECS_KEY,
+        HEALTH_TIMEOUT_SECS_KEY, HealthSettings,
     };
     let state = test_state().await;
     let db = state.db.clone();
@@ -781,6 +782,20 @@ async fn settings_put_health_keys_validate_and_persist() {
         put(HEALTH_MISMATCH_TOLERANCE_KEY, "-1").await,
         StatusCode::OK
     );
+    assert_eq!(put(HEALTH_TESTS_ENABLED_KEY, "true").await, StatusCode::OK);
+    assert_ne!(put(HEALTH_TESTS_ENABLED_KEY, "on").await, StatusCode::OK);
+    assert_eq!(
+        put(HEALTH_TESTS_TIMEOUT_SECS_KEY, "600").await,
+        StatusCode::OK
+    );
+    assert_ne!(
+        put(HEALTH_TESTS_TIMEOUT_SECS_KEY, "5").await,
+        StatusCode::OK
+    );
+    assert_ne!(
+        put(HEALTH_TESTS_TIMEOUT_SECS_KEY, "3600").await,
+        StatusCode::OK
+    );
 
     let (status, body) = read_body(
         app.clone()
@@ -802,6 +817,8 @@ async fn settings_put_health_keys_validate_and_persist() {
         (80.0, 60.5)
     );
     assert_eq!(settings.tolerance, 0.5);
+    assert!(settings.tests_on());
+    assert_eq!(settings.tests_timeout, Duration::from_secs(600));
 
     // An inverted pair is stored (keys are edited one at a time) but read
     // back as the defaults, never inside out.

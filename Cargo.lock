@@ -3018,6 +3018,7 @@ dependencies = [
  "sea-orm-migration",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "shlex",
  "tempfile",
  "thiserror 2.0.18",
@@ -5472,7 +5473,7 @@ dependencies = [
 
 [[package]]
 name = "ololo"
-version = "0.30.0"
+version = "0.31.0"
 dependencies = [
  "agent-tokens",
  "anyhow",
@@ -5519,6 +5520,7 @@ dependencies = [
  "cpd-core",
  "cpd-finder",
  "cpd-tokenizer",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",

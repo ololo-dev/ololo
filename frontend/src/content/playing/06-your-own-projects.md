@@ -71,6 +71,13 @@ scale: a task that leaves the code no worse than it found it earns its whole
 health bonus, however old the codebase. The chart marks the code you started
 from with a square.
 
+If your `README.md` or `AGENTS.md` says how to run the tests, sessions that
+score tests run them after each check and count them in the health score
+(see [Points and judges](/documentation/points-and-judges)). A task is
+compared with where it started on what both ends measured: the session's
+first tree is scored before the suite ever ran, so the first task is compared
+on the code alone, and every later task on the code and its tests.
+
 Not alone? Give the session's join code to a teammate: `ololo join <code>` in
 their own copy of the repository makes them a player, judged on their own work
 beside yours — and if the project names its repository, an empty folder is

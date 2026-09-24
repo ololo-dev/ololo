@@ -49,7 +49,9 @@ fn checkpoint() -> HealthCheckpointView {
         server_status: HealthCheckStatus::Pending,
         flags: HealthFlags::default(),
         score: Some(74.3),
+        grade: Some('B'),
         level: Level::Green,
+        tests: None,
     }
 }
 

@@ -18,6 +18,7 @@ pub mod llm_providers;
 pub mod llm_requests;
 pub mod personal_projects;
 pub mod player_memory;
+pub mod player_test_commands;
 pub mod players;
 pub mod probes;
 pub mod project_repos;

@@ -21,6 +21,7 @@
 //! | `flag(<id>): <file>`                 | completion flag committed                    |
 //! | `artifact(<id>): sync`               | `.ololo/artifacts/**` changed                |
 //! | `memory(<id>): sources @ <iso>`      | AGENTS.md / README.md changed                |
+//! | `tests(<id>): #<seq> <summary>`      | the test run after probe `seq`: its log      |
 //! | `feat(<id>): <title>`                | **task done marker**: the task's final tree  |
 //!
 //! `feat(<id>)` is load-bearing: `judging::task_commit::resolve_task_commit`
@@ -86,6 +87,9 @@ pub enum Kind {
     Flag,
     Artifact,
     Memory,
+    /// The log of the project's test run after a probe, under
+    /// `.ololo/probes/`.
+    Tests,
     /// Task start marker.
     Start,
     /// The tree at a probe dispatch.
@@ -106,6 +110,7 @@ impl Kind {
             "flag" => Kind::Flag,
             "artifact" => Kind::Artifact,
             "memory" => Kind::Memory,
+            "tests" => Kind::Tests,
             "start" => Kind::Start,
             "probe" => Kind::Probe,
             other => Kind::Other(other.to_string()),
@@ -119,6 +124,7 @@ impl Kind {
             Kind::Flag => "flag",
             Kind::Artifact => "artifact",
             Kind::Memory => "memory",
+            Kind::Tests => "tests",
             Kind::Start => "start",
             Kind::Probe => "probe",
             Kind::Session => "ololo snapshot",
@@ -517,6 +523,10 @@ mod tests {
             id(3)
         ));
         assert_eq!(m.kind, Kind::Memory);
+
+        let m = SnapshotMessage::parse(&format!("tests({}): #4 12 passed, 1 failed", id(3)));
+        assert_eq!((m.kind.clone(), m.task_id()), (Kind::Tests, Some(id(3))));
+        assert!(!m.is_task_done());
 
         let m = SnapshotMessage::parse("ololo snapshot: session start @ 2026-09-22T10:00:00Z");
         assert_eq!(m.kind, Kind::Session);

@@ -8,7 +8,7 @@
     ScoreHistoryPoint,
     SessionHealthPayload,
   } from "$lib/types/arena";
-  import { LEVEL_COLORS, formatScore, gradeOf, seriesColor } from "$lib/session-health";
+  import { LEVEL_COLORS, formatScore, gradeOf, seriesColor, testsLines } from "$lib/session-health";
   import {
     buildChartData,
     describePoints,
@@ -577,6 +577,14 @@
             : `${m.dead_code_pct.toFixed(1)}% · ${m.dead_lines ?? 0} lines${
                 m.dead_symbols != null ? ` · ${m.dead_symbols} finding${m.dead_symbols === 1 ? "" : "s"}` : ""
               }${m.dead_code_coverage != null ? ` · ${Math.round(m.dead_code_coverage)}% of the code read` : ""}`,
+      });
+    }
+    // The project's own tests, when they run: part of the score.
+    for (const line of testsLines(cp.tests)) {
+      lines.push({
+        label: line.label,
+        value: line.value,
+        tone: line.tone ? LEVEL_COLORS[line.tone].fg : undefined,
       });
     }
     // Only what deserves attention: a check the server could not confirm,

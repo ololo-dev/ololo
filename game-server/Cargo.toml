@@ -28,6 +28,8 @@ uuid = { version = "1.10", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 rand = "0.8"
 dashmap = "6.1.0"
+# Stable hash of the docs the test commands are read from.
+sha2 = "0.10"
 jsonwebtoken = { version = "10.3.0", default-features = false, features = ["rust_crypto"] }
 shlex = "1"
 thiserror = "2.0"

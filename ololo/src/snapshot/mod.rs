@@ -473,6 +473,79 @@ impl SnapshotRepo {
         self.commit_raw(&self.addressed_message(&Kind::Artifact, "sync"))
     }
 
+    /// Commit **only** the log of the test run after probe `seq` — the file
+    /// at `rel`, under `.ololo/probes/` — on top of HEAD:
+    /// `tests({task_id}): #{seq} {summary}`. Every other path stays as the
+    /// last commit left it, like [`Self::commit_memory_sources`]: the log is
+    /// in the history the moment the run's numbers are reported, without
+    /// dragging half-finished code along. `Ok(None)` when the file is
+    /// already committed as it is.
+    pub fn commit_probe_log(
+        &self,
+        task_id: uuid::Uuid,
+        title: &str,
+        probe_id: uuid::Uuid,
+        seq: u32,
+        rel: &str,
+        summary: &str,
+    ) -> Result<Option<gix::ObjectId>, SnapshotError> {
+        let head = self.repo.head_commit().ok();
+        let base_tree = match &head {
+            Some(c) => c.tree()?,
+            None => self.repo.empty_tree(),
+        };
+        let base_tree_id = base_tree.id;
+        let mut editor = base_tree.edit()?;
+        let bytes = std::fs::read(self.worktree.join(rel))?;
+        let blob_id = self.repo.write_blob(&bytes)?.detach();
+        editor.upsert(rel, gix::object::tree::EntryKind::Blob, blob_id)?;
+        let tree_id = editor.write()?.detach();
+        if head.is_some() && tree_id == base_tree_id {
+            return Ok(None);
+        }
+        let task = CurrentTask {
+            id: task_id,
+            title: title.to_string(),
+        };
+        let subject = format!("#{seq} {summary}");
+        let msg = self.task_message(&Kind::Tests, &task, &subject, Some((probe_id, seq)), None);
+        self.commit_tree(&msg, tree_id).map(Some)
+    }
+
+    /// The code a commit holds: its tree without `.ololo/` — platform
+    /// plumbing (done-files, artifacts, the test logs themselves) that
+    /// changes without the code changing. Two commits with the same code
+    /// tree hold the same code.
+    pub fn code_tree_of(&self, commit: gix::ObjectId) -> Option<gix::ObjectId> {
+        let tree = self.repo.find_commit(commit).ok()?.tree().ok()?;
+        let mut editor = tree.edit().ok()?;
+        editor.remove(".ololo").ok()?;
+        editor.write().ok().map(|id| id.detach())
+    }
+
+    /// The raw message of `commit`.
+    #[cfg(test)]
+    pub(crate) fn message_of(&self, commit: gix::ObjectId) -> String {
+        self.repo
+            .find_commit(commit)
+            .expect("commit")
+            .message_raw()
+            .expect("message")
+            .to_string()
+    }
+
+    /// Whether `commit`'s tree holds a file at `path`.
+    #[cfg(test)]
+    pub(crate) fn tree_has_path(&self, commit: gix::ObjectId, path: &str) -> bool {
+        let tree = self
+            .repo
+            .find_commit(commit)
+            .expect("commit")
+            .tree()
+            .expect("tree");
+        tree.lookup_entry_by_path(path).ok().flatten().is_some()
+    }
+
     /// Commit a work-in-progress checkpoint for an open-ended task:
     /// `wip({task_id}): checkpoint`. Deliberately NOT the `feat(` prefix —
     /// `resolve_task_commit` greps for that to find the task's *final*

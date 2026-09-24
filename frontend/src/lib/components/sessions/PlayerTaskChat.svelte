@@ -261,9 +261,9 @@
 
   // Auxiliary commit traffic that is not conversation: screencast frames
   // syncing (`artifact:`), memory snapshots, session baseline/final marks.
-  // Probe commits (one per check) and start markers are the health loop's
-  // bookkeeping, not conversation.
-  const COMMIT_NOISE_RE = /^(artifact|memory|probe|start)(\(|:)|^ololo snapshot:/
+  // Probe commits (one per check), the test logs committed after them and
+  // start markers are the health loop's bookkeeping, not conversation.
+  const COMMIT_NOISE_RE = /^(artifact|memory|probe|start|tests)(\(|:)|^ololo snapshot:/
 
   // The completion contract's done file, as its polling probe names it —
   // the same shape the CLI's flag watcher matches.

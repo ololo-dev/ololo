@@ -55,6 +55,11 @@ fn is_personal(project: &serde_json::Value) -> bool {
     project.get("kind").and_then(|v| v.as_str()) == Some("personal")
 }
 
+/// Whether the project is public, when the server says.
+fn is_public(project: &serde_json::Value) -> Option<bool> {
+    project.get("public").and_then(|v| v.as_bool())
+}
+
 /// Before the session's first snapshot of this folder: old sessions'
 /// done-files move aside (they would close this session's tasks at once),
 /// and in a personal project's repository `.ololo/` is kept out of the
@@ -151,7 +156,7 @@ pub async fn run_start(
     let personal = is_personal(&project);
     if personal {
         let worktree = std::env::current_dir().context("reading the working directory")?;
-        crate::upload_consent::confirm(&worktree, &base, yes)?;
+        crate::upload_consent::confirm(&worktree, &base, is_public(&project), yes)?;
     }
 
     let session_name = name
@@ -408,7 +413,8 @@ pub async fn run_join(
         let personal = project.as_ref().is_some_and(is_personal);
         if personal {
             let worktree = std::env::current_dir().context("reading the working directory")?;
-            crate::upload_consent::confirm(&worktree, &base, yes)?;
+            let public = project.as_ref().and_then(is_public);
+            crate::upload_consent::confirm(&worktree, &base, public, yes)?;
         }
         prepare_fresh_workspace(personal);
     }

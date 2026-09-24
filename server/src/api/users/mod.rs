@@ -12,8 +12,8 @@ pub use me::{
     patch_me, post_change_password,
 };
 pub use public::{
-    PublicSessionEntry, PublicSessionsResponse, PublicUserDto, SessionsQuery, get_by_username,
-    get_sessions_by_username,
+    PublicProjectsResponse, PublicSessionEntry, PublicSessionsResponse, PublicUserDto,
+    SessionsQuery, get_by_username, get_projects_by_username, get_sessions_by_username,
 };
 
 pub(crate) mod auth;

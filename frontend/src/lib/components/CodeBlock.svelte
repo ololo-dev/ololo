@@ -4,9 +4,11 @@
   interface Props {
     code: string;
     class?: string;
+    /** Tighter, and long lines wrap: for a narrow column. */
+    compact?: boolean;
   }
 
-  let { code, class: extraClass = '' }: Props = $props();
+  let { code, class: extraClass = '', compact = false }: Props = $props();
 
   let copied = $state(false);
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -40,7 +42,9 @@
     onclick={copy}
     aria-label={copied ? 'Copied!' : 'Copy to clipboard'}
     title={copied ? 'Copied!' : 'Copy to clipboard'}
-    class="absolute right-[12px] top-[12px] flex h-[28px] w-[28px] items-center justify-center rounded-[4px] bg-white/10 text-white/60 transition-all hover:bg-white/20 hover:text-white"
+    class="absolute flex h-[28px] w-[28px] items-center justify-center rounded-[4px] bg-white/10 text-white/60 transition-all hover:bg-white/20 hover:text-white {compact
+      ? 'right-[8px] top-[8px]'
+      : 'right-[12px] top-[12px]'}"
   >
     {#if copied}
       <!-- checkmark -->
@@ -79,6 +83,8 @@
   </button>
 
   <pre
-    class="overflow-x-auto py-[20px] pl-[40px] pr-[52px]"
-  ><code class="font-mono text-[14px] leading-[1.5] text-white">{code}</code></pre>
+    class={compact
+      ? 'whitespace-pre-wrap break-words py-[12px] pl-[22px] pr-[44px]'
+      : 'overflow-x-auto py-[20px] pl-[40px] pr-[52px]'}
+  ><code class="font-mono leading-[1.5] text-white {compact ? 'text-[13px]' : 'text-[14px]'}">{code}</code></pre>
 </div>

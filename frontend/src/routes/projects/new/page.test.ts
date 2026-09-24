@@ -5,6 +5,7 @@ import type { PersonalProjectOptions } from "$lib/api";
 
 const options: PersonalProjectOptions = {
   creation_allowed: true,
+  private_allowed: false,
   judges: [
     {
       slug: "correctness",
@@ -76,6 +77,7 @@ describe("routes/projects/new/+page.svelte", () => {
           tasks: [{ title: "Endpoint", description: "" }],
           judges: ["correctness"],
           session_duration_secs: 3600,
+          public: true,
         },
       },
     });

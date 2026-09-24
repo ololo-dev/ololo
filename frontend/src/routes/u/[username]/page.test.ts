@@ -38,6 +38,7 @@ const SESSIONS = [
 function data(
   sessions: unknown[] = SESSIONS,
   paging: { total?: number; page?: number; per_page?: number } = {},
+  projects: unknown[] = [],
 ) {
   return {
     profile: {
@@ -52,6 +53,25 @@ function data(
       page: paging.page ?? 1,
       per_page: paging.per_page ?? 20,
     },
+    projects,
+  };
+}
+
+function personalProject(id: string, isPublic: boolean) {
+  return {
+    id,
+    name: isPublic ? "CSV export" : "Secret refactor",
+    slug: isPublic ? "csv-export" : "secret-refactor",
+    kind: "personal",
+    description: "My own work.",
+    public: isPublic,
+    archived_at: null,
+    owner_user_id: "u1",
+    tags: [],
+    category: null,
+    task_count: 2,
+    session_duration_secs: 7200,
+    cover_image_url: null,
   };
 }
 
@@ -113,5 +133,34 @@ describe("public profile sessions", () => {
   it("Still links the project name to the project", () => {
     render(Page, { data: data() as never });
     expect(document.querySelector('a[href="/projects/hop-hop-game"]')).not.toBeNull();
+  });
+});
+
+describe("public profile projects", () => {
+  it("Lists the user's own projects, a private one marked as such", () => {
+    render(Page, {
+      data: data(SESSIONS, {}, [
+        personalProject("pp1", true),
+        personalProject("pp2", false),
+      ]) as never,
+    });
+    const shelf = screen.getByTestId("profile-projects");
+    expect(shelf.textContent).toMatch(/2\s+projects/);
+    expect(shelf.querySelector('a[href="/projects/csv-export"]')).not.toBeNull();
+    expect(screen.getAllByTestId("project-private")).toHaveLength(1);
+  });
+
+  it("Leaves the shelf out when there is nothing to list", () => {
+    render(Page, { data: data() as never });
+    expect(screen.queryByTestId("profile-projects")).toBeNull();
+  });
+
+  it("Marks a private project's session, not a public one's", () => {
+    const personal = { ...SESSIONS[0], personal: true, private: false };
+    const { unmount } = render(Page, { data: data([personal]) as never });
+    expect(screen.queryByText("Private")).toBeNull();
+    unmount();
+    render(Page, { data: data([{ ...personal, private: true }]) as never });
+    expect(screen.getAllByText("Private").length).toBeGreaterThan(0);
   });
 });

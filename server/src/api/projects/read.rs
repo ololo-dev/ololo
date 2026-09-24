@@ -34,13 +34,22 @@ pub async fn get_list(
 
     let mut q = projects::Entity::find();
 
-    // Admins see all projects; others see own + public.
+    // Admins see all projects; others see own + public — and of personal
+    // projects only their own: a public one is listed on its owner's
+    // profile, never in the catalog (the landing and the sitemap read this
+    // list too).
     if !is_admin {
         let mut condition = Condition::any().add(projects::Column::Public.eq(true));
+        let mut not_someone_elses_personal = Condition::any().add(
+            projects::Column::Id
+                .not_in_subquery(arena_core::personal::personal_project_ids_query()),
+        );
         if let Some(uid) = caller_id {
             condition = condition.add(projects::Column::OwnerUserIdFk.eq(uid));
+            not_someone_elses_personal =
+                not_someone_elses_personal.add(projects::Column::OwnerUserIdFk.eq(uid));
         }
-        q = q.filter(condition);
+        q = q.filter(condition).filter(not_someone_elses_personal);
     }
 
     if !query.include_archived {
@@ -263,6 +272,7 @@ pub async fn get_one(
     summary.judge_review_count = Some(jc);
     attach_campaign_context(&state.db, &mut summary).await?;
     attach_kinds(&state.db, std::slice::from_mut(&mut summary)).await?;
+    attach_owner_username(&state.db, &mut summary).await?;
     Ok(Json(summary).into_response())
 }
 
@@ -335,6 +345,7 @@ pub async fn get_by_slug(
     summary.judge_review_count = Some(jc);
     attach_campaign_context(&state.db, &mut summary).await?;
     attach_kinds(&state.db, std::slice::from_mut(&mut summary)).await?;
+    attach_owner_username(&state.db, &mut summary).await?;
     Ok(Json(summary).into_response())
 }
 
@@ -368,6 +379,7 @@ pub async fn get_by_user_slug(
     summary.judge_review_count = Some(jc);
     attach_campaign_context(&state.db, &mut summary).await?;
     attach_kinds(&state.db, std::slice::from_mut(&mut summary)).await?;
+    attach_owner_username(&state.db, &mut summary).await?;
     Ok(Json(summary).into_response())
 }
 

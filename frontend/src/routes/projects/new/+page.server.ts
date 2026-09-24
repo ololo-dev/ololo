@@ -27,13 +27,15 @@ export const load: PageServerLoad = async ({ locals, fetch, parent, url }) => {
   const from = url.searchParams.get("from");
   if (from) {
     try {
-      const { spec } = await getPersonalProject(from, { fetch });
+      const { spec, project } = await getPersonalProject(from, { fetch });
       initial = {
         name: `${spec.name} (copy)`.slice(0, options.limits.max_name_chars),
         description: spec.description,
         tasks: spec.tasks,
         judges: spec.judges,
         session_duration_secs: spec.session_duration_secs,
+        // A copy is a new project: private only for whoever may make one.
+        public: project.public || !options.private_allowed,
       };
     } catch {
       // Not theirs, or gone: start from an empty form.

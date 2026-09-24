@@ -137,13 +137,23 @@ pub async fn patch_one(
     }
 
     // A personal project is rebuilt from its owner's words by its own
-    // editor (`/api/personal-projects/:id`); here only the archive flag of
-    // one may move — anything else would leave the tasks describing a
-    // project that no longer exists, or publish someone's private work.
-    if !req.touches_only_archive()
-        && arena_core::personal::is_personal_project(&state.db, row.id).await?
-    {
-        return Err(ProjectError::PersonalProject);
+    // editor (`/api/personal-projects/:id`); here only its archive flag and
+    // who sees it may move — anything else would leave the tasks describing
+    // a project that no longer exists. Making it private takes what a
+    // private one takes at creation.
+    if arena_core::personal::is_personal_project(&state.db, row.id).await? {
+        if !req.touches_only_archive_or_visibility() {
+            return Err(ProjectError::PersonalProject);
+        }
+        if req.public == Some(false) && row.public {
+            let caller = arena_core::entities::users::Entity::find_by_id(user_id)
+                .one(&state.db)
+                .await?
+                .ok_or(ProjectError::Forbidden)?;
+            if !crate::api::personal_projects::private_allowed(&state.db, &caller).await? {
+                return Err(ProjectError::PremiumRequired);
+            }
+        }
     }
 
     let new_name = match &req.name {

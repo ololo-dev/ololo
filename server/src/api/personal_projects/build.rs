@@ -2,7 +2,7 @@
 //! the name and slug, and the task definitions the shared seed/import
 //! inserter stores.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use arena_core::entities::{judges, projects};
 use arena_core::personal::{
@@ -148,7 +148,8 @@ pub(super) fn validate(
     let tasks = req
         .tasks
         .iter()
-        .map(|t| {
+        .enumerate()
+        .map(|(i, t)| {
             Ok(PersonalTaskSpec {
                 title: bounded("tasks", &t.title, 1, personal::MAX_TASK_TITLE_CHARS)?,
                 description: bounded(
@@ -157,38 +158,22 @@ pub(super) fn validate(
                     0,
                     personal::MAX_TASK_DESCRIPTION_CHARS,
                 )?,
+                judges: t
+                    .judges
+                    .as_deref()
+                    .map(|slugs| panel_of(slugs, eligible))
+                    .transpose()
+                    .map_err(|detail| invalid("tasks", format!("task {}: {detail}", i + 1)))?,
             })
         })
         .collect::<Result<Vec<_>, PersonalProjectError>>()?;
 
     let judges = match &req.judges {
         None => default_panel(eligible),
-        Some(slugs) => {
-            let mut seen = HashSet::new();
-            let mut out = Vec::new();
-            for slug in slugs {
-                let slug = slug.trim();
-                if !eligible.iter().any(|j| j.slug == slug) {
-                    return Err(invalid(
-                        "judges",
-                        format!("{slug:?} is not a judge a personal project can use"),
-                    ));
-                }
-                if seen.insert(slug.to_string()) {
-                    out.push(slug.to_string());
-                }
-            }
-            out
-        }
+        Some(slugs) => panel_of(slugs, eligible).map_err(|detail| invalid("judges", detail))?,
     };
     if judges.is_empty() {
         return Err(invalid("judges", "pick at least one judge"));
-    }
-    if judges.len() > personal::MAX_JUDGES {
-        return Err(invalid(
-            "judges",
-            format!("at most {} judges per task", personal::MAX_JUDGES),
-        ));
     }
 
     let session_duration_secs = req
@@ -213,6 +198,32 @@ pub(super) fn validate(
         judges,
         session_duration_secs,
     })
+}
+
+/// A panel as asked for: every slug a judge a personal project may use, no
+/// duplicates (the first mention keeps its place), 1 to
+/// [`personal::MAX_JUDGES`] of them. The error is the detail for the field.
+fn panel_of(slugs: &[String], eligible: &[judges::Model]) -> Result<Vec<String>, String> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for slug in slugs {
+        let slug = slug.trim();
+        if !eligible.iter().any(|j| j.slug == slug) {
+            return Err(format!(
+                "{slug:?} is not a judge a personal project can use"
+            ));
+        }
+        if seen.insert(slug.to_string()) {
+            out.push(slug.to_string());
+        }
+    }
+    if out.is_empty() {
+        return Err("pick at least one judge".to_string());
+    }
+    if out.len() > personal::MAX_JUDGES {
+        return Err(format!("at most {} judges per task", personal::MAX_JUDGES));
+    }
+    Ok(out)
 }
 
 /// A name for a project the user did not name: the first line of the
@@ -293,13 +304,10 @@ pub(super) async fn unique_slug(
     Ok(format!("{base}-{}", &suffix[..8]))
 }
 
-/// The panel as the task builder needs it.
-pub(super) fn panel(spec: &PersonalSpec, eligible: &[judges::Model]) -> Vec<PanelJudge> {
-    let by_slug: HashMap<&str, &judges::Model> =
-        eligible.iter().map(|j| (j.slug.as_str(), j)).collect();
-    spec.judges
+/// Every judge a personal task may be given, as the task builder needs it.
+pub(super) fn catalog(eligible: &[judges::Model]) -> Vec<PanelJudge> {
+    eligible
         .iter()
-        .filter_map(|slug| by_slug.get(slug.as_str()))
         .map(|j| PanelJudge {
             slug: j.slug.clone(),
             criteria: criteria_of(j),
@@ -310,7 +318,7 @@ pub(super) fn panel(spec: &PersonalSpec, eligible: &[judges::Model]) -> Vec<Pane
 
 /// A built task in the shape the shared inserter
 /// (`admin_export_import::insert_task_with_judges`) stores.
-pub(super) fn export_task(task: BuiltTask, panel: &[PanelJudge]) -> ExportTask {
+pub(super) fn export_task(task: BuiltTask) -> ExportTask {
     ExportTask {
         ordinal: task.ordinal,
         title: task.title,
@@ -325,7 +333,8 @@ pub(super) fn export_task(task: BuiltTask, panel: &[PanelJudge]) -> ExportTask {
             health: Some(personal::TASK_HEALTH_POINTS),
         }),
         intervals: None,
-        judges: panel
+        judges: task
+            .judges
             .iter()
             .map(|j| JudgeRef::Weighted {
                 slug: j.slug.clone(),

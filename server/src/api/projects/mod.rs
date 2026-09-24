@@ -11,7 +11,7 @@ pub use common::{
 };
 pub(crate) use common::{
     KIND_PERSONAL, compute_points_range, load_allowed_categories, project_has_active_sessions,
-    to_summary, validate_slug,
+    to_summary_with_sessions, validate_slug,
 };
 pub(crate) use read::judge_review_count;
 pub use read::{

@@ -31,6 +31,22 @@ describe("ProjectCard", () => {
     expect(screen.getByTestId("project-campaign-parts").textContent).toContain("5 parts");
   });
 
+  it("Marks a private personal project, and nothing else", () => {
+    const { unmount } = render(ProjectCard, {
+      project: project({ kind: "personal", public: false }),
+    });
+    expect(screen.getByTestId("project-private").textContent).toContain("Private");
+    unmount();
+    const { unmount: unmountPublic } = render(ProjectCard, {
+      project: project({ kind: "personal", public: true }),
+    });
+    expect(screen.queryByTestId("project-private")).toBeNull();
+    unmountPublic();
+    // A private catalog project is the catalog's business, not this chip's.
+    render(ProjectCard, { project: project({ public: false }) });
+    expect(screen.queryByTestId("project-private")).toBeNull();
+  });
+
   it("Still counts tasks on an ordinary project", () => {
     const { container } = render(ProjectCard, { project: project({ task_count: 8 }) });
     expect(container.textContent).toContain("8 tasks");

@@ -9,6 +9,7 @@
     sessionLinkShort,
   } from '$lib/session-status';
   import StatCard from '$lib/components/sessions/StatCard.svelte';
+  import ProjectCard from '$lib/components/projects/ProjectCard.svelte';
 
   let { data } = $props();
 
@@ -76,6 +77,26 @@
       </div>
     </div>
 
+    <!-- Projects: the user's own work. A public one is listed here and only
+         here — never in the catalog or on the landing; the owner also sees
+         the ones they keep private. -->
+    {#if data.projects.length > 0}
+      <div class="mt-10" data-testid="profile-projects">
+        <div class="mb-4 flex items-baseline gap-3">
+          <h2 class="font-heading text-[20px] font-semibold text-brand-text">Projects</h2>
+          <span class="text-sm text-brand-muted">
+            {data.projects.length}
+            {data.projects.length === 1 ? 'project' : 'projects'}
+          </span>
+        </div>
+        <div class="grid grid-cols-1 gap-[18px] sm:grid-cols-2 lg:grid-cols-3">
+          {#each data.projects as project (project.id)}
+            <ProjectCard {project} />
+          {/each}
+        </div>
+      </div>
+    {/if}
+
     <!-- Sessions section -->
     <div class="mt-10 scroll-mt-6" id="sessions">
       <div class="mb-4 flex items-baseline gap-3">
@@ -120,10 +141,10 @@
                     : `/projects/${session.project_slug ?? session.project_id}`}
                   class="truncate hover:text-brand-blue hover:underline"
                 >{session.project_name}</a>
-                {#if session.personal}
+                {#if session.private}
                   <span
                     class="mt-0.5 w-fit rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-semibold text-gray-600"
-                    title="Your own project: only you see this session"
+                    title="A private project: this session stays off everyone else's view of this profile"
                     >Private</span
                   >
                 {/if}

@@ -10,6 +10,12 @@
 //! already exists, and the contract tells the judges to judge the task's
 //! own changes, not the codebase they landed in.
 //!
+//! A personal project is public unless its owner keeps it private (a
+//! Premium choice where plans are on): a public one is listed on its
+//! owner's profile and its sessions are public history like any other, but
+//! the catalog and the landing never list the project itself. A private
+//! one, and its sessions, stay with the owner.
+//!
 //! This module owns the shape of the request as stored
 //! (`personal_projects.spec`), the queries every reader uses to ask "is
 //! this personal?", and the pure construction of the tasks. The server
@@ -21,7 +27,7 @@ use sea_orm::{ColumnTrait, ConnectionTrait, DbErr, EntityTrait, QueryFilter, Que
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::entities::{personal_projects, sessions};
+use crate::entities::{personal_projects, projects, sessions};
 use crate::evaluation::{CompletionSpec, CriterionDef, InteractiveLimits};
 use crate::task_template::{Backoff, Matchers, Placeholder, TestKind, TestTemplate};
 
@@ -70,7 +76,8 @@ pub struct PersonalSpec {
     /// project.
     #[serde(default)]
     pub tasks: Vec<PersonalTaskSpec>,
-    /// The judge panel of every task, by judge slug.
+    /// The default judge panel, by judge slug: every task that does not
+    /// pick its own.
     pub judges: Vec<String>,
     pub session_duration_secs: i64,
 }
@@ -82,10 +89,22 @@ pub struct PersonalTaskSpec {
     pub title: String,
     #[serde(default)]
     pub description: String,
+    /// This task's own judge panel, by slug. `None`: the project's default
+    /// panel ([`PersonalSpec::judges`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub judges: Option<Vec<String>>,
 }
 
-/// One judge of the panel, as the builder needs it: the criteria it scores
-/// (they become the task's score sheet) and its share of the task budget.
+impl PersonalTaskSpec {
+    /// The slugs judging this task: its own panel, else `default`.
+    pub fn panel<'a>(&'a self, default: &'a [String]) -> &'a [String] {
+        self.judges.as_deref().unwrap_or(default)
+    }
+}
+
+/// A judge a task can be given, as the builder needs it: the criteria it
+/// scores (they become the task's score sheet) and its share of the task
+/// budget.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PanelJudge {
     pub slug: String,
@@ -104,6 +123,8 @@ pub struct BuiltTask {
     pub test_template: TestTemplate,
     /// The `tasks.evaluation` contract.
     pub evaluation: serde_json::Value,
+    /// The judges of this task, in panel order.
+    pub judges: Vec<PanelJudge>,
     /// Workspace-relative path of the file that closes the task.
     pub done_file: String,
 }
@@ -165,14 +186,26 @@ pub fn personal_project_ids_query() -> sea_orm::sea_query::SelectStatement {
         .into_query()
 }
 
-/// The sessions of personal projects, as a subquery — for readers that
-/// must leave them out of a listing (`Column::SessionIdFk.not_in_subquery`).
-pub fn personal_session_ids_query() -> sea_orm::sea_query::SelectStatement {
+/// The ids of personal projects their owners keep private, as a subquery.
+pub fn private_personal_project_ids_query() -> sea_orm::sea_query::SelectStatement {
+    use sea_orm::QueryTrait;
+    projects::Entity::find()
+        .select_only()
+        .column(projects::Column::Id)
+        .filter(projects::Column::Public.eq(false))
+        .filter(projects::Column::Id.in_subquery(personal_project_ids_query()))
+        .into_query()
+}
+
+/// The sessions of private personal projects, as a subquery — for readers
+/// that must leave them out of what anyone but the owner sees
+/// (`Column::SessionIdFk.not_in_subquery`).
+pub fn private_personal_session_ids_query() -> sea_orm::sea_query::SelectStatement {
     use sea_orm::QueryTrait;
     sessions::Entity::find()
         .select_only()
         .column(sessions::Column::Id)
-        .filter(sessions::Column::ProjectIdFk.in_subquery(personal_project_ids_query()))
+        .filter(sessions::Column::ProjectIdFk.in_subquery(private_personal_project_ids_query()))
         .into_query()
 }
 
@@ -186,29 +219,38 @@ pub fn done_file(index: usize, task_count: usize) -> String {
     }
 }
 
-/// Build every task of `spec`, judged by `panel`.
+/// Build every task of `spec`. Each is judged by its own panel or the
+/// project's default one, looked up in `catalog` (the judges a personal
+/// project may use; slugs missing from it are skipped).
 ///
 /// An empty navigation map yields one task: the project itself.
-pub fn build_tasks(spec: &PersonalSpec, panel: &[PanelJudge]) -> Vec<BuiltTask> {
+pub fn build_tasks(spec: &PersonalSpec, catalog: &[PanelJudge]) -> Vec<BuiltTask> {
     let map: Vec<PersonalTaskSpec> = if spec.tasks.is_empty() {
         vec![PersonalTaskSpec {
             title: spec.name.clone(),
             description: String::new(),
+            judges: None,
         }]
     } else {
         spec.tasks.clone()
     };
-    let evaluation = contract(spec, panel, map.len());
     map.iter()
         .enumerate()
         .map(|(index, task)| {
             let done = done_file(index, map.len());
+            let judges: Vec<PanelJudge> = task
+                .panel(&spec.judges)
+                .iter()
+                .filter_map(|slug| catalog.iter().find(|j| &j.slug == slug))
+                .cloned()
+                .collect();
             BuiltTask {
                 ordinal: index as i32,
                 title: task.title.trim().to_string(),
                 content: brief(spec, &map, index, &done),
                 test_template: done_probe(&done),
-                evaluation: evaluation.clone(),
+                evaluation: contract(spec, &judges, map.len()),
+                judges,
                 done_file: done,
             }
         })
@@ -429,9 +471,14 @@ mod tests {
                 .map(|t| PersonalTaskSpec {
                     title: (*t).into(),
                     description: String::new(),
+                    judges: None,
                 })
                 .collect(),
-            judges: vec!["correctness".into(), "code-quality".into()],
+            judges: vec![
+                "correctness".into(),
+                "code-quality".into(),
+                "test-quality".into(),
+            ],
             session_duration_secs: DEFAULT_SESSION_SECS,
         }
     }
@@ -546,7 +593,9 @@ mod tests {
             criteria: vec!["product".into(), "craft".into()],
             weight: 1.0,
         });
-        let task = &build_tasks(&spec(&[]), &p)[0];
+        let mut s = spec(&[]);
+        s.judges.push("build-review".into());
+        let task = &build_tasks(&s, &p)[0];
         let contract = EvaluationContract::from_json(&task.evaluation).expect("contract parses");
         let keys: Vec<&str> = contract.criteria.iter().map(|c| c.key.as_str()).collect();
         assert_eq!(
@@ -560,6 +609,30 @@ mod tests {
             ]
         );
         assert_eq!(contract.criteria[4].title, "Craft");
+    }
+
+    #[test]
+    fn a_task_with_its_own_judges_is_judged_by_them_and_the_rest_by_the_default() {
+        let mut s = spec(&["Endpoint", "Button"]);
+        s.tasks[0].judges = Some(vec!["test-quality".into(), "correctness".into()]);
+        let built = build_tasks(&s, &panel());
+
+        let own: Vec<&str> = built[0].judges.iter().map(|j| j.slug.as_str()).collect();
+        assert_eq!(own, ["test-quality", "correctness"], "the task's order");
+        let sheet = EvaluationContract::from_json(&built[0].evaluation).unwrap();
+        let keys: Vec<&str> = sheet.criteria.iter().map(|c| c.key.as_str()).collect();
+        assert_eq!(keys, ["tests", "product"], "its own panel's criteria only");
+
+        let inherited: Vec<&str> = built[1].judges.iter().map(|j| j.slug.as_str()).collect();
+        assert_eq!(inherited, ["correctness", "code-quality", "test-quality"]);
+    }
+
+    #[test]
+    fn slugs_outside_the_catalog_are_skipped() {
+        let mut s = spec(&["Only"]);
+        s.tasks[0].judges = Some(vec!["correctness".into(), "retired-judge".into()]);
+        let built = build_tasks(&s, &panel());
+        assert_eq!(built[0].judges.len(), 1);
     }
 
     #[test]
@@ -627,9 +700,26 @@ mod tests {
 
     #[test]
     fn the_spec_round_trips_and_rejects_unknown_fields() {
-        let s = spec(&["One"]);
+        let mut s = spec(&["One", "Two"]);
+        s.tasks[1].judges = Some(vec!["correctness".into()]);
         let json = serde_json::to_value(&s).unwrap();
+        assert!(
+            json["tasks"][0].get("judges").is_none(),
+            "an inheriting task stores no panel: {json}"
+        );
+        assert_eq!(
+            json["tasks"][1]["judges"],
+            serde_json::json!(["correctness"])
+        );
         assert_eq!(serde_json::from_value::<PersonalSpec>(json).unwrap(), s);
+        // A spec stored before tasks had their own judges still reads.
+        let old = serde_json::json!({
+            "version": 1, "name": "n", "description": "d",
+            "tasks": [{ "title": "t", "description": "" }],
+            "judges": ["correctness"], "session_duration_secs": 3600
+        });
+        let parsed: PersonalSpec = serde_json::from_value(old).unwrap();
+        assert_eq!(parsed.tasks[0].judges, None);
         let bad = serde_json::json!({
             "version": 1, "name": "n", "description": "d", "judges": [],
             "session_duration_secs": 3600, "surprise": true

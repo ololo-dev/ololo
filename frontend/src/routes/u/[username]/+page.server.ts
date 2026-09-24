@@ -1,6 +1,6 @@
 import { error } from "@sveltejs/kit";
 import type { PageServerLoad } from "./$types";
-import type { PublicUserProfile, PublicSessionsResponse } from "$lib/api";
+import type { Project, PublicUserProfile, PublicSessionsResponse } from "$lib/api";
 
 /** Sessions per page. The list is a history, not a feed: 118 of them arrived
  *  20 at a time with no way to reach the rest, and the heading counted all
@@ -31,5 +31,14 @@ export const load: PageServerLoad = async ({ params, fetch, url }) => {
     ? await sessionsResp.json()
     : { sessions: [], total: 0, page: pageNo, per_page: PER_PAGE };
 
-  return { profile, sessions };
+  // The user's own projects — the public ones, and their private ones on
+  // their own profile. A failed fetch costs the shelf, not the profile.
+  const projectsResp = await fetch(
+    `/api/users/by-username/${encodeURIComponent(username)}/projects`,
+  );
+  const projects: Project[] = projectsResp.ok
+    ? ((await projectsResp.json()) as { projects: Project[] }).projects
+    : [];
+
+  return { profile, sessions, projects };
 };

@@ -153,10 +153,12 @@ export interface Project {
   id: string;
   name: string;
   /** `challenge` — a catalog project — or `personal`: a user's own work,
-   *  private to them and off every global standing. Absent from servers
-   *  older than personal projects (read as `challenge`). */
+   *  kept out of the catalog and off every global standing. Absent from
+   *  servers older than personal projects (read as `challenge`). */
   kind?: ProjectKind;
   owner_user_id: string;
+  /** The owner's username, on a personal project's own page. */
+  owner_username?: string | null;
   public: boolean;
   archived_at: string | null;
   created_at: string;
@@ -203,17 +205,22 @@ export type ProjectKind = "challenge" | "personal";
 export interface PersonalTask {
   title: string;
   description?: string;
+  /** This task's own judge panel, by slug; absent = the project's panel. */
+  judges?: string[];
 }
 
 /** What creating (or rebuilding) a personal project sends. Only the
  *  description is required: no name derives one, no tasks make the whole
- *  description one task, no judges take the default panel. */
+ *  description one task, no judges take the default panel, no `public`
+ *  makes a new project public and leaves an existing one as it is. */
 export interface PersonalProjectRequest {
   name?: string;
   description: string;
   tasks: PersonalTask[];
   judges?: string[];
   session_duration_secs?: number;
+  /** `false` keeps it private — Premium, where plans are on. */
+  public?: boolean;
 }
 
 /** A personal project as its owner asked for it. */
@@ -221,7 +228,7 @@ export interface PersonalSpec {
   version: number;
   name: string;
   description: string;
-  tasks: { title: string; description: string }[];
+  tasks: { title: string; description: string; judges?: string[] }[];
   judges: string[];
   session_duration_secs: number;
 }
@@ -245,6 +252,9 @@ export interface PersonalJudgeOption {
 
 export interface PersonalProjectOptions {
   creation_allowed: boolean;
+  /** Whether the caller may keep a project private (Premium where plans
+   *  are on). */
+  private_allowed: boolean;
   judges: PersonalJudgeOption[];
   limits: {
     max_tasks: number;
@@ -428,8 +438,11 @@ export interface PublicSessionEntry {
   agent: string | null;
   /** Models observed in client-reported stats. */
   models: string[];
-  /** A session of the viewer's own personal project (listed only to them). */
+  /** A session of the user's own personal project. */
   personal?: boolean;
+  /** A session of a personal project its owner keeps private — only ever in
+   *  the owner's own listing. */
+  private?: boolean;
 }
 
 export interface PublicSessionsResponse {

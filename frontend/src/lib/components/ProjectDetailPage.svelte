@@ -17,7 +17,6 @@
   import ProjectTaskList from "$lib/components/projects/ProjectTaskList.svelte";
   import CampaignPartsList from "$lib/components/projects/CampaignPartsList.svelte";
   import CampaignPartNav from "$lib/components/projects/CampaignPartNav.svelte";
-  import CodeBlock from "$lib/components/CodeBlock.svelte";
 
   interface Props {
     project: Project;
@@ -266,13 +265,14 @@
         class="mt-[24px] rounded-[8px] bg-white px-6 py-5 text-[15px] text-brand-text"
         data-testid="personal-ready"
       >
-        <p class="mb-3 font-semibold">
-          {message === "created" ? "Your project is ready." : "Your project is updated."}
-          Open a terminal in your repository — the folder your agent works in — and run:
-        </p>
-        <CodeBlock code="ololo start {project.slug}" />
-        <p class="mt-3 text-sm text-brand-muted">
-          It shows what it will upload and asks before the session starts.
+        <p>
+          <span class="font-semibold">
+            {message === "created" ? "Your project is ready." : "Your project is updated."}
+          </span>
+          Open a terminal in your repository — the folder your agent works in — and run
+          <code class="rounded bg-brand-light-blue px-1.5 py-0.5 font-mono text-[14px]"
+            >ololo start {project.slug}</code
+          >.
         </p>
       </div>
     {/if}
@@ -409,7 +409,6 @@
 <!-- Start session popup -->
 <StartSessionPopup
   slug={startSlug ?? project.slug ?? ""}
-  personal={isPersonal}
   bind:open={showStartPopup}
 />
 

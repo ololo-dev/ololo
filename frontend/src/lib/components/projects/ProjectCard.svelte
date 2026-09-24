@@ -168,6 +168,17 @@
         {status.label}
       </span>
     {/if}
+    <!-- Only its owner ever sees a private personal project's card: the
+         chip tells them this one is not on their profile. -->
+    {#if project.kind === "personal" && !project.public && project.archived_at === null}
+      <span
+        class="absolute left-2 top-2 z-20 rounded bg-white/90 px-2 py-0.5 text-[11px] font-semibold text-[#6b7a90]"
+        title="Only you see this project and its sessions"
+        data-testid="project-private"
+      >
+        Private
+      </span>
+    {/if}
     <!-- A campaign is several sessions long; say so on the card, because the
          duration chip above only covers one part. -->
     {#if (project.part_count ?? 0) > 0}

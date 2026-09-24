@@ -1,6 +1,7 @@
-//! Personal projects: a user's own work turned into a private, playable
-//! project — `/api/personal-projects` and the rules every other surface
-//! keeps for them.
+//! Personal projects: a user's own work turned into a playable project —
+//! public unless its owner keeps it private — through
+//! `/api/personal-projects`, and the rules every other surface keeps for
+//! them.
 
 use arena_core::entities::{task_judges, tasks};
 use axum::http::{Method, StatusCode};
@@ -24,6 +25,7 @@ struct World {
     bob: String,
     bob_id: uuid::Uuid,
     carol: String,
+    carol_id: uuid::Uuid,
 }
 
 /// An instance with the shipped judges, an admin (the first account),
@@ -36,7 +38,7 @@ async fn world() -> World {
     let app = build_router(state.clone());
     let (_, admin) = register_and_login_default(app.clone(), "admin@x.test").await;
     let (bob_id, bob) = register_and_login_default(app.clone(), "bob@x.test").await;
-    let (_, carol) = register_and_login_default(app.clone(), "carol@x.test").await;
+    let (carol_id, carol) = register_and_login_default(app.clone(), "carol@x.test").await;
     set_project_creation_setting(&app, &admin, "true").await;
     World {
         state,
@@ -45,6 +47,7 @@ async fn world() -> World {
         bob,
         bob_id,
         carol,
+        carol_id,
     }
 }
 
@@ -78,8 +81,84 @@ fn csv_request() -> serde_json::Value {
     })
 }
 
+/// [`csv_request`], kept private.
+fn private_csv_request() -> serde_json::Value {
+    let mut body = csv_request();
+    body["public"] = serde_json::json!(false);
+    body
+}
+
+async fn anonymous(app: &axum::Router, uri: &str) -> (StatusCode, serde_json::Value) {
+    let resp = app
+        .clone()
+        .oneshot(req(Method::GET, uri, None, None))
+        .await
+        .expect("response");
+    read_body_json(resp).await
+}
+
+async fn username(app: &axum::Router, cookie: &str) -> String {
+    let (_, me) = call(app, Method::GET, "/api/users/me", cookie, None).await;
+    me["username"].as_str().expect("a username").to_string()
+}
+
+async fn set_setting(w: &World, key: &str, value: &str) {
+    let (status, body) = call(
+        &w.app,
+        Method::PUT,
+        "/api/admin/settings",
+        &w.admin,
+        Some(serde_json::json!({ "key": key, "value": value })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "set {key}={value}: {body}");
+}
+
+async fn set_plan(w: &World, user_id: uuid::Uuid, plan: &str) {
+    use sea_orm::{ActiveModelTrait, Set};
+    let user = arena_core::entities::users::Entity::find_by_id(user_id)
+        .one(&w.state.db)
+        .await
+        .unwrap()
+        .expect("user");
+    let mut am: arena_core::entities::users::ActiveModel = user.into();
+    am.plan = Set(plan.to_string());
+    am.update(&w.state.db).await.expect("set plan");
+}
+
+/// Whether `id` is among the projects of a `{ projects: [...] }` body.
+fn lists(body: &serde_json::Value, id: &serde_json::Value) -> bool {
+    body["projects"]
+        .as_array()
+        .is_some_and(|all| all.iter().any(|p| &p["id"] == id))
+}
+
+/// A session of `project_id`, started and joined by its owner.
+async fn play(w: &World, cookie: &str, project_id: &str) -> String {
+    let (status, session) = call(
+        &w.app,
+        Method::POST,
+        "/api/sessions",
+        cookie,
+        Some(serde_json::json!({ "name": "CSV export", "project_id": project_id })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{session}");
+    let code = session["join_code"].as_str().unwrap().to_string();
+    let (status, joined) = call(
+        &w.app,
+        Method::POST,
+        "/api/sessions/join",
+        cookie,
+        Some(serde_json::json!({ "code": code })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{joined}");
+    code
+}
+
 #[tokio::test]
-async fn a_description_and_a_map_become_a_private_playable_project() {
+async fn a_description_and_a_map_become_a_playable_project() {
     let w = world().await;
     let (status, project) = call(
         &w.app,
@@ -91,7 +170,7 @@ async fn a_description_and_a_map_become_a_private_playable_project() {
     .await;
     assert_eq!(status, StatusCode::CREATED, "{project}");
     assert_eq!(project["kind"], "personal");
-    assert_eq!(project["public"], false);
+    assert_eq!(project["public"], true, "public unless kept private");
     assert_eq!(project["owner_user_id"], w.bob_id.to_string());
     assert_eq!(project["task_count"], 2);
     assert_eq!(project["idle_timeout_secs"], 1800);
@@ -145,16 +224,7 @@ async fn a_description_and_a_map_become_a_private_playable_project() {
     assert_eq!(by_slug["id"], project["id"]);
     assert_eq!(by_slug["kind"], "personal");
 
-    // Nobody else does.
-    let (status, _) = call(
-        &w.app,
-        Method::GET,
-        &format!("/api/projects/by-slug/{slug}"),
-        &w.carol,
-        None,
-    )
-    .await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
+    // What they asked for stays theirs.
     let (status, _) = call(
         &w.app,
         Method::GET,
@@ -474,11 +544,25 @@ async fn the_generic_editors_leave_personal_projects_alone() {
         Method::PATCH,
         &format!("/api/projects/{id}"),
         &w.bob,
-        Some(serde_json::json!({ "public": true })),
+        Some(serde_json::json!({ "name": "Renamed", "public": false })),
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT, "{err}");
     assert_eq!(err["error"], "personal_project");
+
+    // Who sees it may move — tasks or not, played or not.
+    for public in [false, true] {
+        let (status, patched) = call(
+            &w.app,
+            Method::PATCH,
+            &format!("/api/projects/{id}"),
+            &w.bob,
+            Some(serde_json::json!({ "public": public })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{patched}");
+        assert_eq!(patched["public"], public);
+    }
 
     let (status, err) = call(
         &w.app,
@@ -507,17 +591,17 @@ async fn the_generic_editors_leave_personal_projects_alone() {
 }
 
 #[tokio::test]
-async fn only_the_owner_plays_a_personal_session() {
+async fn the_join_code_lets_players_in_but_only_the_owner_starts_a_session() {
     let w = world().await;
-    let (_, project) = call(
+    let (_, private) = call(
         &w.app,
         Method::POST,
         "/api/personal-projects",
         &w.bob,
-        Some(csv_request()),
+        Some(private_csv_request()),
     )
     .await;
-    let id = project["id"].as_str().unwrap();
+    let id = private["id"].as_str().unwrap();
     let (status, session) = call(
         &w.app,
         Method::POST,
@@ -532,7 +616,9 @@ async fn only_the_owner_plays_a_personal_session() {
         .expect("join code")
         .to_string();
 
-    let (status, err) = call(
+    // The code is the invitation, private project or not: whoever has it
+    // plays, in their own copy of the repository.
+    let (status, joined) = call(
         &w.app,
         Method::POST,
         "/api/sessions/join",
@@ -540,9 +626,11 @@ async fn only_the_owner_plays_a_personal_session() {
         Some(serde_json::json!({ "code": code })),
     )
     .await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "{err}");
-    assert_eq!(err["error"], "personal_project");
-
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "a player with the code joins: {joined}"
+    );
     let (status, joined) = call(
         &w.app,
         Method::POST,
@@ -553,7 +641,35 @@ async fn only_the_owner_plays_a_personal_session() {
     .await;
     assert_eq!(status, StatusCode::CREATED, "the owner joins: {joined}");
 
-    // Nor can someone else start a session on it.
+    // Its owner can also add a player by hand.
+    let session_id = session["id"].as_str().unwrap();
+    let (status, added) = call(
+        &w.app,
+        Method::POST,
+        &format!("/api/sessions/{session_id}/members"),
+        &w.bob,
+        Some(serde_json::json!({ "user_id": w.bob_id, "role": "participant" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "already in: {added}");
+    let (status, members) = call(
+        &w.app,
+        Method::GET,
+        &format!("/api/sessions/{session_id}/members"),
+        &w.bob,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{members}");
+    let players: Vec<String> = members["members"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["user_id"].as_str().unwrap().to_string())
+        .collect();
+    assert!(players.contains(&w.carol_id.to_string()), "{members}");
+
+    // But a session of it is its owner's to start — private, or public.
     let (status, _) = call(
         &w.app,
         Method::POST,
@@ -563,6 +679,24 @@ async fn only_the_owner_plays_a_personal_session() {
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
+    let (_, public) = call(
+        &w.app,
+        Method::POST,
+        "/api/personal-projects",
+        &w.bob,
+        Some(csv_request()),
+    )
+    .await;
+    let (status, err) = call(
+        &w.app,
+        Method::POST,
+        "/api/sessions",
+        &w.carol,
+        Some(serde_json::json!({ "name": "x", "project_id": public["id"] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{err}");
+    assert_eq!(err["error"], "personal_project");
 }
 
 #[tokio::test]
@@ -616,14 +750,14 @@ async fn a_personal_slug_never_shadows_a_catalog_one() {
 }
 
 #[tokio::test]
-async fn a_personal_session_stays_off_the_public_profile() {
+async fn a_private_personal_session_stays_off_the_public_profile() {
     let w = world().await;
     let (_, project) = call(
         &w.app,
         Method::POST,
         "/api/personal-projects",
         &w.bob,
-        Some(csv_request()),
+        Some(private_csv_request()),
     )
     .await;
     let id = project["id"].as_str().unwrap();
@@ -652,16 +786,359 @@ async fn a_personal_session_stays_off_the_public_profile() {
     let (status, theirs) = call(&w.app, Method::GET, &uri, &w.carol, None).await;
     assert_eq!(status, StatusCode::OK, "{theirs}");
     assert_eq!(theirs["total"], 0, "{theirs}");
-    let resp = w
-        .app
-        .clone()
-        .oneshot(req(Method::GET, &uri, None, None))
-        .await
-        .unwrap();
-    let (_, anonymous) = read_body_json(resp).await;
-    assert_eq!(anonymous["total"], 0, "{anonymous}");
+    let (_, theirs) = anonymous(&w.app, &uri).await;
+    assert_eq!(theirs["total"], 0, "anonymous: {theirs}");
 
     let (_, own) = call(&w.app, Method::GET, &uri, &w.bob, None).await;
     assert_eq!(own["total"], 1, "{own}");
     assert_eq!(own["sessions"][0]["personal"], true);
+    assert_eq!(own["sessions"][0]["private"], true);
+
+    // Nor does the landing show it while it is live.
+    let (_, live) = anonymous(&w.app, "/api/public/active-sessions").await;
+    assert_eq!(live["sessions"], serde_json::json!([]), "{live}");
+}
+
+#[tokio::test]
+async fn a_public_personal_session_is_public_history() {
+    let w = world().await;
+    let (_, project) = call(
+        &w.app,
+        Method::POST,
+        "/api/personal-projects",
+        &w.bob,
+        Some(csv_request()),
+    )
+    .await;
+    let code = play(&w, &w.bob, project["id"].as_str().unwrap()).await;
+
+    // The landing lists it like any live session...
+    let (status, live) = anonymous(&w.app, "/api/public/active-sessions").await;
+    assert_eq!(status, StatusCode::OK, "{live}");
+    let codes: Vec<&str> = live["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|s| s["join_code"].as_str())
+        .collect();
+    assert_eq!(codes, [code.as_str()], "{live}");
+
+    // ...and so does its owner's profile, for anyone.
+    let uri = format!(
+        "/api/users/by-username/{}/sessions",
+        username(&w.app, &w.bob).await
+    );
+    for (who, body) in [
+        (
+            "carol",
+            call(&w.app, Method::GET, &uri, &w.carol, None).await.1,
+        ),
+        ("anonymous", anonymous(&w.app, &uri).await.1),
+    ] {
+        assert_eq!(body["total"], 1, "{who}: {body}");
+        assert_eq!(body["sessions"][0]["personal"], true, "{who}: {body}");
+        assert_eq!(body["sessions"][0]["private"], false, "{who}: {body}");
+    }
+}
+
+#[tokio::test]
+async fn a_personal_project_is_public_unless_kept_private() {
+    let w = world().await;
+    let (_, public) = call(
+        &w.app,
+        Method::POST,
+        "/api/personal-projects",
+        &w.bob,
+        Some(csv_request()),
+    )
+    .await;
+    let (status, private) = call(
+        &w.app,
+        Method::POST,
+        "/api/personal-projects",
+        &w.bob,
+        Some(private_csv_request()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "no plans here: {private}");
+    assert_eq!(private["public"], false);
+    let profile = format!(
+        "/api/users/by-username/{}/projects",
+        username(&w.app, &w.bob).await
+    );
+
+    // The public one opens for anyone, and its owner's profile lists it...
+    for id in [&public["id"], &private["id"]] {
+        let id = id.as_str().unwrap();
+        let (status, _) = anonymous(&w.app, &format!("/api/projects/{id}")).await;
+        let expected = if id == public["id"] {
+            StatusCode::OK
+        } else {
+            StatusCode::FORBIDDEN
+        };
+        assert_eq!(status, expected, "{id}");
+    }
+    let slug = private["slug"].as_str().unwrap();
+    let (status, _) = call(
+        &w.app,
+        Method::GET,
+        &format!("/api/projects/by-slug/{slug}"),
+        &w.carol,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "a private one stays hidden");
+    for (who, body) in [
+        (
+            "carol",
+            call(&w.app, Method::GET, &profile, &w.carol, None).await.1,
+        ),
+        ("anonymous", anonymous(&w.app, &profile).await.1),
+    ] {
+        assert!(lists(&body, &public["id"]), "{who}: {body}");
+        assert!(!lists(&body, &private["id"]), "{who}: {body}");
+        assert_eq!(body["projects"][0]["kind"], "personal", "{who}: {body}");
+    }
+    let (_, own) = call(&w.app, Method::GET, &profile, &w.bob, None).await;
+    assert!(
+        lists(&own, &public["id"]) && lists(&own, &private["id"]),
+        "{own}"
+    );
+
+    // ...but the catalog lists neither, except to their owner.
+    for (who, body) in [
+        (
+            "carol",
+            call(&w.app, Method::GET, "/api/projects", &w.carol, None)
+                .await
+                .1,
+        ),
+        ("anonymous", anonymous(&w.app, "/api/projects").await.1),
+    ] {
+        assert!(!lists(&body, &public["id"]), "{who}: {body}");
+        assert!(!lists(&body, &private["id"]), "{who}: {body}");
+    }
+    let (_, mine) = call(&w.app, Method::GET, "/api/projects", &w.bob, None).await;
+    assert!(
+        lists(&mine, &public["id"]) && lists(&mine, &private["id"]),
+        "{mine}"
+    );
+}
+
+#[tokio::test]
+async fn keeping_a_project_private_takes_premium_where_plans_are_on() {
+    let w = world().await;
+    set_setting(&w, "plans_enabled", "true").await;
+    let options = |cookie: &str| {
+        let app = w.app.clone();
+        let cookie = cookie.to_string();
+        async move {
+            call(
+                &app,
+                Method::GET,
+                "/api/personal-projects/options",
+                &cookie,
+                None,
+            )
+            .await
+            .1
+        }
+    };
+    assert_eq!(options(&w.bob).await["private_allowed"], false);
+    assert_eq!(options(&w.admin).await["private_allowed"], true);
+
+    let (status, err) = call(
+        &w.app,
+        Method::POST,
+        "/api/personal-projects",
+        &w.bob,
+        Some(private_csv_request()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{err}");
+    assert_eq!(err["error"], "premium_required");
+
+    // A free account keeps it public: the default, and no switching.
+    let (status, project) = call(
+        &w.app,
+        Method::POST,
+        "/api/personal-projects",
+        &w.bob,
+        Some(csv_request()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{project}");
+    let id = project["id"].as_str().unwrap().to_string();
+    let (status, err) = call(
+        &w.app,
+        Method::PATCH,
+        &format!("/api/projects/{id}"),
+        &w.bob,
+        Some(serde_json::json!({ "public": false })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{err}");
+    assert_eq!(err["error"], "premium_required");
+    let (status, err) = call(
+        &w.app,
+        Method::PUT,
+        &format!("/api/personal-projects/{id}"),
+        &w.bob,
+        Some(private_csv_request()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{err}");
+    assert_eq!(err["error"], "premium_required");
+
+    // Premium may.
+    set_plan(&w, w.bob_id, "premium").await;
+    assert_eq!(options(&w.bob).await["private_allowed"], true);
+    let (status, patched) = call(
+        &w.app,
+        Method::PATCH,
+        &format!("/api/projects/{id}"),
+        &w.bob,
+        Some(serde_json::json!({ "public": false })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{patched}");
+    assert_eq!(patched["public"], false);
+
+    // When Premium lapses, a private project stays private: publishing it
+    // is its owner's call, and keeping it is not making it.
+    set_plan(&w, w.bob_id, "free").await;
+    let (status, rebuilt) = call(
+        &w.app,
+        Method::PUT,
+        &format!("/api/personal-projects/{id}"),
+        &w.bob,
+        Some(private_csv_request()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{rebuilt}");
+    assert_eq!(rebuilt["public"], false);
+    let (status, rebuilt) = call(
+        &w.app,
+        Method::PUT,
+        &format!("/api/personal-projects/{id}"),
+        &w.bob,
+        Some(csv_request()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{rebuilt}");
+    assert_eq!(
+        rebuilt["public"], false,
+        "an absent `public` leaves it as it is"
+    );
+}
+
+#[tokio::test]
+async fn a_task_can_bring_its_own_judges() {
+    let w = world().await;
+    let (status, project) = call(
+        &w.app,
+        Method::POST,
+        "/api/personal-projects",
+        &w.bob,
+        Some(serde_json::json!({
+            "description": "Add a CSV export to the reports page.",
+            "tasks": [
+                { "title": "Serve the report as CSV", "judges": ["test-quality"] },
+                { "title": "Add the export button" }
+            ],
+            "judges": PANEL
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{project}");
+    // Task 1: its own judge + the session report; task 2: the default two.
+    assert_eq!(project["judge_review_count"], 4);
+
+    let project_id: uuid::Uuid = project["id"].as_str().unwrap().parse().unwrap();
+    let rows = tasks::Entity::find()
+        .filter(tasks::Column::ProjectIdFk.eq(project_id))
+        .order_by_asc(tasks::Column::Ordinal)
+        .all(&w.state.db)
+        .await
+        .unwrap();
+    let judges_of = |task_id: uuid::Uuid| {
+        let db = w.state.db.clone();
+        async move {
+            let tj = task_judges::Entity::find()
+                .filter(task_judges::Column::TaskId.eq(task_id))
+                .order_by_asc(task_judges::Column::Ordinal)
+                .all(&db)
+                .await
+                .unwrap();
+            let mut slugs = Vec::new();
+            for row in tj {
+                let judge = arena_core::entities::judges::Entity::find_by_id(row.judge_id)
+                    .one(&db)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                slugs.push(judge.slug);
+            }
+            slugs
+        }
+    };
+    let first = judges_of(rows[0].id).await;
+    assert_eq!(first[0], "test-quality", "{first:?}");
+    assert_eq!(first.len(), 2, "its judge and the report: {first:?}");
+    assert_eq!(judges_of(rows[1].id).await, PANEL);
+    let sheet = rows[0].evaluation.as_ref().unwrap();
+    let keys: Vec<&str> = sheet["criteria"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["key"].as_str().unwrap())
+        .collect();
+    assert_eq!(keys, ["tests"], "its own judge's criteria only");
+
+    // The owner reads back which task chose its own panel.
+    let (_, full) = call(
+        &w.app,
+        Method::GET,
+        &format!("/api/personal-projects/{project_id}"),
+        &w.bob,
+        None,
+    )
+    .await;
+    assert_eq!(
+        full["spec"]["tasks"][0]["judges"],
+        serde_json::json!(["test-quality"])
+    );
+    assert!(full["spec"]["tasks"][1].get("judges").is_none(), "{full}");
+
+    // A task's panel is held to the same rules as the default one.
+    let (status, err) = call(
+        &w.app,
+        Method::POST,
+        "/api/personal-projects",
+        &w.bob,
+        Some(serde_json::json!({
+            "description": "d",
+            "tasks": [{ "title": "One" }, { "title": "Two", "judges": ["task-anti-cheat"] }]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{err}");
+    assert_eq!(err["field"], "tasks");
+    assert!(
+        err["detail"].as_str().unwrap().starts_with("task 2:"),
+        "{err}"
+    );
+    let (status, err) = call(
+        &w.app,
+        Method::POST,
+        "/api/personal-projects",
+        &w.bob,
+        Some(serde_json::json!({
+            "description": "d",
+            "tasks": [{ "title": "One", "judges": [] }]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{err}");
+    assert_eq!(err["field"], "tasks");
 }

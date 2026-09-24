@@ -131,4 +131,89 @@ describe("ProjectDetailPage", () => {
     expect(screen.getByRole("tab", { name: /Sessions/ })).not.toBeNull();
     expect(screen.getByText("Active session")).not.toBeNull();
   });
+
+  describe("a personal project", () => {
+    const personal = project({
+      kind: "personal",
+      public: false,
+      slug: "csv-export",
+      owner_user_id: "me",
+    });
+
+    function renderPersonal(
+      p: Project,
+      sessions: Session[],
+      viewer: { currentUserId: string; isAdmin: boolean },
+    ) {
+      return render(ProjectDetailPage, {
+        project: p,
+        ssrSessions: sessions,
+        judges: [],
+        topPlayers: boards,
+        taskPreview: [],
+        parts: [],
+        message: null,
+        ...viewer,
+      });
+    }
+
+    it("puts the line to run in the owner's repository right on the card", () => {
+      renderPersonal(personal, [], { currentUserId: "me", isAdmin: false });
+
+      expect(screen.getByTestId("personal-start").textContent).toContain("ololo start csv-export");
+      // Nothing to open first, and no visibility to choose: it is private.
+      expect(screen.queryByRole("button", { name: "Start session" })).toBeNull();
+      expect(screen.queryByText("Visibility")).toBeNull();
+      const edit = screen.getByTestId("personal-edit");
+      expect(edit.getAttribute("href")).toBe("/projects/p1/personal");
+      expect(edit.textContent).toContain("Edit tasks and judges");
+    });
+
+    it("offers a new version once it has been played", () => {
+      renderPersonal(personal, [session("finished")], { currentUserId: "me", isAdmin: false });
+      const edit = screen.getByTestId("personal-edit");
+      expect(edit.getAttribute("href")).toBe("/projects/new?from=p1");
+      expect(edit.textContent).toContain("Duplicate and edit");
+    });
+
+    it("offers no start to anyone but its owner", () => {
+      renderPersonal(personal, [], { currentUserId: "admin", isAdmin: true });
+      expect(screen.queryByTestId("personal-start")).toBeNull();
+    });
+
+    it("tells its owner who sees it, and where to change that", () => {
+      renderPersonal(personal, [], { currentUserId: "me", isAdmin: false });
+      expect(screen.getByTestId("project-visibility-badge").textContent).toMatch(
+        /Your project · private/,
+      );
+      const line = screen.getByTestId("personal-visibility");
+      expect(line.textContent).toContain("only you see it");
+      expect(line.querySelector("a")?.getAttribute("href")).toBe("/projects/p1/personal");
+    });
+
+    it("introduces a public one to a visitor by its owner", () => {
+      renderPersonal({ ...personal, public: true, owner_username: "andrey" } as Project, [], {
+        currentUserId: "visitor",
+        isAdmin: false,
+      });
+      const badge = screen.getByTestId("project-visibility-badge");
+      expect(badge.textContent).toMatch(/Personal project · by\s+@andrey/);
+      expect(badge.querySelector("a")?.getAttribute("href")).toBe("/u/andrey");
+      expect(screen.queryByTestId("personal-visibility")).toBeNull();
+    });
+
+    it("sends an archived one to a new version instead of the command", () => {
+      renderPersonal({ ...personal, archived_at: "2026-09-23T10:00:00Z" } as Project, [], {
+        currentUserId: "me",
+        isAdmin: false,
+      });
+      const start = screen.getByTestId("personal-start");
+      expect(start.textContent).not.toContain("ololo start");
+      expect(start.textContent).toContain("Archived");
+      expect(screen.queryByTestId("personal-visibility")).toBeNull();
+      expect(screen.getByTestId("personal-edit").getAttribute("href")).toBe(
+        "/projects/new?from=p1",
+      );
+    });
+  });
 });

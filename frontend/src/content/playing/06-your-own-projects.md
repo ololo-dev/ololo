@@ -25,11 +25,15 @@ task. **Suggest tasks** drafts a map from your description; you see it before
 it replaces anything.
 
 Pick the judges — correctness, code quality and tests are on by default — and
-the session length. The form shows how many judge reviews a session will use.
+the session length. They review every task, unless a task chooses its own:
+**Choose judges** on a task gives it a panel of its own, say architecture for
+the step that restructures the code, or tests alone for the one that only adds
+coverage. Then the session length and who sees the project — see below. The
+form shows how many judge reviews a session will use.
 
 ### 2. Start it in your repository
 
-The project page gives you one line:
+The project page gives you one line to copy:
 
 ```sh
 ololo start <your-project>
@@ -63,12 +67,26 @@ scale: a task that leaves the code no worse than it found it earns its whole
 health bonus, however old the codebase. The chart marks the code you started
 from with a square.
 
-### What stays private
+Not alone? Give the session's join code to a teammate: `ololo join <code>` in
+their own copy of the repository makes them a player, judged on their own work
+beside yours. Only you start sessions of your project.
 
-Personal projects and their sessions are yours alone. Nobody else can find,
-join or watch them, your public profile lists them only to you, and they never
-count toward any ranking — there is nobody to compete with in your own
-repository. Judge reviews do count toward your monthly allowance.
+### Who sees it
+
+A personal project is public unless you keep it private:
+
+- **Public**, the default: your profile lists it, and anyone can open it and
+  watch its sessions — the code each task changes included. While a session
+  runs, it shows on the landing page like any other. The project itself never
+  appears in the catalog.
+- **Private**: only you see the project, and a session only whoever you give
+  its join code. Where ololo sells plans, keeping a project private is part of
+  Premium; a private project stays private if Premium ends.
+
+**Change** under the start command on the project's page switches it, even
+after it has been played. Either way only you start its sessions, and they never
+count toward the Arena or any rating. Judge reviews count toward each player's
+monthly allowance.
 
 A project can be edited until its first session. After that its tasks stay as
 they were — the results refer to them — and **Duplicate and edit** starts a

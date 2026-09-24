@@ -64,8 +64,10 @@ fn human(bytes: u64) -> String {
     }
 }
 
-/// The lines the user reads before answering.
-pub fn summary(survey: &Survey, server: &str) -> Vec<String> {
+/// The lines the user reads before answering. `public` is the project's
+/// visibility, when the server says: a public project's sessions — this
+/// code included — are anyone's to watch.
+pub fn summary(survey: &Survey, server: &str, public: Option<bool>) -> Vec<String> {
     let mut lines = vec![
         format!(
             "This is a personal project: ololo uploads this folder to {server} so the judges \
@@ -96,6 +98,17 @@ pub fn summary(survey: &Survey, server: &str) -> Vec<String> {
             .collect();
         lines.push(format!("  largest: {}", names.join(", ")));
     }
+    match public {
+        Some(true) => lines.push(
+            "  the project is public: anyone can open it and watch its sessions, this code included"
+                .to_string(),
+        ),
+        Some(false) => lines.push(
+            "  the project is private: only whoever has this session's join code can watch it"
+                .to_string(),
+        ),
+        None => {}
+    }
     lines.push(format!(
         "  leave paths out with {} (gitignore syntax)",
         files::OLOLO_IGNORE
@@ -106,9 +119,9 @@ pub fn summary(survey: &Survey, server: &str) -> Vec<String> {
 /// Show what will be uploaded and get a yes: `--yes`, or an answer on the
 /// terminal. Refuses a tree the server would refuse anyway, and refuses to
 /// guess when nobody is there to ask.
-pub fn confirm(worktree: &Path, server: &str, yes: bool) -> Result<()> {
+pub fn confirm(worktree: &Path, server: &str, public: Option<bool>, yes: bool) -> Result<()> {
     let survey = survey(worktree)?;
-    for line in summary(&survey, server) {
+    for line in summary(&survey, server, public) {
         println!("{line}");
     }
     if survey.bytes > MAX_UPLOAD_BYTES {
@@ -156,19 +169,25 @@ mod tests {
         assert_eq!(s.secrets, 1);
         assert_eq!(s.largest[0].0, PathBuf::from("big.bin"));
 
-        let text = summary(&s, "https://ololo.dev").join("\n");
+        let text = summary(&s, "https://ololo.dev", Some(true)).join("\n");
         assert!(text.contains("2 files"), "{text}");
         assert!(
             text.contains("1 secret-looking file(s) stay here"),
             "{text}"
         );
         assert!(text.contains(".ololoignore"), "{text}");
+        assert!(text.contains("anyone can open it"), "{text}");
+
+        let private = summary(&s, "https://ololo.dev", Some(false)).join("\n");
+        assert!(private.contains("join code"), "{private}");
+        let unsaid = summary(&s, "https://ololo.dev", None).join("\n");
+        assert!(!unsaid.contains("the project is"), "{unsaid}");
     }
 
     #[test]
     fn yes_confirms_without_asking() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("a.rs"), "fn main() {}").unwrap();
-        confirm(dir.path(), "https://ololo.dev", true).expect("--yes confirms");
+        confirm(dir.path(), "https://ololo.dev", Some(true), true).expect("--yes confirms");
     }
 }

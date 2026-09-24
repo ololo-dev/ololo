@@ -1,9 +1,10 @@
 import type { PageServerLoad, Actions } from "./$types";
-import { redirect, error } from "@sveltejs/kit";
+import { redirect, error, fail } from "@sveltejs/kit";
 import {
   getPersonalProject,
   getPersonalProjectOptions,
   updatePersonalProject,
+  patchProject,
   ApiError,
 } from "$lib/api";
 import { parsePersonalForm, personalFailure } from "$lib/server/personal-project-form";
@@ -30,6 +31,21 @@ export const load: PageServerLoad = async ({ params, locals, fetch }) => {
 };
 
 export const actions: Actions = {
+  // Who sees it is not part of the tasks: it moves after the first session
+  // too, when the rest of the project is frozen.
+  visibility: async ({ params, request, fetch }) => {
+    const data = await request.formData();
+    const isPublic = String(data.get("public") ?? "true") !== "false";
+    try {
+      await patchProject(params.id, { public: isPublic }, { fetch });
+      return { visibility: isPublic ? "public" : "private" };
+    } catch (err) {
+      if (err instanceof ApiError) {
+        return fail(err.status, { visibilityError: err.code ?? "error" });
+      }
+      throw err;
+    }
+  },
   default: async ({ params, request, fetch }) => {
     const { request: body, values } = parsePersonalForm(await request.formData());
     try {

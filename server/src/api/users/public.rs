@@ -59,9 +59,11 @@ pub struct PublicSessionEntry {
     pub agent: Option<String>,
     /// Models observed in client-reported stats, if any.
     pub models: Vec<String>,
-    /// A session of the user's own personal project. Only the user sees
-    /// these; everyone else's listing leaves them out.
+    /// A session of the user's own personal project.
     pub personal: bool,
+    /// A session of a personal project its owner keeps private. Only the
+    /// owner's own listing carries these; everyone else's leaves them out.
+    pub private: bool,
 }
 
 #[derive(Serialize)]
@@ -113,9 +115,10 @@ pub async fn get_sessions_by_username(
     let page = params.page.unwrap_or(1).max(1);
     let per_page = params.per_page.unwrap_or(20).clamp(1, 50);
 
-    // Personal sessions are the user's own work on their own code — their
-    // names alone can say more than the user means to publish. Listed for
-    // the user, left out for every other viewer.
+    // A private personal project is the user's own work on their own code,
+    // kept to themselves — its sessions' names alone can say more than the
+    // user means to publish. Listed for the user, left out for every other
+    // viewer. A public one's sessions are history like any other.
     let own_profile = optional_claims
         .as_ref()
         .and_then(|claims| claims.user_id().ok())
@@ -127,7 +130,7 @@ pub async fn get_sessions_by_username(
         } else {
             q.filter(
                 players::Column::SessionIdFk
-                    .not_in_subquery(arena_core::personal::personal_session_ids_query()),
+                    .not_in_subquery(arena_core::personal::private_personal_session_ids_query()),
             )
         }
     };
@@ -211,7 +214,7 @@ pub async fn get_sessions_by_username(
         }
     }
 
-    let personal_projects: std::collections::HashSet<Uuid> = if own_profile {
+    let personal_projects: std::collections::HashSet<Uuid> = {
         let project_ids: Vec<Uuid> = sessions::Entity::find()
             .filter(sessions::Column::Id.is_in(members.iter().map(|m| m.session_id_fk)))
             .all(&state.db)
@@ -220,8 +223,6 @@ pub async fn get_sessions_by_username(
             .map(|s| s.project_id_fk)
             .collect();
         arena_core::personal::personal_project_ids(&state.db, &project_ids).await?
-    } else {
-        std::collections::HashSet::new()
     };
 
     let mut session_entries = Vec::with_capacity(members.len());
@@ -237,6 +238,8 @@ pub async fn get_sessions_by_username(
             let project = projects::Entity::find_by_id(session.project_id_fk)
                 .one(&state.db)
                 .await?;
+            let personal = personal_projects.contains(&session.project_id_fk);
+            let private = personal && project.as_ref().is_some_and(|p| !p.public);
             session_entries.push(PublicSessionEntry {
                 session_id: session.id.to_string(),
                 name: session.name,
@@ -263,7 +266,8 @@ pub async fn get_sessions_by_username(
                     .get(&member.id)
                     .map(|(_, m)| m.iter().cloned().collect())
                     .unwrap_or_default(),
-                personal: personal_projects.contains(&session.project_id_fk),
+                personal,
+                private,
             });
         }
     }
@@ -274,4 +278,54 @@ pub async fn get_sessions_by_username(
         page,
         per_page,
     }))
+}
+
+#[derive(Serialize)]
+pub struct PublicProjectsResponse {
+    pub projects: Vec<crate::api::projects::ProjectSummary>,
+}
+
+/// Most personal projects one profile lists.
+const PROFILE_PROJECTS_LIMIT: u64 = 50;
+
+/// `GET /api/users/by-username/:username/projects` — the user's own
+/// (personal) projects, newest first: the public ones for everyone, the
+/// private ones too on the user's own profile. This is where a public
+/// personal project is listed — never in the catalog or on the landing.
+#[tracing::instrument(level = "info", skip_all, fields(username = %username))]
+pub async fn get_projects_by_username(
+    State(state): State<AppState>,
+    optional_claims: Option<AccessClaims>,
+    Path(username): Path<String>,
+) -> Result<Json<PublicProjectsResponse>, AuthError> {
+    let user = users::Entity::find()
+        .filter(users::Column::Username.eq(&username))
+        .one(&state.db)
+        .await?
+        .ok_or(AuthError::UserNotFound)?;
+    let own_profile = optional_claims
+        .as_ref()
+        .and_then(|claims| claims.user_id().ok())
+        == Some(user.id);
+
+    let mut q = projects::Entity::find()
+        .filter(projects::Column::OwnerUserIdFk.eq(user.id))
+        .filter(projects::Column::ArchivedAt.is_null())
+        .filter(
+            projects::Column::Id.in_subquery(arena_core::personal::personal_project_ids_query()),
+        );
+    if !own_profile {
+        q = q.filter(projects::Column::Public.eq(true));
+    }
+    let rows = q
+        .order_by_desc(projects::Column::CreatedAt)
+        .limit(PROFILE_PROJECTS_LIMIT)
+        .all(&state.db)
+        .await?;
+
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        out.push(crate::api::personal_projects::summary(&state.db, row).await?);
+    }
+    Ok(Json(PublicProjectsResponse { projects: out }))
 }

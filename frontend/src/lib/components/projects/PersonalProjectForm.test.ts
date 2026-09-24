@@ -18,6 +18,7 @@ vi.mock("$lib/api", async (importOriginal) => {
 function options(overrides: Partial<PersonalProjectOptions> = {}): PersonalProjectOptions {
   return {
     creation_allowed: true,
+    private_allowed: true,
     judges: [
       {
         slug: "correctness",
@@ -77,7 +78,7 @@ describe("PersonalProjectForm", () => {
     expect(JSON.parse(hidden("judges_json"))).toEqual(["correctness", "code-quality"]);
     expect(hidden("session_duration_secs")).toBe("7200");
     expect(screen.getByTestId("pp-summary").textContent).toContain(
-      "about 3 judge reviews per session",
+      "About 3 judge reviews per session",
     );
     // Nothing to submit without a description.
     expect((screen.getByTestId("pp-submit") as HTMLButtonElement).disabled).toBe(true);
@@ -102,7 +103,8 @@ describe("PersonalProjectForm", () => {
       { title: "Endpoint", description: "" },
       { title: "Button", description: "" },
     ]);
-    expect(screen.getByTestId("pp-summary").textContent).toContain("2 tasks × 2 judges");
+    expect(screen.getByTestId("pp-task-count").textContent?.trim()).toBe("2");
+    expect(screen.getByTestId("pp-summary").textContent).toContain("About 5 judge reviews");
 
     await fireEvent.click(screen.getAllByTestId("pp-task-remove")[0]);
     expect(JSON.parse(hidden("tasks_json"))).toEqual([{ title: "Button", description: "" }]);
@@ -120,6 +122,125 @@ describe("PersonalProjectForm", () => {
     expect(architecture.disabled).toBe(false);
     await fireEvent.change(architecture);
     expect(JSON.parse(hidden("judges_json"))).toEqual(["correctness", "architecture"]);
+  });
+
+  it("gives a task judges of its own and takes them back", async () => {
+    render(PersonalProjectForm, {
+      options: options(),
+      submitLabel: "Create project",
+      cancelHref: "/projects",
+    });
+    await fireEvent.input(screen.getByTestId("pp-description"), {
+      target: { value: "Add a CSV export." },
+    });
+    const add = screen.getByTestId("pp-add-task");
+    await fireEvent.click(add);
+    await fireEvent.click(add);
+    const titles = screen.getAllByTestId("pp-task-title");
+    await fireEvent.input(titles[0], { target: { value: "Endpoint" } });
+    await fireEvent.input(titles[1], { target: { value: "Button" } });
+
+    // Its own panel starts as a copy of the default one, under the same cap.
+    await fireEvent.click(screen.getAllByTestId("pp-task-customize")[0]);
+    expect(screen.getAllByTestId("pp-task-customize")).toHaveLength(1);
+    const architecture = screen.getByTestId("pp-task-judge-architecture") as HTMLButtonElement;
+    expect(architecture.disabled).toBe(true);
+    await fireEvent.click(screen.getByTestId("pp-task-judge-code-quality"));
+    await fireEvent.click(screen.getByTestId("pp-task-judge-correctness"));
+    await fireEvent.click(architecture);
+    expect(architecture.getAttribute("aria-pressed")).toBe("true");
+    await tick();
+    expect(JSON.parse(hidden("tasks_json"))).toEqual([
+      { title: "Endpoint", description: "", judges: ["architecture"] },
+      { title: "Button", description: "" },
+    ]);
+    // The default panel is untouched; the task's own counts in the reviews.
+    expect(JSON.parse(hidden("judges_json"))).toEqual(["correctness", "code-quality"]);
+    expect(screen.getByTestId("pp-own-panels").textContent?.trim()).toBe("1");
+    expect(screen.getByTestId("pp-summary").textContent).toContain("About 4 judge reviews");
+
+    // A task's own panel cannot be empty.
+    const submit = screen.getByTestId("pp-submit") as HTMLButtonElement;
+    expect(submit.disabled).toBe(false);
+    await fireEvent.click(architecture);
+    expect(submit.disabled).toBe(true);
+    expect(screen.getByTestId("pp-empty-panels").textContent).toContain("Task 1 has no judges");
+
+    await fireEvent.click(screen.getByTestId("pp-task-inherit"));
+    expect(submit.disabled).toBe(false);
+    expect(JSON.parse(hidden("tasks_json"))).toEqual([
+      { title: "Endpoint", description: "" },
+      { title: "Button", description: "" },
+    ]);
+  });
+
+  it("re-renders a task's own judges, minus the ones no longer offered", async () => {
+    render(PersonalProjectForm, {
+      options: options(),
+      initial: {
+        name: "CSV export",
+        description: "Add a CSV export.",
+        tasks: [
+          { title: "Endpoint", description: "", judges: ["architecture", "retired"] },
+          { title: "Button", description: "" },
+        ],
+        judges: ["correctness"],
+        session_duration_secs: 3600,
+      },
+      submitLabel: "Save changes",
+      cancelHref: "/projects/p",
+    });
+    expect(screen.getAllByTestId("pp-task-panel")).toHaveLength(1);
+    expect(JSON.parse(hidden("tasks_json"))).toEqual([
+      { title: "Endpoint", description: "", judges: ["architecture"] },
+      { title: "Button", description: "" },
+    ]);
+    expect(screen.getByTestId("pp-task-judges").textContent).toContain("Correctness");
+  });
+
+  it("is public unless kept private, and says what that means", async () => {
+    render(PersonalProjectForm, {
+      options: options(),
+      submitLabel: "Create project",
+      cancelHref: "/projects",
+    });
+    const picked = () =>
+      (document.querySelector('input[name="public"]:checked') as HTMLInputElement).value;
+    expect(picked()).toBe("true");
+    expect(screen.getByTestId("pp-visibility-summary").textContent?.trim()).toBe("Anyone");
+    expect(screen.queryByTestId("pp-private-upsell")).toBeNull();
+
+    await fireEvent.click(screen.getByTestId("pp-private"));
+    expect(picked()).toBe("false");
+    expect(screen.getByTestId("pp-visibility-summary").textContent?.trim()).toBe("Only you");
+  });
+
+  it("offers private to Premium only, and keeps a private one private", () => {
+    const { unmount } = render(PersonalProjectForm, {
+      options: options({ private_allowed: false }),
+      submitLabel: "Create project",
+      cancelHref: "/projects",
+    });
+    expect((screen.getByTestId("pp-private") as HTMLInputElement).disabled).toBe(true);
+    expect(screen.getByTestId("pp-private-upsell").getAttribute("href")).toBe("/pricing");
+    unmount();
+
+    render(PersonalProjectForm, {
+      options: options({ private_allowed: false }),
+      initial: {
+        name: "CSV export",
+        description: "Add a CSV export.",
+        tasks: [],
+        judges: ["correctness"],
+        session_duration_secs: 3600,
+        public: false,
+      },
+      submitLabel: "Save changes",
+      cancelHref: "/projects/p",
+    });
+    const kept = screen.getByTestId("pp-private") as HTMLInputElement;
+    expect(kept.checked).toBe(true);
+    expect(kept.disabled).toBe(false);
   });
 
   it("previews a suggested map before it replaces anything", async () => {

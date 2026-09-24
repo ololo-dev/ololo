@@ -90,11 +90,12 @@ pub struct PatchProjectReq {
 }
 
 impl PatchProjectReq {
-    /// Whether the request does nothing but archive or unarchive.
-    pub(crate) fn touches_only_archive(&self) -> bool {
+    /// Whether the request does nothing but archive, unarchive or change
+    /// who sees the project — all a personal project lets this editor do.
+    pub(crate) fn touches_only_archive_or_visibility(&self) -> bool {
         let PatchProjectReq {
             name,
-            public,
+            public: _,
             archived: _,
             description,
             slug,
@@ -109,7 +110,6 @@ impl PatchProjectReq {
             memory_schema,
         } = self;
         name.is_none()
-            && public.is_none()
             && description.is_none()
             && slug.is_none()
             && category.is_none()
@@ -148,7 +148,7 @@ pub struct ProjectSummary {
     pub name: String,
     pub slug: Option<String>,
     /// `challenge` — a project from the catalog — or `personal`: a user's
-    /// own work, private to them and kept off every global standing.
+    /// own work, kept out of the catalog and off every global standing.
     /// Endpoints that serve a project fill it via [`attach_kinds`];
     /// everything else reports the default.
     pub kind: &'static str,
@@ -157,6 +157,10 @@ pub struct ProjectSummary {
     pub tags: Vec<String>,
     pub cover_image_url: Option<String>,
     pub owner_user_id: Uuid,
+    /// The owner's username, on a personal project's own page — the way to
+    /// the profile that lists it (see [`attach_owner_username`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_username: Option<String>,
     pub public: bool,
     pub archived_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_at: chrono::DateTime<chrono::Utc>,
@@ -256,6 +260,9 @@ pub enum ProjectError {
     /// leave the two out of step.
     #[error("personal_project")]
     PersonalProject,
+    /// Making a personal project private is a Premium choice.
+    #[error("premium_required")]
+    PremiumRequired,
     #[error("database error: {0}")]
     Db(#[from] sea_orm::DbErr),
 }
@@ -283,6 +290,7 @@ crate::api::error::impl_api_error!(ProjectError {
         "project creation is currently restricted to administrators",
     ),
     Self::PersonalProject => (CONFLICT, "personal_project"),
+    Self::PremiumRequired => (FORBIDDEN, "premium_required"),
     Self::Db(_) => (INTERNAL_SERVER_ERROR, "database_error"),
 });
 
@@ -440,6 +448,7 @@ pub fn to_summary_with_sessions(
         name: m.name,
         slug: m.slug,
         kind: KIND_CHALLENGE,
+        owner_username: None,
         description: m.description,
         category: m.category,
         tags,
@@ -502,6 +511,24 @@ pub async fn attach_kinds(
         } else {
             KIND_CHALLENGE
         };
+    }
+    Ok(())
+}
+
+/// Name the owner of a personal project: its page links the profile that
+/// lists it. A catalog project's owner is the site's business, not the
+/// page's, so it stays unnamed.
+pub async fn attach_owner_username(
+    db: &DatabaseConnection,
+    summary: &mut ProjectSummary,
+) -> Result<(), sea_orm::DbErr> {
+    use sea_orm::EntityTrait;
+    if summary.kind == KIND_PERSONAL {
+        summary.owner_username =
+            arena_core::entities::users::Entity::find_by_id(summary.owner_user_id)
+                .one(db)
+                .await?
+                .and_then(|u| u.username);
     }
     Ok(())
 }

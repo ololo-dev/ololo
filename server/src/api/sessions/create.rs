@@ -35,6 +35,14 @@ pub async fn post_create(
     if !project.public && project.owner_user_id_fk != user_id {
         return Err(SessionError::ProjectForbidden);
     }
+    // A personal project is played when its owner starts it: public or
+    // not, nobody else opens a session of it. Players they invite join
+    // that session with its code, each in their own copy of the repository.
+    if project.owner_user_id_fk != user_id
+        && arena_core::personal::is_personal_project(&state.db, project.id).await?
+    {
+        return Err(SessionError::PersonalProject);
+    }
     if project.archived_at.is_some() {
         return Err(SessionError::ProjectArchived);
     }

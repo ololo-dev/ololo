@@ -2,9 +2,10 @@
 //!
 //! The user describes the work and, optionally, lists the tasks it splits
 //! into (the navigation map); the server turns that into an ordinary
-//! private project — one open-ended, judged task per map entry, or one for
-//! the whole description — that its owner starts with `ololo start <slug>`
-//! inside their own repository. The request is kept beside the project
+//! project — one open-ended, judged task per map entry, or one for the
+//! whole description — that its owner starts with `ololo start <slug>`
+//! inside their own repository. It is public unless the owner keeps it
+//! private, which takes Premium where plans are on (see [`private_allowed`]). The request is kept beside the project
 //! (`personal_projects.spec`) so the owner can edit it until the first
 //! session freezes the tasks, and duplicate it after.
 //!
@@ -37,7 +38,7 @@ use uuid::Uuid;
 use crate::api::admin_export_import::{ExportPoints, insert_task_with_judges};
 use crate::api::projects::{
     KIND_PERSONAL, ProjectSummary, compute_points_range, judge_review_count,
-    project_has_active_sessions, to_summary,
+    project_has_active_sessions, to_summary_with_sessions,
 };
 use crate::auth::jwt::AccessClaims;
 use crate::state::AppState;
@@ -59,6 +60,10 @@ pub struct PersonalProjectReq {
     pub judges: Option<Vec<String>>,
     #[serde(default)]
     pub session_duration_secs: Option<i64>,
+    /// Who sees the project. Absent: public on create, unchanged on
+    /// replace. `false` takes [`private_allowed`].
+    #[serde(default)]
+    pub public: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -67,12 +72,17 @@ pub struct PersonalTaskReq {
     pub title: String,
     #[serde(default)]
     pub description: Option<String>,
+    /// This task's own judges; absent = the project's default panel.
+    #[serde(default)]
+    pub judges: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct OptionsResp {
     /// Whether the caller may create a personal project at all.
     pub creation_allowed: bool,
+    /// Whether the caller may keep one private (see [`private_allowed`]).
+    pub private_allowed: bool,
     pub judges: Vec<JudgeOption>,
     pub limits: Limits,
     pub session: SessionBounds,
@@ -135,6 +145,9 @@ pub enum PersonalProjectError {
     /// A session exists: the tasks are what that session played.
     #[error("project_frozen")]
     ProjectFrozen,
+    /// Keeping a project private is a Premium choice.
+    #[error("premium_required")]
+    PremiumRequired,
     #[error("no_judges_available")]
     NoJudgesAvailable,
     #[error("database error: {0}")]
@@ -155,6 +168,7 @@ crate::api::error::impl_api_error!(PersonalProjectError {
         "detail": detail,
     ),
     Self::ProjectFrozen => (CONFLICT, "project_frozen"),
+    Self::PremiumRequired => (FORBIDDEN, "premium_required"),
     Self::NoJudgesAvailable => (UNPROCESSABLE_ENTITY, "no_judges_available"),
     Self::Db(_) => (INTERNAL_SERVER_ERROR, "database_error"),
 });
@@ -170,22 +184,51 @@ impl From<sea_orm::TransactionError<PersonalProjectError>> for PersonalProjectEr
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
-/// The caller, refused unless they may create projects on this instance.
-async fn creator(
+/// The signed-in caller.
+async fn caller(
     db: &DatabaseConnection,
     claims: &AccessClaims,
 ) -> Result<users::Model, PersonalProjectError> {
     let user_id = claims
         .user_id()
         .map_err(|_| PersonalProjectError::Forbidden)?;
-    let user = users::Entity::find_by_id(user_id)
+    users::Entity::find_by_id(user_id)
         .one(db)
         .await?
-        .ok_or(PersonalProjectError::Forbidden)?;
-    if !user.is_admin && !crate::api::settings::is_project_creation_allowed(db).await? {
+        .ok_or(PersonalProjectError::Forbidden)
+}
+
+/// Whether `user` may create projects on this instance.
+async fn may_create(db: &DatabaseConnection, user: &users::Model) -> Result<bool, sea_orm::DbErr> {
+    Ok(user.is_admin || crate::api::settings::is_project_creation_allowed(db).await?)
+}
+
+/// The caller, refused unless they may create projects on this instance.
+async fn creator(
+    db: &DatabaseConnection,
+    claims: &AccessClaims,
+) -> Result<users::Model, PersonalProjectError> {
+    let user = caller(db, claims).await?;
+    if !may_create(db, &user).await? {
         return Err(PersonalProjectError::CreationRestricted);
     }
     Ok(user)
+}
+
+/// Whether `user` may keep a personal project private: a Premium account
+/// or an admin — or anyone, on an instance without plans, where no tier
+/// denies anything (`arena_core::quota::plans_enabled`). The plan is read
+/// as the judge quota reads it; whatever ends a Premium sets it back to
+/// free. Only making a project private asks; a private one stays private
+/// when Premium lapses, because publishing someone's work is not ours to do.
+pub(crate) async fn private_allowed<C: sea_orm::ConnectionTrait>(
+    db: &C,
+    user: &users::Model,
+) -> Result<bool, sea_orm::DbErr> {
+    if user.is_admin || !arena_core::quota::plans_enabled(db).await? {
+        return Ok(true);
+    }
+    Ok(user.plan == arena_core::quota::PLAN_PREMIUM)
 }
 
 /// The personal project `id` with its spec; 404 for anything else,
@@ -212,7 +255,9 @@ async fn load_personal(
     Ok((project, marker))
 }
 
-async fn summary(
+/// A personal project as the catalog shapes one — with the finished
+/// sessions its card counts as "played".
+pub(crate) async fn summary(
     db: &DatabaseConnection,
     row: projects::Model,
 ) -> Result<ProjectSummary, sea_orm::DbErr> {
@@ -221,9 +266,15 @@ async fn summary(
         .filter(tasks::Column::ProjectIdFk.eq(row.id))
         .count(db)
         .await?;
+    let played = sessions::Entity::find()
+        .filter(sessions::Column::ProjectIdFk.eq(row.id))
+        .filter(sessions::Column::Status.eq("finished"))
+        .count(db)
+        .await?;
     let range = compute_points_range(db, row.id).await?;
     let reviews = judge_review_count(db, row.id).await?;
-    let mut out = to_summary(row, active, task_count as i64, range);
+    let mut out =
+        to_summary_with_sessions(row, active, task_count as i64, range, Some(played as i64));
     out.judge_review_count = Some(reviews);
     out.kind = KIND_PERSONAL;
     Ok(out)
@@ -249,12 +300,12 @@ async fn insert_tasks(
     eligible: &[arena_core::entities::judges::Model],
     now: chrono::DateTime<Utc>,
 ) -> Result<(), PersonalProjectError> {
-    let panel = build::panel(spec, eligible);
+    let catalog = build::catalog(eligible);
     let judge_ids: std::collections::HashMap<String, Uuid> =
         eligible.iter().map(|j| (j.slug.clone(), j.id)).collect();
     let points = project_points();
-    for task in personal::build_tasks(spec, &panel) {
-        let export = build::export_task(task, &panel);
+    for task in personal::build_tasks(spec, &catalog) {
+        let export = build::export_task(task);
         crate::api::admin_export_import::validate_task_extras(&export).map_err(|detail| {
             PersonalProjectError::Invalid {
                 field: "tasks",
@@ -283,11 +334,9 @@ pub async fn get_options(
     State(state): State<AppState>,
     claims: AccessClaims,
 ) -> Result<Json<OptionsResp>, PersonalProjectError> {
-    let creation_allowed = match creator(&state.db, &claims).await {
-        Ok(_) => true,
-        Err(PersonalProjectError::CreationRestricted) => false,
-        Err(e) => return Err(e),
-    };
+    let user = caller(&state.db, &claims).await?;
+    let creation_allowed = may_create(&state.db, &user).await?;
+    let private_allowed = private_allowed(&state.db, &user).await?;
     let eligible = build::eligible_judges(&state.db).await?;
     let defaults = build::default_panel(&eligible);
     let judges = eligible
@@ -310,6 +359,7 @@ pub async fn get_options(
     .is_empty();
     Ok(Json(OptionsResp {
         creation_allowed,
+        private_allowed,
         judges,
         limits: Limits {
             max_tasks: personal::MAX_TASKS,
@@ -337,6 +387,10 @@ pub async fn post_create(
     Json(req): Json<PersonalProjectReq>,
 ) -> Result<Response, PersonalProjectError> {
     let user = creator(&state.db, &claims).await?;
+    let public = req.public.unwrap_or(true);
+    if !public && !private_allowed(&state.db, &user).await? {
+        return Err(PersonalProjectError::PremiumRequired);
+    }
     let eligible = build::eligible_judges(&state.db).await?;
     if eligible.is_empty() {
         return Err(PersonalProjectError::NoJudgesAvailable);
@@ -364,9 +418,8 @@ pub async fn post_create(
                     tags: Set("[]".to_string()),
                     cover_image_url: Set(None),
                     owner_user_id_fk: Set(owner),
-                    // Private for good: the generic editor refuses to
-                    // publish a personal project.
-                    public: Set(false),
+                    // Public: on the owner's profile, never in the catalog.
+                    public: Set(public),
                     archived_at: Set(None),
                     created_at: Set(now),
                     updated_at: Set(now),
@@ -417,10 +470,10 @@ pub async fn get_one(
     claims: AccessClaims,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<PersonalProjectResp>, PersonalProjectError> {
-    let caller = claims
+    let caller_id = claims
         .user_id()
         .map_err(|_| PersonalProjectError::Forbidden)?;
-    let (project, marker) = load_personal(&state.db, project_id, caller, true).await?;
+    let (project, marker) = load_personal(&state.db, project_id, caller_id, true).await?;
     let spec: PersonalSpec = serde_json::from_value(marker.spec).map_err(|e| {
         sea_orm::DbErr::Custom(format!("personal project {project_id}: bad spec: {e}"))
     })?;
@@ -447,15 +500,17 @@ pub async fn put_one(
     Json(req): Json<PersonalProjectReq>,
 ) -> Result<Response, PersonalProjectError> {
     // Editing what one already owns is not creating: no creation gate.
-    let caller = claims
-        .user_id()
-        .map_err(|_| PersonalProjectError::Forbidden)?;
-    let (project, _) = load_personal(&state.db, project_id, caller, false).await?;
+    let user = caller(&state.db, &claims).await?;
+    let (project, _) = load_personal(&state.db, project_id, user.id, false).await?;
     if project.archived_at.is_some() {
         return Err(PersonalProjectError::Invalid {
             field: "project",
             detail: "unarchive the project before editing it".into(),
         });
+    }
+    // Keeping it private is fine; making it private asks.
+    if req.public == Some(false) && project.public && !private_allowed(&state.db, &user).await? {
+        return Err(PersonalProjectError::PremiumRequired);
     }
     let eligible = build::eligible_judges(&state.db).await?;
     if eligible.is_empty() {
@@ -463,6 +518,7 @@ pub async fn put_one(
     }
     let spec = build::validate(&req, &eligible)?;
     let spec_json = serde_json::to_value(&spec).expect("a spec always serializes");
+    let req_public = req.public;
 
     state
         .db
@@ -488,6 +544,9 @@ pub async fn put_one(
                 am.name = Set(spec.name.clone());
                 am.description = Set(spec.description.clone());
                 am.default_session_duration_secs = Set(spec.session_duration_secs);
+                if let Some(public) = req_public {
+                    am.public = Set(public);
+                }
                 am.updated_at = Set(now);
                 am.update(txn).await?;
                 // Judge attachments go with their tasks (ON DELETE CASCADE).

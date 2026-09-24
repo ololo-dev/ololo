@@ -8,9 +8,15 @@ import type { ApiError, PersonalProjectRequest } from "$lib/api";
 export interface PersonalFormValues {
   name: string;
   description: string;
-  tasks: { title: string; description: string }[];
+  /** `judges`: the task's own panel; absent = the project's panel. */
+  tasks: { title: string; description: string; judges?: string[] }[];
   judges: string[];
   session_duration_secs: number;
+  public: boolean;
+}
+
+function slugs(raw: unknown): string[] {
+  return (Array.isArray(raw) ? raw : []).map(String);
 }
 
 function parseJson<T>(raw: FormDataEntryValue | null, fallback: T): T {
@@ -32,28 +38,33 @@ export function parsePersonalForm(data: FormData): {
   const rawTasks = parseJson<unknown[]>(data.get("tasks_json"), []);
   const tasks = (Array.isArray(rawTasks) ? rawTasks : [])
     .map((t) => {
-      const task = (t ?? {}) as { title?: unknown; description?: unknown };
+      const task = (t ?? {}) as { title?: unknown; description?: unknown; judges?: unknown };
       return {
         title: String(task.title ?? "").trim(),
         description: String(task.description ?? "").trim(),
+        // An empty own panel is sent as is: the server refuses it by name
+        // rather than the form quietly falling back to the default.
+        ...(Array.isArray(task.judges) ? { judges: slugs(task.judges) } : {}),
       };
     })
     .filter((t) => t.title.length > 0);
-  const rawJudges = parseJson<unknown[]>(data.get("judges_json"), []);
-  const judges = (Array.isArray(rawJudges) ? rawJudges : []).map(String);
+  const judges = slugs(parseJson<unknown[]>(data.get("judges_json"), []));
   const duration = Number(data.get("session_duration_secs"));
   const session_duration_secs = Number.isFinite(duration) && duration > 0 ? duration : 0;
+  // Public unless the form says, in so many words, private.
+  const isPublic = String(data.get("public") ?? "true") !== "false";
 
   const request: PersonalProjectRequest = {
     description,
-    tasks: tasks.map((t) => (t.description ? t : { title: t.title })),
+    tasks: tasks.map(({ description, ...t }) => (description ? { ...t, description } : t)),
     judges,
+    public: isPublic,
   };
   if (name) request.name = name;
   if (session_duration_secs) request.session_duration_secs = session_duration_secs;
   return {
     request,
-    values: { name, description, tasks, judges, session_duration_secs },
+    values: { name, description, tasks, judges, session_duration_secs, public: isPublic },
   };
 }
 

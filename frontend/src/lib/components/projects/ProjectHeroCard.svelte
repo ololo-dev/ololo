@@ -4,6 +4,7 @@
   import { formatDuration } from "$lib/format";
   import MarkdownContent from "$lib/components/MarkdownContent.svelte";
   import JudgeChips from "$lib/components/projects/JudgeChips.svelte";
+  import CodeBlock from "$lib/components/CodeBlock.svelte";
 
   let {
     project,
@@ -37,7 +38,10 @@
   // here could only ever print "Sessions 0 · Active session No", which reads
   // as a dead project rather than as one you play a part at a time.
   const isCampaign = $derived((project.part_count ?? 0) > 0);
-
+  // A user's own work: its badge says who sees it, and its owner starts it
+  // from their repository rather than from a popup.
+  const isPersonal = $derived(project.kind === "personal");
+  const isOwner = $derived(!!currentUserId && currentUserId === project.owner_user_id);
 </script>
 
 <!-- 2-col card -->
@@ -134,8 +138,20 @@
         {/if}
         <span
           class="rounded-[4px] bg-white/20 px-[12px] py-[4px] text-[14px] font-semibold"
+          data-testid="project-visibility-badge"
         >
-          {project.kind === "personal" ? "Your project · private" : project.public ? "Public" : "Private"}
+          {#if !isPersonal}
+            {project.public ? "Public" : "Private"}
+          {:else if isOwner}
+            Your project · {project.public ? "public" : "private"}
+          {:else if project.owner_username}
+            Personal project · by
+            <a href="/u/{project.owner_username}" class="underline-offset-2 hover:underline"
+              >@{project.owner_username}</a
+            >
+          {:else}
+            Personal project
+          {/if}
         </span>
         {#if project.archived_at}
           <span
@@ -208,14 +224,16 @@
           <p class="text-brand-text">{sessionCount}</p>
         </div>
       {/if}
-      <div class="mb-[16px] leading-[1.5]">
-        <div class="text-[12px] font-semibold leading-[1.33] text-brand-muted">
-          Visibility
+      {#if !isPersonal}
+        <div class="mb-[16px] leading-[1.5]">
+          <div class="text-[12px] font-semibold leading-[1.33] text-brand-muted">
+            Visibility
+          </div>
+          <p class="text-brand-text">
+            {project.public ? "Public" : "Private"}
+          </p>
         </div>
-        <p class="text-brand-text">
-          {project.public ? "Public" : "Private"}
-        </p>
-      </div>
+      {/if}
       {#if project.category}
         <div class="mb-[16px] leading-[1.5]">
           <div class="text-[12px] font-semibold leading-[1.33] text-brand-muted">
@@ -224,7 +242,7 @@
           <p class="text-brand-text">{project.category}</p>
         </div>
       {/if}
-      {#if project.slug}
+      {#if project.slug && !isPersonal}
         <div class="mb-[16px] leading-[1.5]">
           <div class="text-[12px] font-semibold leading-[1.33] text-brand-muted">
             Slug
@@ -331,6 +349,55 @@
       {:else}
         <div class="mt-[24px] rounded-[8px] bg-brand-light-blue px-4 py-[12px] text-center text-[15px] text-brand-text">
           Pick a part below to start playing.
+        </div>
+      {/if}
+    {:else if isPersonal}
+      <!-- A personal project is started from its owner's repository: the
+           line to run sits right here, and changing the tasks is one click
+           away — an edit until the first session, a new version after. -->
+      {#if isOwner && project.slug}
+        <div class="mt-[24px]" data-testid="personal-start">
+          {#if project.archived_at}
+            <p class="rounded-[8px] bg-brand-light-blue px-4 py-[12px] text-center text-[15px] text-brand-text">
+              Archived — duplicate it to play it again.
+            </p>
+          {:else}
+            <div class="mb-[8px] text-[12px] font-semibold leading-[1.33] text-brand-muted">
+              Start it in your repository
+            </div>
+            <CodeBlock code="ololo start {project.slug}" compact />
+            <p class="mt-[8px] text-[13px] leading-snug text-brand-muted">
+              Run it in the folder your agent works in. It shows what it will upload and asks
+              first.
+              <a
+                href="/documentation/your-own-projects"
+                class="font-semibold text-brand-blue hover:opacity-70">How it works</a
+              >
+            </p>
+          {/if}
+          <a
+            href={sessionCount > 0 || project.archived_at
+              ? `/projects/new?from=${project.id}`
+              : `/projects/${project.id}/personal`}
+            data-testid="personal-edit"
+            class="mt-[16px] block w-full rounded-[8px] border border-brand-blue px-4 py-[10px] text-center text-[15px] font-semibold text-brand-blue transition-colors hover:bg-brand-light-blue"
+          >
+            {sessionCount > 0 || project.archived_at ? "Duplicate and edit" : "Edit tasks and judges"}
+          </a>
+          {#if !project.archived_at}
+            <p
+              class="mt-[12px] text-[13px] leading-snug text-brand-muted"
+              data-testid="personal-visibility"
+            >
+              {project.public
+                ? "Public: on your profile, and anyone can watch its sessions."
+                : "Private: only you see it; players join a session by its code."}
+              <a
+                href="/projects/{project.id}/personal"
+                class="font-semibold text-brand-blue hover:opacity-70">Change</a
+              >
+            </p>
+          {/if}
         </div>
       {/if}
     {:else if project.slug && lockedReason}

@@ -10,7 +10,7 @@
 </svelte:head>
 
 <div class="-mx-6 -mt-8 min-h-screen bg-brand-light-blue">
-  <div class="mx-auto w-full max-w-[900px] px-[18px] py-10 md:py-[64px]">
+  <div class="mx-auto w-full max-w-[1206px] px-[18px] py-10 md:py-[64px]">
     <h1 class="font-heading text-[34px] font-bold leading-[1.18] text-brand-text">
       New project
     </h1>

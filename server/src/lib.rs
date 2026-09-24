@@ -68,6 +68,10 @@ pub fn build_router(state: AppState) -> Router {
             "/api/users/by-username/:username/sessions",
             get(api::users::get_sessions_by_username),
         )
+        .route(
+            "/api/users/by-username/:username/projects",
+            get(api::users::get_projects_by_username),
+        )
         .layer(middleware::from_fn(
             move |req: axum::extract::Request, next: middleware::Next| {
                 let limiter = profile_limiter.clone();

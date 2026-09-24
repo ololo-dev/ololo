@@ -261,19 +261,7 @@ pub async fn get_one(
             row
         }
     };
-    let active = project_has_active_sessions(&state.db, row.id).await?;
-    let tc = tasks::Entity::find()
-        .filter(tasks::Column::ProjectIdFk.eq(row.id))
-        .count(&state.db)
-        .await?;
-    let range = compute_points_range(&state.db, row.id).await?;
-    let jc = judge_review_count(&state.db, row.id).await?;
-    let mut summary = to_summary(row, active, tc as i64, range);
-    summary.judge_review_count = Some(jc);
-    attach_campaign_context(&state.db, &mut summary).await?;
-    attach_kinds(&state.db, std::slice::from_mut(&mut summary)).await?;
-    attach_owner_username(&state.db, &mut summary).await?;
-    Ok(Json(summary).into_response())
+    Ok(Json(page_summary(&state.db, row).await?).into_response())
 }
 
 /// `PATCH /api/projects/:id`
@@ -334,19 +322,7 @@ pub async fn get_by_slug(
         }
     }
 
-    let active = project_has_active_sessions(&state.db, row.id).await?;
-    let tc = tasks::Entity::find()
-        .filter(tasks::Column::ProjectIdFk.eq(row.id))
-        .count(&state.db)
-        .await?;
-    let range = compute_points_range(&state.db, row.id).await?;
-    let jc = judge_review_count(&state.db, row.id).await?;
-    let mut summary = to_summary(row, active, tc as i64, range);
-    summary.judge_review_count = Some(jc);
-    attach_campaign_context(&state.db, &mut summary).await?;
-    attach_kinds(&state.db, std::slice::from_mut(&mut summary)).await?;
-    attach_owner_username(&state.db, &mut summary).await?;
-    Ok(Json(summary).into_response())
+    Ok(Json(page_summary(&state.db, row).await?).into_response())
 }
 
 /// `GET /api/projects/u/:user_id/by-slug/:slug`
@@ -368,19 +344,7 @@ pub async fn get_by_user_slug(
         .one(&state.db)
         .await?
         .ok_or(ProjectError::NotFound)?;
-    let active = project_has_active_sessions(&state.db, row.id).await?;
-    let tc = tasks::Entity::find()
-        .filter(tasks::Column::ProjectIdFk.eq(row.id))
-        .count(&state.db)
-        .await?;
-    let range = compute_points_range(&state.db, row.id).await?;
-    let jc = judge_review_count(&state.db, row.id).await?;
-    let mut summary = to_summary(row, active, tc as i64, range);
-    summary.judge_review_count = Some(jc);
-    attach_campaign_context(&state.db, &mut summary).await?;
-    attach_kinds(&state.db, std::slice::from_mut(&mut summary)).await?;
-    attach_owner_username(&state.db, &mut summary).await?;
-    Ok(Json(summary).into_response())
+    Ok(Json(page_summary(&state.db, row).await?).into_response())
 }
 
 /// Load a project by id, enforcing the same visibility rule as the public
@@ -1000,4 +964,26 @@ pub(crate) async fn judge_review_count(
         .filter(tasks::Column::ProjectIdFk.eq(project_id))
         .count(db)
         .await? as i64)
+}
+
+/// A project as its own page shows it — and as a player who joins one of
+/// its sessions learns it: counts, points range, review estimate, campaign
+/// context, kind, repository and (personal) owner.
+pub(crate) async fn page_summary(
+    db: &sea_orm::DatabaseConnection,
+    row: projects::Model,
+) -> Result<ProjectSummary, sea_orm::DbErr> {
+    let active = project_has_active_sessions(db, row.id).await?;
+    let tc = tasks::Entity::find()
+        .filter(tasks::Column::ProjectIdFk.eq(row.id))
+        .count(db)
+        .await?;
+    let range = compute_points_range(db, row.id).await?;
+    let jc = judge_review_count(db, row.id).await?;
+    let mut summary = to_summary(row, active, tc as i64, range);
+    summary.judge_review_count = Some(jc);
+    attach_campaign_context(db, &mut summary).await?;
+    attach_kinds(db, std::slice::from_mut(&mut summary)).await?;
+    attach_owner_username(db, &mut summary).await?;
+    Ok(summary)
 }

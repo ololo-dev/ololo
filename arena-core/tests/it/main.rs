@@ -27,6 +27,7 @@ mod llm;
 mod probe_engine_answer;
 mod probe_engine_fixtures;
 mod probe_engine_js;
+mod project_repo_db;
 mod protocol_agent;
 mod protocol_arena;
 mod protocol_methods;

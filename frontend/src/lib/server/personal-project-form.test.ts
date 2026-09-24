@@ -30,6 +30,8 @@ describe("parsePersonalForm", () => {
       judges: ["correctness", "code-quality"],
       session_duration_secs: 3600,
       public: true,
+      repo_url: "",
+      repo_ref: "",
     });
     expect(values.tasks).toHaveLength(2);
   });
@@ -61,7 +63,25 @@ describe("parsePersonalForm", () => {
     const { request } = parsePersonalForm(
       form({ description: "d", tasks_json: "{not json", judges_json: "null" }),
     );
-    expect(request).toEqual({ description: "d", tasks: [], judges: [], public: true });
+    expect(request).toEqual({
+      description: "d",
+      tasks: [],
+      judges: [],
+      public: true,
+      repo_url: "",
+      repo_ref: "",
+    });
+  });
+
+  it("carries the repository, and no ref without one", () => {
+    const withRepo = parsePersonalForm(
+      form({ description: "d", repo_url: " git@github.com:me/app.git ", repo_ref: " dev " }),
+    );
+    expect(withRepo.request.repo_url).toBe("git@github.com:me/app.git");
+    expect(withRepo.request.repo_ref).toBe("dev");
+    const none = parsePersonalForm(form({ description: "d", repo_url: "  ", repo_ref: "dev" }));
+    expect(none.request.repo_url).toBe("");
+    expect(none.request.repo_ref).toBe("");
   });
 
   it("keeps a project private only when the form says so", () => {
@@ -87,6 +107,8 @@ describe("personalFailure", () => {
       judges: [],
       session_duration_secs: 0,
       public: true,
+      repo_url: "",
+      repo_ref: "",
     };
     const result = personalFailure(err, values);
     expect(result.status).toBe(422);
@@ -107,6 +129,8 @@ describe("personalFailure", () => {
       judges: [],
       session_duration_secs: 0,
       public: true,
+      repo_url: "",
+      repo_ref: "",
     });
     expect(result.data.error).toBe("creation_restricted");
   });

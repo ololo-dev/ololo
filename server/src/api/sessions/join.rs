@@ -1,6 +1,6 @@
 use crate::auth::jwt::AccessClaims;
 use crate::state::AppState;
-use arena_core::entities::{players, sessions, users};
+use arena_core::entities::{players, projects, sessions, users};
 use arena_core::protocol::ZmqEvent;
 use arena_core::session_status::SessionStatus;
 use axum::Json;
@@ -52,6 +52,18 @@ pub async fn post_join(
         return Err(SessionError::SessionClosed);
     }
 
+    // What the client needs to prepare the folder — the repository to
+    // clone, whether it is someone's own work to ask before uploading, who
+    // will see it. Carried here because the code is the invitation: a
+    // player of a private project cannot read the project itself.
+    let project = match projects::Entity::find_by_id(session.project_id_fk)
+        .one(&state.db)
+        .await?
+    {
+        Some(row) => Some(crate::api::projects::page_summary(&state.db, row).await?),
+        None => None,
+    };
+
     // Idempotent re-join: if the caller already has a player row (including when
     // they are the session owner and ran `ololo start`), return the existing player_id
     // so the client can proceed to PATCH metadata without creating a duplicate row.
@@ -81,6 +93,7 @@ pub async fn post_join(
                 "session_id": session.id,
                 "player_id": p.id.to_string(),
                 "git_remote_path": git_remote_path,
+                "project": project,
             })),
         )
             .into_response());
@@ -208,6 +221,7 @@ pub async fn post_join(
             "session_id": session.id,
             "player_id": player_id.to_string(),
             "git_remote_path": git_remote_path,
+            "project": project,
         })),
     )
         .into_response())

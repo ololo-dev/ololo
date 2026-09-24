@@ -19,7 +19,7 @@
 use std::path::Path;
 
 use crate::api::admin_export_import::{
-    ExportEnvelope, ExportProject, ExportTask, ExportTaskPoints, JudgeRef,
+    ExportEnvelope, ExportProject, ExportRepo, ExportTask, ExportTaskPoints, JudgeRef,
 };
 use crate::api::intervals::ExportTaskIntervals;
 
@@ -126,6 +126,22 @@ pub fn load_markdown_project(dir: &Path) -> Result<ExportEnvelope, String> {
         None => None,
     };
 
+    // The repository is validated at load, like the memory schema: a URL
+    // ololo would not clone fails the project with a pointed message
+    // instead of at every player's session start.
+    let repo = match (readme.project.repo, readme.project.repo_ref) {
+        (Some(url), git_ref) => {
+            let repo = arena_core::project_repo::ProjectRepo::parse(&url, git_ref.as_deref())
+                .map_err(|e| format!("readme.md frontmatter repo: {e}"))?;
+            Some(ExportRepo {
+                url: repo.url,
+                git_ref: repo.git_ref,
+            })
+        }
+        (None, Some(_)) => return Err("readme.md frontmatter: repo_ref needs repo".into()),
+        (None, None) => None,
+    };
+
     let project = ExportProject {
         name: readme.project.name,
         slug: Some(slug),
@@ -141,6 +157,7 @@ pub fn load_markdown_project(dir: &Path) -> Result<ExportEnvelope, String> {
         memory_schema,
         show_tasks: readme.project.show_tasks,
         parts: readme.project.parts,
+        repo,
     };
 
     // A campaign parent is a table of contents, not a playable project: it

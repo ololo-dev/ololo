@@ -113,6 +113,10 @@ export const actions: Actions = {
     // Session-memory schema. `null` clears it; `undefined` omits the field.
     const memory_schema = buildMemorySchemaFromForm(data);
 
+    // The repository fields are always on the form: an emptied URL drops it.
+    const repo_url = String(data.get("repo_url") ?? "").trim();
+    const repo_ref = repo_url ? String(data.get("repo_ref") ?? "").trim() : "";
+
     if (name.length < 1 || name.length > 200) {
       return fail(422, {
         action: "editProject",
@@ -140,6 +144,8 @@ export const actions: Actions = {
           session_duration_secs,
           idle_timeout_secs,
           memory_schema,
+          repo_url,
+          repo_ref,
         },
         { fetch },
       );
@@ -149,9 +155,11 @@ export const actions: Actions = {
         if (err.status === 409 && err.code === "project_archived") {
           throw redirect(303, `/projects/${params.id}?message=archived`);
         }
+        const body = (err.body ?? {}) as { detail?: unknown };
         return fail(err.status, {
           action: "editProject",
           error: err.code ?? "error",
+          detail: typeof body.detail === "string" ? body.detail : null,
           name,
           description,
           slug,

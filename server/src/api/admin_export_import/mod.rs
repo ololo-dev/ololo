@@ -66,6 +66,36 @@ pub struct ExportProject {
     /// byte-identically.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub parts: Vec<String>,
+    /// The git repository sessions start from (`arena_core::project_repo`).
+    /// Absent for every project without one, so older exports round-trip
+    /// byte-identically.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<ExportRepo>,
+}
+
+/// A project's repository as an export carries it.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExportRepo {
+    pub url: String,
+    /// Branch, tag or commit to check out; absent = the default branch.
+    #[serde(default, rename = "ref", skip_serializing_if = "Option::is_none")]
+    pub git_ref: Option<String>,
+}
+
+/// The repository an envelope names, validated — `None` when it names none.
+pub(crate) fn envelope_repo(
+    envelope: &ExportEnvelope,
+) -> Result<Option<arena_core::project_repo::ProjectRepo>, ExportImportError> {
+    envelope
+        .project
+        .repo
+        .as_ref()
+        .map(|repo| {
+            arena_core::project_repo::ProjectRepo::parse(&repo.url, repo.git_ref.as_deref())
+                .map_err(|e| ExportImportError::BadRequest(format!("repo: {e}")))
+        })
+        .transpose()
 }
 
 fn default_show_tasks() -> bool {
@@ -232,6 +262,57 @@ pub(crate) fn validate_task_extras(task: &ExportTask) -> Result<(), String> {
     Ok(())
 }
 
+/// Validate what an envelope asks for beyond the project row: its
+/// repository and every task.
+fn validate_envelope_tasks(envelope: &ExportEnvelope) -> Result<(), ExportImportError> {
+    envelope_repo(envelope)?;
+    let mut seen_ordinals = HashSet::new();
+    for task in &envelope.tasks {
+        crate::api::project_tasks::validate_ordinal(task.ordinal)
+            .map_err(|e| ExportImportError::BadRequest(e.to_string()))?;
+        arena_core::validation::validate_template(&task.test_template)
+            .map_err(|e| ExportImportError::BadRequest(e.to_string()))?;
+        crate::validation::tags::validate_tags(&task.tags)
+            .map_err(|e| ExportImportError::BadRequest(e.to_string()))?;
+        validate_task_extras(task)
+            .map_err(|e| ExportImportError::BadRequest(format!("task {}: {e}", task.ordinal)))?;
+        if !seen_ordinals.insert(task.ordinal) {
+            return Err(ExportImportError::BadRequest(format!(
+                "duplicate ordinal: {}",
+                task.ordinal
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Resolve every judge slug referenced by the envelope to its id, rejecting
+/// unknown slugs. Shared by the import, reseed and apply-seed paths.
+async fn resolve_judge_slugs(
+    state: &AppState,
+    envelope: &ExportEnvelope,
+) -> Result<std::collections::HashMap<String, Uuid>, ExportImportError> {
+    let judge_id_by_slug: std::collections::HashMap<String, Uuid> =
+        arena_core::entities::judges::Entity::find()
+            .all(&state.db)
+            .await?
+            .into_iter()
+            .map(|j| (j.slug, j.id))
+            .collect();
+    for task in &envelope.tasks {
+        for jref in &task.judges {
+            let slug = jref.slug();
+            if !judge_id_by_slug.contains_key(slug) {
+                return Err(ExportImportError::BadRequest(format!(
+                    "task {} references unknown judge slug '{slug}'",
+                    task.ordinal
+                )));
+            }
+        }
+    }
+    Ok(judge_id_by_slug)
+}
+
 pub async fn export_project(
     _admin: AdminUser,
     State(state): State<AppState>,
@@ -327,6 +408,12 @@ pub async fn export_project(
         });
     }
 
+    let repo = arena_core::project_repo::repo_of(&state.db, project.id)
+        .await?
+        .map(|repo| ExportRepo {
+            url: repo.url,
+            git_ref: repo.git_ref,
+        });
     let envelope = ExportEnvelope {
         schema_version: SCHEMA_VERSION,
         project: ExportProject {
@@ -358,6 +445,7 @@ pub async fn export_project(
                 .and_then(|s| serde_json::from_str(s).ok()),
             show_tasks: project.show_tasks,
             parts,
+            repo,
         },
         tasks: export_tasks,
     };
@@ -419,44 +507,10 @@ pub async fn import_project(
         None => None,
     };
 
-    // Per-task validation + duplicate-ordinal pre-check.
-    let mut seen_ordinals: HashSet<i32> = HashSet::new();
-    for task in &envelope.tasks {
-        crate::api::project_tasks::validate_ordinal(task.ordinal)
-            .map_err(|e| ExportImportError::BadRequest(e.to_string()))?;
-        arena_core::validation::validate_template(&task.test_template)
-            .map_err(|e| ExportImportError::BadRequest(e.to_string()))?;
-        crate::validation::tags::validate_tags(&task.tags)
-            .map_err(|e| ExportImportError::BadRequest(e.to_string()))?;
-        validate_task_extras(task)
-            .map_err(|e| ExportImportError::BadRequest(format!("task {}: {e}", task.ordinal)))?;
-        if !seen_ordinals.insert(task.ordinal) {
-            return Err(ExportImportError::BadRequest(format!(
-                "duplicate ordinal: {}",
-                task.ordinal
-            )));
-        }
-    }
+    validate_envelope_tasks(&envelope)?;
 
     // Resolve judge slugs to ids; unknown slugs are a client error.
-    let judge_id_by_slug: std::collections::HashMap<String, Uuid> =
-        arena_core::entities::judges::Entity::find()
-            .all(&state.db)
-            .await?
-            .into_iter()
-            .map(|j| (j.slug, j.id))
-            .collect();
-    for task in &envelope.tasks {
-        for jref in &task.judges {
-            let slug = jref.slug();
-            if !judge_id_by_slug.contains_key(slug) {
-                return Err(ExportImportError::BadRequest(format!(
-                    "task {} references unknown judge slug '{slug}'",
-                    task.ordinal
-                )));
-            }
-        }
-    }
+    let judge_id_by_slug = resolve_judge_slugs(&state, &envelope).await?;
 
     let project_id = insert_project_from_envelope(
         &state,
@@ -479,6 +533,41 @@ pub async fn import_project(
     Ok((StatusCode::CREATED, Json(resp)).into_response())
 }
 
+/// Build a fresh `tasks::ActiveModel` from an envelope definition and the
+/// project's default points. Shared by the import and reseed insert paths.
+fn new_task_active_model(
+    task_id: Uuid,
+    project_id: Uuid,
+    task: &ExportTask,
+    proj_pts: &ExportPoints,
+    tpl_json: serde_json::Value,
+    task_tags_json: String,
+    now: chrono::DateTime<Utc>,
+) -> tasks::ActiveModel {
+    let pts = task.points.clone().unwrap_or_default();
+    let task_intervals = task.intervals.clone().unwrap_or_default();
+    tasks::ActiveModel {
+        id: Set(task_id),
+        project_id_fk: Set(project_id),
+        ordinal: Set(task.ordinal),
+        title: Set(task.title.clone()),
+        content: Set(task.content.clone()),
+        test_template: Set(tpl_json),
+        tags: Set(task_tags_json),
+        created_at: Set(now),
+        point_value: Set(pts.value.unwrap_or(proj_pts.value).max(1)),
+        deadline_secs: Set(task_intervals.deadline_secs),
+        min_interval_secs: Set(task_intervals.min_interval_secs),
+        interval_increment_secs: Set(task_intervals.interval_increment_secs),
+        max_interval_secs: Set(task_intervals.max_interval_secs),
+        fail_points: Set(pts.fail.unwrap_or(proj_pts.fail)),
+        no_response_points: Set(pts.no_response.unwrap_or(proj_pts.no_response)),
+        completion_bonus_points: Set(pts.completion_bonus.unwrap_or(proj_pts.completion_bonus)),
+        health_points: Set(pts.health.unwrap_or(proj_pts.health)),
+        evaluation: Set(task.evaluation.clone()),
+    }
+}
+
 /// Insert one task row from an envelope definition and attach its judges —
 /// shared by project import (below) and boot seeding (`crate::seed`), the
 /// two paths that materialize `ExportEnvelope` tasks into a fresh project.
@@ -497,32 +586,15 @@ pub(crate) async fn insert_task_with_judges(
     let tpl_json = serde_json::to_value(&task.test_template)
         .map_err(|e| sea_orm::DbErr::Custom(format!("template serialize: {e}")))?;
     let task_tags_json = serde_json::to_string(&task.tags).unwrap_or_else(|_| "[]".to_string());
-    let pts = task.points.clone().unwrap_or_default();
-    let resolved_value = pts.value.unwrap_or(proj_pts.value).max(1);
-    let resolved_fail = pts.fail.unwrap_or(proj_pts.fail);
-    let resolved_no_response = pts.no_response.unwrap_or(proj_pts.no_response);
-    let resolved_completion_bonus = pts.completion_bonus.unwrap_or(proj_pts.completion_bonus);
-    let task_intervals = task.intervals.clone().unwrap_or_default();
-    let task_am = tasks::ActiveModel {
-        id: Set(task_id),
-        project_id_fk: Set(project_id),
-        ordinal: Set(task.ordinal),
-        title: Set(task.title.clone()),
-        content: Set(task.content.clone()),
-        test_template: Set(tpl_json),
-        tags: Set(task_tags_json),
-        created_at: Set(now),
-        point_value: Set(resolved_value),
-        deadline_secs: Set(task_intervals.deadline_secs),
-        min_interval_secs: Set(task_intervals.min_interval_secs),
-        interval_increment_secs: Set(task_intervals.interval_increment_secs),
-        max_interval_secs: Set(task_intervals.max_interval_secs),
-        fail_points: Set(resolved_fail),
-        no_response_points: Set(resolved_no_response),
-        health_points: Set(pts.health.unwrap_or(proj_pts.health)),
-        completion_bonus_points: Set(resolved_completion_bonus),
-        evaluation: Set(task.evaluation.clone()),
-    };
+    let task_am = new_task_active_model(
+        task_id,
+        project_id,
+        task,
+        proj_pts,
+        tpl_json,
+        task_tags_json,
+        now,
+    );
     tasks::Entity::insert(task_am).exec(txn).await?;
 
     for (idx, jref) in task.judges.iter().enumerate() {
@@ -624,6 +696,12 @@ async fn insert_project_from_envelope(
                     )
                     .await?;
                 }
+                arena_core::project_repo::set_repo(
+                    txn,
+                    project_id,
+                    envelope_repo(&envelope)?.as_ref(),
+                )
+                .await?;
 
                 Ok(project_id)
             })
@@ -709,44 +787,10 @@ async fn apply_envelope_to_project(
         .map_err(|e| ExportImportError::BadRequest(e.to_string()))?;
     validate_campaign_shape(envelope)?;
 
-    // Per-task validation + duplicate-ordinal pre-check.
-    let mut seen_ordinals: HashSet<i32> = HashSet::new();
-    for task in &envelope.tasks {
-        crate::api::project_tasks::validate_ordinal(task.ordinal)
-            .map_err(|e| ExportImportError::BadRequest(e.to_string()))?;
-        arena_core::validation::validate_template(&task.test_template)
-            .map_err(|e| ExportImportError::BadRequest(e.to_string()))?;
-        crate::validation::tags::validate_tags(&task.tags)
-            .map_err(|e| ExportImportError::BadRequest(e.to_string()))?;
-        validate_task_extras(task)
-            .map_err(|e| ExportImportError::BadRequest(format!("task {}: {e}", task.ordinal)))?;
-        if !seen_ordinals.insert(task.ordinal) {
-            return Err(ExportImportError::BadRequest(format!(
-                "duplicate ordinal: {}",
-                task.ordinal
-            )));
-        }
-    }
+    validate_envelope_tasks(envelope)?;
 
     // Resolve judge slugs to ids; unknown slugs are a definition error.
-    let judge_id_by_slug: std::collections::HashMap<String, Uuid> =
-        arena_core::entities::judges::Entity::find()
-            .all(&state.db)
-            .await?
-            .into_iter()
-            .map(|j| (j.slug, j.id))
-            .collect();
-    for task in &envelope.tasks {
-        for jref in &task.judges {
-            let slug = jref.slug();
-            if !judge_id_by_slug.contains_key(slug) {
-                return Err(ExportImportError::BadRequest(format!(
-                    "task {} references unknown judge slug '{slug}'",
-                    task.ordinal
-                )));
-            }
-        }
-    }
+    let judge_id_by_slug = resolve_judge_slugs(state, envelope).await?;
 
     // Category: find-or-create so a definition can introduce a new one.
     let resolved_category = match envelope.project.category.as_deref().map(str::trim) {
@@ -757,225 +801,214 @@ async fn apply_envelope_to_project(
         _ => None,
     };
 
-    let counts =
-        state
-            .db
-            .transaction::<_, (usize, usize, usize), ExportImportError>(|txn| {
-                let envelope = envelope.clone();
-                let project = project.clone();
-                let resolved_category = resolved_category.clone();
-                let judge_id_by_slug = judge_id_by_slug.clone();
-                Box::pin(async move {
-                    let now = Utc::now();
-                    let proj_pts = envelope.project.points.clone();
+    let counts = state
+        .db
+        .transaction::<_, (usize, usize, usize), ExportImportError>(|txn| {
+            let envelope = envelope.clone();
+            let project = project.clone();
+            let resolved_category = resolved_category.clone();
+            let judge_id_by_slug = judge_id_by_slug.clone();
+            Box::pin(async move {
+                let now = Utc::now();
+                let proj_pts = envelope.project.points.clone();
 
-                    let mut project_am: projects::ActiveModel = project.into();
-                    project_am.name = Set(envelope.project.name.clone());
-                    project_am.description =
-                        Set(envelope.project.description.clone().unwrap_or_default());
-                    project_am.category = Set(resolved_category);
-                    project_am.tags = Set(serde_json::to_string(&envelope.project.tags)
-                        .unwrap_or_else(|_| "[]".to_string()));
-                    // Preserve an operator-set cover image across re-reads: seed
-                    // definitions never carry one (it is managed in the UI), so only
-                    // overwrite when the incoming definition explicitly provides it.
-                    if let Some(url) = envelope.project.cover_image_url.clone() {
-                        project_am.cover_image_url = Set(Some(url));
+                let mut project_am: projects::ActiveModel = project.into();
+                project_am.name = Set(envelope.project.name.clone());
+                project_am.description =
+                    Set(envelope.project.description.clone().unwrap_or_default());
+                project_am.category = Set(resolved_category);
+                project_am.tags = Set(serde_json::to_string(&envelope.project.tags)
+                    .unwrap_or_else(|_| "[]".to_string()));
+                // Preserve an operator-set cover image across re-reads: seed
+                // definitions never carry one (it is managed in the UI), so only
+                // overwrite when the incoming definition explicitly provides it.
+                if let Some(url) = envelope.project.cover_image_url.clone() {
+                    project_am.cover_image_url = Set(Some(url));
+                }
+                project_am.public = Set(envelope.project.public);
+                project_am.updated_at = Set(now);
+                project_am.default_value_points = Set(proj_pts.value);
+                project_am.default_fail_points = Set(proj_pts.fail);
+                project_am.default_no_response_points = Set(proj_pts.no_response);
+                project_am.default_completion_bonus_points = Set(proj_pts.completion_bonus);
+                project_am.default_health_points = Set(proj_pts.health);
+                project_am.default_deadline_secs = Set(envelope.project.intervals.deadline_secs);
+                project_am.default_session_duration_secs =
+                    Set(envelope.project.session_duration_secs);
+                project_am.default_min_interval_secs =
+                    Set(envelope.project.intervals.min_interval_secs);
+                project_am.default_interval_increment_secs =
+                    Set(envelope.project.intervals.interval_increment_secs);
+                project_am.default_max_interval_secs =
+                    Set(envelope.project.intervals.max_interval_secs);
+                project_am.memory_schema = Set(envelope
+                    .project
+                    .memory_schema
+                    .as_ref()
+                    .map(|v| v.to_string()));
+                project_am.show_tasks = Set(envelope.project.show_tasks);
+                projects::Entity::update(project_am).exec(txn).await?;
+                // Like the cover image: a definition that names a repository
+                // sets it; one that names none leaves what an operator set.
+                if let Some(repo) = envelope_repo(&envelope)? {
+                    arena_core::project_repo::set_repo(txn, project_id, Some(&repo)).await?;
+                }
+
+                let existing_tasks = tasks::Entity::find()
+                    .filter(tasks::Column::ProjectIdFk.eq(project_id))
+                    .all(txn)
+                    .await?;
+                let existing_by_ordinal: std::collections::HashMap<i32, tasks::Model> =
+                    existing_tasks.into_iter().map(|t| (t.ordinal, t)).collect();
+                let envelope_ordinals: HashSet<i32> =
+                    envelope.tasks.iter().map(|t| t.ordinal).collect();
+
+                let (mut updated, mut inserted, mut deleted) = (0usize, 0usize, 0usize);
+
+                // Delete tasks that vanished from the definition. task_judges
+                // and tests/probes cascade; task_results/scheduler state go
+                // SET NULL, so history survives.
+                for (ordinal, task) in &existing_by_ordinal {
+                    if !envelope_ordinals.contains(ordinal) {
+                        tasks::Entity::delete_by_id(task.id).exec(txn).await?;
+                        deleted += 1;
                     }
-                    project_am.public = Set(envelope.project.public);
-                    project_am.updated_at = Set(now);
-                    project_am.default_value_points = Set(proj_pts.value);
-                    project_am.default_fail_points = Set(proj_pts.fail);
-                    project_am.default_no_response_points = Set(proj_pts.no_response);
-                    project_am.default_completion_bonus_points = Set(proj_pts.completion_bonus);
-                    project_am.default_health_points = Set(proj_pts.health);
-                    project_am.default_deadline_secs =
-                        Set(envelope.project.intervals.deadline_secs);
-                    project_am.default_session_duration_secs =
-                        Set(envelope.project.session_duration_secs);
-                    project_am.default_min_interval_secs =
-                        Set(envelope.project.intervals.min_interval_secs);
-                    project_am.default_interval_increment_secs =
-                        Set(envelope.project.intervals.interval_increment_secs);
-                    project_am.default_max_interval_secs =
-                        Set(envelope.project.intervals.max_interval_secs);
-                    project_am.memory_schema = Set(envelope
-                        .project
-                        .memory_schema
-                        .as_ref()
-                        .map(|v| v.to_string()));
-                    project_am.show_tasks = Set(envelope.project.show_tasks);
-                    projects::Entity::update(project_am).exec(txn).await?;
+                }
 
-                    let existing_tasks = tasks::Entity::find()
-                        .filter(tasks::Column::ProjectIdFk.eq(project_id))
+                for task in &envelope.tasks {
+                    let tpl_json = serde_json::to_value(&task.test_template)
+                        .map_err(|e| ExportImportError::BadExportTemplate(e.to_string()))?;
+                    let task_tags_json =
+                        serde_json::to_string(&task.tags).unwrap_or_else(|_| "[]".to_string());
+                    let pts = task.points.clone().unwrap_or_default();
+                    let resolved_value = pts.value.unwrap_or(proj_pts.value).max(1);
+                    let resolved_fail = pts.fail.unwrap_or(proj_pts.fail);
+                    let resolved_no_response = pts.no_response.unwrap_or(proj_pts.no_response);
+                    let resolved_completion_bonus =
+                        pts.completion_bonus.unwrap_or(proj_pts.completion_bonus);
+                    let task_intervals = task.intervals.clone().unwrap_or_default();
+
+                    let task_id = match existing_by_ordinal.get(&task.ordinal) {
+                        Some(existing) => {
+                            let mut am: tasks::ActiveModel = existing.clone().into();
+                            am.title = Set(task.title.clone());
+                            am.content = Set(task.content.clone());
+                            am.test_template = Set(tpl_json);
+                            am.tags = Set(task_tags_json);
+                            am.point_value = Set(resolved_value);
+                            am.deadline_secs = Set(task_intervals.deadline_secs);
+                            am.min_interval_secs = Set(task_intervals.min_interval_secs);
+                            am.interval_increment_secs =
+                                Set(task_intervals.interval_increment_secs);
+                            am.max_interval_secs = Set(task_intervals.max_interval_secs);
+                            am.fail_points = Set(resolved_fail);
+                            am.no_response_points = Set(resolved_no_response);
+                            am.completion_bonus_points = Set(resolved_completion_bonus);
+                            am.health_points = Set(pts.health.unwrap_or(proj_pts.health));
+                            am.evaluation = Set(task.evaluation.clone());
+                            tasks::Entity::update(am).exec(txn).await?;
+                            updated += 1;
+                            existing.id
+                        }
+                        None => {
+                            let task_id = Uuid::new_v4();
+                            let am = new_task_active_model(
+                                task_id,
+                                project_id,
+                                task,
+                                &proj_pts,
+                                tpl_json,
+                                task_tags_json,
+                                now,
+                            );
+                            tasks::Entity::insert(am).exec(txn).await?;
+                            inserted += 1;
+                            task_id
+                        }
+                    };
+
+                    // Reconcile judge attachments with the definition,
+                    // PRESERVING existing row ids: judge_results reference
+                    // task_judge_id, so a recreated id orphans every
+                    // verdict the task ever received — statuses regress to
+                    // pending and the recovery sweep re-runs (and re-pays
+                    // for) the whole panel after every reseed.
+                    //
+                    // (task_id, ordinal) is unique, so this runs in phases:
+                    // detach first, then park every surviving row on a
+                    // negative ordinal, then write the final order. A
+                    // one-pass write inserts a new judge onto an ordinal a
+                    // surviving row still holds and dies on the unique
+                    // index (found the hard way: swapping a panel's judges
+                    // 500'd every apply-seed).
+                    let existing_tjs = arena_core::entities::task_judges::Entity::find()
+                        .filter(arena_core::entities::task_judges::Column::TaskId.eq(task_id))
                         .all(txn)
                         .await?;
-                    let existing_by_ordinal: std::collections::HashMap<i32, tasks::Model> =
-                        existing_tasks.into_iter().map(|t| (t.ordinal, t)).collect();
-                    let envelope_ordinals: HashSet<i32> =
-                        envelope.tasks.iter().map(|t| t.ordinal).collect();
-
-                    let (mut updated, mut inserted, mut deleted) = (0usize, 0usize, 0usize);
-
-                    // Delete tasks that vanished from the definition. task_judges
-                    // and tests/probes cascade; task_results/scheduler state go
-                    // SET NULL, so history survives.
-                    for (ordinal, task) in &existing_by_ordinal {
-                        if !envelope_ordinals.contains(ordinal) {
-                            tasks::Entity::delete_by_id(task.id).exec(txn).await?;
-                            deleted += 1;
-                        }
-                    }
-
-                    for task in &envelope.tasks {
-                        let tpl_json = serde_json::to_value(&task.test_template)
-                            .map_err(|e| ExportImportError::BadExportTemplate(e.to_string()))?;
-                        let task_tags_json =
-                            serde_json::to_string(&task.tags).unwrap_or_else(|_| "[]".to_string());
-                        let pts = task.points.clone().unwrap_or_default();
-                        let resolved_value = pts.value.unwrap_or(proj_pts.value).max(1);
-                        let resolved_fail = pts.fail.unwrap_or(proj_pts.fail);
-                        let resolved_no_response = pts.no_response.unwrap_or(proj_pts.no_response);
-                        let resolved_completion_bonus =
-                            pts.completion_bonus.unwrap_or(proj_pts.completion_bonus);
-                        let task_intervals = task.intervals.clone().unwrap_or_default();
-
-                        let task_id = match existing_by_ordinal.get(&task.ordinal) {
-                            Some(existing) => {
-                                let mut am: tasks::ActiveModel = existing.clone().into();
-                                am.title = Set(task.title.clone());
-                                am.content = Set(task.content.clone());
-                                am.test_template = Set(tpl_json);
-                                am.tags = Set(task_tags_json);
-                                am.point_value = Set(resolved_value);
-                                am.deadline_secs = Set(task_intervals.deadline_secs);
-                                am.min_interval_secs = Set(task_intervals.min_interval_secs);
-                                am.interval_increment_secs =
-                                    Set(task_intervals.interval_increment_secs);
-                                am.max_interval_secs = Set(task_intervals.max_interval_secs);
-                                am.fail_points = Set(resolved_fail);
-                                am.no_response_points = Set(resolved_no_response);
-                                am.completion_bonus_points = Set(resolved_completion_bonus);
-                                am.health_points = Set(pts.health.unwrap_or(proj_pts.health));
-                                am.evaluation = Set(task.evaluation.clone());
-                                tasks::Entity::update(am).exec(txn).await?;
-                                updated += 1;
-                                existing.id
-                            }
-                            None => {
-                                let task_id = Uuid::new_v4();
-                                let am = tasks::ActiveModel {
-                                    id: Set(task_id),
-                                    project_id_fk: Set(project_id),
-                                    ordinal: Set(task.ordinal),
-                                    title: Set(task.title.clone()),
-                                    content: Set(task.content.clone()),
-                                    test_template: Set(tpl_json),
-                                    tags: Set(task_tags_json),
-                                    created_at: Set(now),
-                                    point_value: Set(resolved_value),
-                                    deadline_secs: Set(task_intervals.deadline_secs),
-                                    min_interval_secs: Set(task_intervals.min_interval_secs),
-                                    interval_increment_secs: Set(
-                                        task_intervals.interval_increment_secs
-                                    ),
-                                    max_interval_secs: Set(task_intervals.max_interval_secs),
-                                    fail_points: Set(resolved_fail),
-                                    no_response_points: Set(resolved_no_response),
-                                    health_points: Set(pts.health.unwrap_or(proj_pts.health)),
-                                    completion_bonus_points: Set(resolved_completion_bonus),
-                                    evaluation: Set(task.evaluation.clone()),
-                                };
-                                tasks::Entity::insert(am).exec(txn).await?;
-                                inserted += 1;
-                                task_id
-                            }
-                        };
-
-                        // Reconcile judge attachments with the definition,
-                        // PRESERVING existing row ids: judge_results reference
-                        // task_judge_id, so a recreated id orphans every
-                        // verdict the task ever received — statuses regress to
-                        // pending and the recovery sweep re-runs (and re-pays
-                        // for) the whole panel after every reseed.
-                        //
-                        // (task_id, ordinal) is unique, so this runs in phases:
-                        // detach first, then park every surviving row on a
-                        // negative ordinal, then write the final order. A
-                        // one-pass write inserts a new judge onto an ordinal a
-                        // surviving row still holds and dies on the unique
-                        // index (found the hard way: swapping a panel's judges
-                        // 500'd every apply-seed).
-                        let existing_tjs = arena_core::entities::task_judges::Entity::find()
-                            .filter(arena_core::entities::task_judges::Column::TaskId.eq(task_id))
-                            .all(txn)
+                    let named: std::collections::HashSet<Uuid> = task
+                        .judges
+                        .iter()
+                        .filter_map(|jref| judge_id_by_slug.get(jref.slug()).copied())
+                        .collect();
+                    // Detach what the definition no longer names, freeing
+                    // their ordinals.
+                    for row in existing_tjs.iter().filter(|r| !named.contains(&r.judge_id)) {
+                        arena_core::entities::task_judges::Entity::delete_by_id(row.id)
+                            .exec(txn)
                             .await?;
-                        let named: std::collections::HashSet<Uuid> = task
-                            .judges
-                            .iter()
-                            .filter_map(|jref| judge_id_by_slug.get(jref.slug()).copied())
-                            .collect();
-                        // Detach what the definition no longer names, freeing
-                        // their ordinals.
-                        for row in existing_tjs.iter().filter(|r| !named.contains(&r.judge_id)) {
-                            arena_core::entities::task_judges::Entity::delete_by_id(row.id)
+                    }
+                    // Park survivors out of the target range (final
+                    // ordinals are >= 0, parking is negative and unique).
+                    for (i, row) in existing_tjs
+                        .iter()
+                        .filter(|r| named.contains(&r.judge_id))
+                        .enumerate()
+                    {
+                        let mut am: arena_core::entities::task_judges::ActiveModel =
+                            row.clone().into();
+                        am.ordinal = Set(-(i as i32) - 1);
+                        am.update(txn).await?;
+                    }
+                    for (idx, jref) in task.judges.iter().enumerate() {
+                        // Presence validated before the transaction.
+                        let Some(judge_id) = judge_id_by_slug.get(jref.slug()).copied() else {
+                            continue;
+                        };
+                        if let Some(row) = existing_tjs.iter().find(|r| r.judge_id == judge_id) {
+                            let mut am: arena_core::entities::task_judges::ActiveModel =
+                                row.clone().into();
+                            am.ordinal = Set(idx as i32);
+                            am.weight = Set(jref.weight());
+                            // rating_scale_override is admin-set in the UI,
+                            // not part of the seed — keep it.
+                            am.updated_at = Set(now);
+                            am.update(txn).await?;
+                        } else {
+                            let tj_am = arena_core::entities::task_judges::ActiveModel {
+                                id: Set(Uuid::new_v4()),
+                                task_id: Set(task_id),
+                                judge_id: Set(judge_id),
+                                ordinal: Set(idx as i32),
+                                rating_scale_override: Set(None),
+                                weight: Set(jref.weight()),
+                                created_at: Set(now),
+                                updated_at: Set(now),
+                            };
+                            arena_core::entities::task_judges::Entity::insert(tj_am)
                                 .exec(txn)
                                 .await?;
                         }
-                        // Park survivors out of the target range (final
-                        // ordinals are >= 0, parking is negative and unique).
-                        for (i, row) in existing_tjs
-                            .iter()
-                            .filter(|r| named.contains(&r.judge_id))
-                            .enumerate()
-                        {
-                            let mut am: arena_core::entities::task_judges::ActiveModel =
-                                row.clone().into();
-                            am.ordinal = Set(-(i as i32) - 1);
-                            am.update(txn).await?;
-                        }
-                        for (idx, jref) in task.judges.iter().enumerate() {
-                            // Presence validated before the transaction.
-                            let Some(judge_id) = judge_id_by_slug.get(jref.slug()).copied() else {
-                                continue;
-                            };
-                            if let Some(row) = existing_tjs.iter().find(|r| r.judge_id == judge_id)
-                            {
-                                let mut am: arena_core::entities::task_judges::ActiveModel =
-                                    row.clone().into();
-                                am.ordinal = Set(idx as i32);
-                                am.weight = Set(jref.weight());
-                                // rating_scale_override is admin-set in the UI,
-                                // not part of the seed — keep it.
-                                am.updated_at = Set(now);
-                                am.update(txn).await?;
-                            } else {
-                                let tj_am = arena_core::entities::task_judges::ActiveModel {
-                                    id: Set(Uuid::new_v4()),
-                                    task_id: Set(task_id),
-                                    judge_id: Set(judge_id),
-                                    ordinal: Set(idx as i32),
-                                    rating_scale_override: Set(None),
-                                    weight: Set(jref.weight()),
-                                    created_at: Set(now),
-                                    updated_at: Set(now),
-                                };
-                                arena_core::entities::task_judges::Entity::insert(tj_am)
-                                    .exec(txn)
-                                    .await?;
-                            }
-                        }
                     }
+                }
 
-                    Ok((updated, inserted, deleted))
-                })
+                Ok((updated, inserted, deleted))
             })
-            .await
-            .map_err(|e| match e {
-                sea_orm::TransactionError::Transaction(err) => err,
-                sea_orm::TransactionError::Connection(db_err) => ExportImportError::Db(db_err),
-            })?;
+        })
+        .await
+        .map_err(|e| match e {
+            sea_orm::TransactionError::Transaction(err) => err,
+            sea_orm::TransactionError::Connection(db_err) => ExportImportError::Db(db_err),
+        })?;
 
     // Campaign membership lives on the children, so it is reconciled after
     // the project's own transaction: parts dropped from the list detach, the
@@ -1080,42 +1113,8 @@ pub async fn apply_seed(
             crate::validation::tags::validate_tags(&envelope.project.tags)
                 .map_err(|e| ExportImportError::BadRequest(e.to_string()))?;
             validate_campaign_shape(&envelope)?;
-            let mut seen_ordinals: HashSet<i32> = HashSet::new();
-            for task in &envelope.tasks {
-                crate::api::project_tasks::validate_ordinal(task.ordinal)
-                    .map_err(|e| ExportImportError::BadRequest(e.to_string()))?;
-                arena_core::validation::validate_template(&task.test_template)
-                    .map_err(|e| ExportImportError::BadRequest(e.to_string()))?;
-                crate::validation::tags::validate_tags(&task.tags)
-                    .map_err(|e| ExportImportError::BadRequest(e.to_string()))?;
-                validate_task_extras(task).map_err(|e| {
-                    ExportImportError::BadRequest(format!("task {}: {e}", task.ordinal))
-                })?;
-                if !seen_ordinals.insert(task.ordinal) {
-                    return Err(ExportImportError::BadRequest(format!(
-                        "duplicate ordinal: {}",
-                        task.ordinal
-                    )));
-                }
-            }
-            let judge_id_by_slug: std::collections::HashMap<String, Uuid> =
-                arena_core::entities::judges::Entity::find()
-                    .all(&state.db)
-                    .await?
-                    .into_iter()
-                    .map(|j| (j.slug, j.id))
-                    .collect();
-            for task in &envelope.tasks {
-                for jref in &task.judges {
-                    let jslug = jref.slug();
-                    if !judge_id_by_slug.contains_key(jslug) {
-                        return Err(ExportImportError::BadRequest(format!(
-                            "task {} references unknown judge slug '{jslug}'",
-                            task.ordinal
-                        )));
-                    }
-                }
-            }
+            validate_envelope_tasks(&envelope)?;
+            let judge_id_by_slug = resolve_judge_slugs(&state, &envelope).await?;
             // Category: find-or-create, matching boot-seed semantics.
             let resolved_category = match envelope.project.category.as_deref().map(str::trim) {
                 Some(name) if !name.is_empty() && name.chars().count() <= 100 => {

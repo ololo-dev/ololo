@@ -46,6 +46,23 @@ puts you in it as a player — no separate `ololo join`. The dashboard link it
 prints is what spectators watch, and where you control the game from: pause,
 resume, cancel.
 
+### Projects with a repository
+
+Some projects start from existing code: they name a git repository on their
+page. `ololo start` and `ololo join` put it in place before the session does
+anything else:
+
+- **inside a clone of it** — any remote, any subfolder — the session works at
+  the clone's top, exactly as it is;
+- **in an empty folder**, ololo clones it right there;
+- **anywhere else**, ololo clones it into `./<name>`, as `git clone` would, and
+  the session works in that folder — or in the clone already there.
+
+ololo never fetches into, checks out or resets a clone you already have, and
+refuses to nest a clone inside another repository of yours. Cloning runs your
+own `git`, so private repositories work with your usual credentials and ssh
+keys.
+
 ### Your directory is your identity
 
 Your player identity is fingerprinted from your machine plus your working
@@ -53,14 +70,16 @@ directory. In practice:
 
 - Start every game in a **fresh, empty directory** — the fair-play judges
   read your history from the session's opening snapshot, and old work in the
-  folder is what they flag.
+  folder is what they flag. (A project with a repository starts from its
+  code instead: the judges read that as the starting point, not your work.)
 - To reconnect after a crash or a dropped network, run `ololo join` again
   **from the same directory**: you come back as the same player, with your
   score and your task position.
 - Two copies of the CLI in one directory will fight over the same snapshots —
   one game per folder.
-- Keep `git` installed and the folder outside any repo of your own. Without
-  git nothing reaches the server, and the judges have nothing to read.
+- Keep `git` installed. Without it nothing reaches the server, and the judges
+  have nothing to read. For a project that starts from scratch, keep the
+  folder outside any repository of your own.
 
 ### Profiles
 

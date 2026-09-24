@@ -777,15 +777,26 @@ async fn a_closed_task_pays_its_health_bonus_once_from_the_verified_tree() {
         "{}",
         bonus_row.answer
     );
-    let score_events = rig
-        .events
-        .0
-        .lock()
-        .unwrap()
-        .iter()
-        .filter(|e| matches!(e, ZmqEvent::ScoreChange { .. }))
-        .count();
-    assert_eq!(score_events, 1, "one score change for the bonus");
+    // The row lands before the score event is published (a session-log
+    // write sits between them): wait for the event, then count it.
+    let score_events = || {
+        rig.events
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|e| matches!(e, ZmqEvent::ScoreChange { .. }))
+            .count()
+    };
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while score_events() == 0 {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "no score change for the bonus"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(score_events(), 1, "one score change for the bonus");
 
     // Closing the task again (a reconnect replays the close) pays nothing more.
     game_server::health::award_health_bonus(

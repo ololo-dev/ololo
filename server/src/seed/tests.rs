@@ -84,6 +84,7 @@ fn sample_envelope(slug: &str) -> ExportEnvelope {
             memory_schema: None,
             show_tasks: true,
             parts: Vec::new(),
+            repo: None,
         },
         tasks: vec![crate::api::admin_export_import::ExportTask {
             ordinal: 0,
@@ -142,6 +143,7 @@ async fn inserts_project_and_skips_on_rerun() {
             memory_schema: None,
             show_tasks: true,
             parts: Vec::new(),
+            repo: None,
         },
         tasks: vec![],
     };
@@ -323,6 +325,70 @@ async fn seeds_markdown_project_and_skips_on_rerun() {
 
     // safety: serialized by ENV_LOCK
     unsafe { std::env::remove_var("ARENA_PROJECTS_DIR") };
+    drop(_guard);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// Rewrite the readme of the project `write_markdown_project` made so its
+/// frontmatter carries `extra` lines under `project:`.
+fn with_readme_lines(dir: &std::path::Path, slug: &str, extra: &str) {
+    let readme = format!(
+        "---\nschema_version: 1\nproject:\n  name: MD Seeded\n  public: true\n{extra}---\nBody.\n"
+    );
+    std::fs::write(dir.join(slug).join("readme.md"), readme).unwrap();
+}
+
+#[tokio::test]
+async fn a_markdown_project_names_its_repository_and_seeds_it() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let dir = write_dir();
+    write_markdown_project(&dir, "md-repo");
+    with_readme_lines(
+        &dir,
+        "md-repo",
+        "  repo: https://github.com/ololo-dev/starter.git\n  repo_ref: v1.0\n",
+    );
+    let envelope =
+        crate::seed::markdown::load_markdown_project(&dir.join("md-repo")).expect("loads");
+    assert_eq!(
+        envelope.project.repo,
+        Some(crate::api::admin_export_import::ExportRepo {
+            url: "https://github.com/ololo-dev/starter.git".into(),
+            git_ref: Some("v1.0".into()),
+        })
+    );
+
+    let db = fresh_db().await;
+    seed_admin(&db).await;
+    // safety: serialized by ENV_LOCK
+    unsafe { std::env::set_var("ARENA_PROJECTS_DIR", &dir) };
+    seed_projects(&db).await;
+    // safety: serialized by ENV_LOCK
+    unsafe { std::env::remove_var("ARENA_PROJECTS_DIR") };
+    let proj = projects::Entity::find()
+        .filter(projects::Column::Slug.eq("md-repo"))
+        .one(&db)
+        .await
+        .unwrap()
+        .expect("seeded");
+    let repo = arena_core::project_repo::repo_of(&db, proj.id)
+        .await
+        .unwrap()
+        .expect("the seed names a repository");
+    assert_eq!(repo.url, "https://github.com/ololo-dev/starter.git");
+    assert_eq!(repo.git_ref.as_deref(), Some("v1.0"));
+
+    // A URL a player should not clone, or a ref with nothing to check it
+    // out of, fails the load with a pointed message.
+    for (extra, says) in [
+        ("  repo: file:///etc\n", "repo"),
+        ("  repo_ref: main\n", "repo_ref needs repo"),
+    ] {
+        with_readme_lines(&dir, "md-repo", extra);
+        let err = crate::seed::markdown::load_markdown_project(&dir.join("md-repo"))
+            .expect_err("refused");
+        assert!(err.contains(says), "{extra:?} → {err}");
+    }
     drop(_guard);
     std::fs::remove_dir_all(&dir).ok();
 }

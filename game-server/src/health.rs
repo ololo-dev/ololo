@@ -89,10 +89,11 @@ pub async fn on_report(
         tracing::debug!(session_id = %session_id, player_id = %player_id, "health report ignored: health is off");
         return;
     }
-    // Personal work starts from code that predates the session: score that
-    // tree once, early, so the chart shows where the player began and the
-    // first task's bonus has something to be measured against.
-    if arena_core::personal::is_personal_session(&state.db, session_id)
+    // Work on existing code — a personal project, or a project's own
+    // repository cloned before the start — begins from a tree that predates
+    // the session: score it once, early, so the chart shows where the player
+    // began and the first task's bonus has something to be measured against.
+    if arena_core::project_repo::session_starts_from_existing_code(&state.db, session_id)
         .await
         .unwrap_or(false)
     {
@@ -407,13 +408,14 @@ pub async fn award_health_bonus(
     });
     let score = source.and_then(|r| r.server_score);
     let level = ololo_health::level(score, &settings.thresholds);
-    let personal = arena_core::personal::is_personal_session(&state.db, session_id)
-        .await
-        .unwrap_or(false);
+    let existing_code =
+        arena_core::project_repo::session_starts_from_existing_code(&state.db, session_id)
+            .await
+            .unwrap_or(false);
     // Work on an existing codebase is paid for where it left the code
     // relative to where it found it; a challenge build, which starts from
     // nothing, on the grade it reached.
-    let start = if personal && source.is_some() {
+    let start = if existing_code && source.is_some() {
         Some(task_start_score(state, session_id, player_id, task, join_code).await)
     } else {
         None

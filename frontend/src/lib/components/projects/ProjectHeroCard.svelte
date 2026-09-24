@@ -5,6 +5,7 @@
   import MarkdownContent from "$lib/components/MarkdownContent.svelte";
   import JudgeChips from "$lib/components/projects/JudgeChips.svelte";
   import CodeBlock from "$lib/components/CodeBlock.svelte";
+  import { repoLabel, repoWebUrl } from "$lib/repo";
 
   let {
     project,
@@ -42,6 +43,8 @@
   // from their repository rather than from a popup.
   const isPersonal = $derived(project.kind === "personal");
   const isOwner = $derived(!!currentUserId && currentUserId === project.owner_user_id);
+  const repoName = $derived(repoLabel(project.repo_url));
+  const repoPage = $derived(repoWebUrl(project.repo_url));
 </script>
 
 <!-- 2-col card -->
@@ -252,6 +255,35 @@
           </p>
         </div>
       {/if}
+      {#if repoName}
+        <!-- The code every session starts from: ololo clones it into the
+             player's folder first. -->
+        <div class="mb-[16px] leading-[1.5]" data-testid="project-repo">
+          <div
+            class="text-[12px] font-semibold leading-[1.33] text-brand-muted"
+            title="ololo clones it into your folder before a session starts there"
+          >
+            Repository
+          </div>
+          {#if repoPage}
+            <a
+              href={repoPage}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={project.repo_url}
+              class="block truncate font-mono text-sm text-brand-blue hover:underline"
+              >{repoName}</a
+            >
+          {:else}
+            <p class="truncate font-mono text-sm text-brand-text" title={project.repo_url}>
+              {repoName}
+            </p>
+          {/if}
+          {#if project.repo_ref}
+            <p class="truncate font-mono text-xs text-brand-muted">at {project.repo_ref}</p>
+          {/if}
+        </div>
+      {/if}
       <div class="mb-[16px] leading-[1.5]">
         <div class="text-[12px] font-semibold leading-[1.33] text-brand-muted">
           {project.parts_duration_secs ? "Total playing time" : "Duration"}
@@ -367,8 +399,13 @@
             </div>
             <CodeBlock code="ololo start {project.slug}" compact />
             <p class="mt-[8px] text-[13px] leading-snug text-brand-muted">
-              Run it in the folder your agent works in. It shows what it will upload and asks
-              first.
+              {#if repoName}
+                Run it in your clone of the repository — or in an empty folder, and ololo clones
+                it there first. It shows what it will upload and asks first.
+              {:else}
+                Run it in the folder your agent works in. It shows what it will upload and asks
+                first.
+              {/if}
               <a
                 href="/documentation/your-own-projects"
                 class="font-semibold text-brand-blue hover:opacity-70">How it works</a

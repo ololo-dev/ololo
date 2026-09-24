@@ -191,6 +191,23 @@ describe("ProjectDetailPage", () => {
       expect(line.querySelector("a")?.getAttribute("href")).toBe("/projects/p1/personal");
     });
 
+    it("names the repository its sessions start from, linking an https one", () => {
+      renderPersonal(
+        {
+          ...personal,
+          repo_url: "https://github.com/me/reports.git",
+          repo_ref: "develop",
+        } as Project,
+        [],
+        { currentUserId: "me", isAdmin: false },
+      );
+      const repo = screen.getByTestId("project-repo");
+      expect(repo.textContent).toContain("github.com/me/reports");
+      expect(repo.textContent).toContain("at develop");
+      expect(repo.querySelector("a")?.getAttribute("href")).toBe("https://github.com/me/reports");
+      expect(screen.getByTestId("personal-start").textContent).toMatch(/ololo clones\s+it there/);
+    });
+
     it("introduces a public one to a visitor by its owner", () => {
       renderPersonal({ ...personal, public: true, owner_username: "andrey" } as Project, [], {
         currentUserId: "visitor",

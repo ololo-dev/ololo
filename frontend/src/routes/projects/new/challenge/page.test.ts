@@ -48,11 +48,30 @@ describe("routes/projects/new/challenge/+page.svelte", () => {
       data: defaultData,
       form: {
         error: "invalid_name",
+        detail: null,
         name: "",
         description: "",
         public: "false",
       },
     });
     expect(screen.getByTestId("create-error")).not.toBeNull();
+  });
+
+  it("offers the repository fields and says why a URL was refused", () => {
+    render(NewProjectPage, {
+      data: defaultData,
+      form: {
+        error: "invalid_repo",
+        detail: "use an https:// or ssh:// URL, or git@host:owner/repo",
+        name: "Starter",
+        description: "",
+        public: "false",
+      },
+    });
+    expect((screen.getByTestId("project-repo-url") as HTMLInputElement).name).toBe("repo_url");
+    expect((screen.getByTestId("project-repo-ref") as HTMLInputElement).name).toBe("repo_ref");
+    expect(screen.getByTestId("create-error").textContent).toContain(
+      "Repository: use an https:// or ssh:// URL",
+    );
   });
 });

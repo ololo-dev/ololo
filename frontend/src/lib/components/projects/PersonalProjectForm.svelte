@@ -11,6 +11,7 @@
   import { suggestPersonalTasks, ApiError } from "$lib/api";
   import type { PersonalProjectOptions, PersonalJudgeOption } from "$lib/api";
   import { formatDuration } from "$lib/format";
+  import { repoLabel } from "$lib/repo";
 
   interface Initial {
     name: string;
@@ -21,6 +22,9 @@
     session_duration_secs: number;
     /** Absent: public. */
     public?: boolean;
+    /** The repository the work happens in; empty or absent = none. */
+    repo_url?: string | null;
+    repo_ref?: string | null;
   }
 
   interface FormError {
@@ -81,6 +85,9 @@
   );
   let duration = $state(untrack(() => start?.session_duration_secs ?? options.session.default_secs));
   let isPublic = $state(start?.public ?? true);
+  let repoUrl = $state(start?.repo_url ?? "");
+  let repoRef = $state(start?.repo_ref ?? "");
+  const repoName = $derived(repoLabel(repoUrl));
   // Keeping a private project private is always possible; making one
   // private takes Premium where plans are on.
   const privateSelectable = untrack(() => options.private_allowed || start?.public === false);
@@ -198,6 +205,8 @@
         return "Judges";
       case "session_duration_secs":
         return "Session length";
+      case "repo_url":
+        return "Repository";
       default:
         return "Project";
     }
@@ -322,6 +331,48 @@
         <span class="shrink-0 {descriptionTooLong ? 'text-red-500' : ''}">
           {description.length} / {options.limits.max_description_chars}
         </span>
+      </p>
+
+      <div class="mt-4 grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1fr)_220px]">
+        <div class="min-w-0">
+          <label for="pp-repo-url" class="mb-1 block text-xs font-semibold text-brand-text">
+            Repository <span class="font-normal text-brand-muted">(optional)</span>
+          </label>
+          <input
+            id="pp-repo-url"
+            name="repo_url"
+            type="text"
+            inputmode="url"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="https://github.com/you/app.git"
+            bind:value={repoUrl}
+            data-testid="pp-repo-url"
+            class="h-[48px] w-full rounded-[8px] border-2 border-brand-border bg-white px-4 font-mono text-sm text-brand-text placeholder:font-body placeholder:text-brand-muted focus:border-brand-blue focus:outline-none"
+          />
+        </div>
+        <div class="min-w-0">
+          <label for="pp-repo-ref" class="mb-1 block text-xs font-semibold text-brand-text">
+            Branch, tag or commit
+          </label>
+          <input
+            id="pp-repo-ref"
+            name="repo_ref"
+            type="text"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="default branch"
+            bind:value={repoRef}
+            disabled={!repoUrl.trim()}
+            data-testid="pp-repo-ref"
+            class="h-[48px] w-full rounded-[8px] border-2 border-brand-border bg-white px-4 font-mono text-sm text-brand-text placeholder:font-body placeholder:text-brand-muted focus:border-brand-blue focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+          />
+        </div>
+      </div>
+      <p class="mt-1 text-xs text-brand-muted">
+        Where the work happens. Whoever starts or joins a session in a folder without it gets
+        it cloned there first — your own clone works as it is. Cloning uses each player's own git
+        access, so leave tokens out of the URL.
       </p>
     </section>
 
@@ -688,6 +739,16 @@
       <div class="flex justify-between gap-3">
         <dt class="text-brand-muted">Length</dt>
         <dd class="text-right font-semibold text-brand-text">{formatDuration(duration)}</dd>
+      </div>
+      <div class="flex justify-between gap-3">
+        <dt class="shrink-0 text-brand-muted">Starts from</dt>
+        <dd
+          class="min-w-0 truncate text-right font-semibold text-brand-text"
+          title={repoUrl.trim() || undefined}
+          data-testid="pp-repo-summary"
+        >
+          {repoName ?? "Your folder"}
+        </dd>
       </div>
       <div class="flex justify-between gap-3">
         <dt class="text-brand-muted">Who sees it</dt>

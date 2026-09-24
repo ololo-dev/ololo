@@ -151,6 +151,13 @@ pub async fn run_start(
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow!("project response missing 'id' field"))?;
 
+    // The project's repository first: the upload consent, the campaign
+    // carry-over and every snapshot read the folder it lands in — and a
+    // clone that fails should fail before a session exists.
+    if let Some(repo) = crate::project_repo::of_project(&project)? {
+        crate::project_repo::prepare(&repo)?;
+    }
+
     // A personal project uploads the user's own code: say what and ask,
     // before a session exists to abandon.
     let personal = is_personal(&project);
@@ -326,9 +333,10 @@ fn spawn_probe_loop(ws_base: &str, code: &str, pat: &str) -> tokio::task::JoinHa
     })
 }
 
-/// The project a session runs, or `None` when either lookup fails. Only the
-/// campaign carry-over needs this, and it degrades to "no carry-over" rather
-/// than blocking a join over a metadata hiccup.
+/// The project a session runs, for servers whose join response does not
+/// carry it: `None` when either lookup fails — a refusal included, which
+/// is what a player of someone's private project gets — rather than
+/// blocking a join over a metadata hiccup.
 async fn project_of_session(
     client: &reqwest::Client,
     base: &str,
@@ -341,6 +349,8 @@ async fn project_of_session(
         .send()
         .await
         .ok()?
+        .error_for_status()
+        .ok()?
         .json()
         .await
         .ok()?;
@@ -350,6 +360,8 @@ async fn project_of_session(
         .bearer_auth(token)
         .send()
         .await
+        .ok()?
+        .error_for_status()
         .ok()?
         .json()
         .await
@@ -400,9 +412,23 @@ pub async fn run_join(
 
     ui::success(format!("Joined session {code}"));
 
+    // The project, as the join carried it — the one way a player of a
+    // private project learns what it is.
+    let project = match join_outcome.project.clone() {
+        Some(project) => Some(project),
+        None => project_of_session(&client, &base, &cfg.token, &join_outcome.session_id).await,
+    };
+    // Its repository before anything reads the folder — see `run_start`.
+    if let Some(repo) = project
+        .as_ref()
+        .map(crate::project_repo::of_project)
+        .transpose()?
+        .flatten()
+    {
+        crate::project_repo::prepare(&repo)?;
+    }
     // Same carry-over as `start`, before any snapshot work: a player who
     // joins a campaign part in a fresh folder gets the previous part's code.
-    let project = project_of_session(&client, &base, &cfg.token, &join_outcome.session_id).await;
     if let Some(project) = &project {
         crate::campaign::prepare_part_workspace(&client, &base, &cfg.token, project, fresh).await?;
     }

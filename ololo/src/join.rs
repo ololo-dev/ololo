@@ -11,6 +11,10 @@ pub struct JoinOutcome {
     pub session_id: String,
     pub player_id: String,
     pub git_remote_path: Option<String>,
+    /// The project the session plays, as the join response carries it —
+    /// the one way a player of a private project learns its kind and
+    /// repository. `None` from servers that do not send it.
+    pub project: Option<serde_json::Value>,
 }
 
 /// Handle a PATCH response by status code, returning Ok or Err as appropriate.
@@ -92,6 +96,7 @@ pub async fn run_join_subroutine(
     if debug {
         eprintln!("[debug] join response HTTP {status}: {body}");
     }
+    let project = body.get("project").filter(|p| p.is_object()).cloned();
 
     let session_id = match body
         .get("session_id")
@@ -111,6 +116,7 @@ pub async fn run_join_subroutine(
             eprintln!("Warning: join response missing 'player_id', skipping metadata upload.");
             return Ok(JoinOutcome {
                 session_id,
+                project,
                 ..Default::default()
             });
         }
@@ -153,6 +159,7 @@ pub async fn run_join_subroutine(
                 session_id,
                 player_id,
                 git_remote_path,
+                project,
             });
         }
     };
@@ -173,6 +180,7 @@ pub async fn run_join_subroutine(
         session_id,
         player_id,
         git_remote_path,
+        project,
     })
 }
 

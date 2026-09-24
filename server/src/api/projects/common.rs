@@ -43,6 +43,14 @@ pub struct CreateProjectReq {
     /// (scalars), e.g. `{"dev": "npm run dev", "port": 1234}`.
     #[serde(default)]
     pub memory_schema: Option<serde_json::Value>,
+    /// The git repository sessions start from (see
+    /// `arena_core::project_repo`); blank or absent = none.
+    #[serde(default)]
+    pub repo_url: Option<String>,
+    /// Branch, tag or commit to check out; blank or absent = the default
+    /// branch.
+    #[serde(default)]
+    pub repo_ref: Option<String>,
 }
 
 pub(crate) fn default_true() -> bool {
@@ -87,16 +95,27 @@ pub struct PatchProjectReq {
     /// `null` clears it; absent leaves it unchanged.
     #[serde(default, deserialize_with = "deserialize_some")]
     pub memory_schema: Option<Option<serde_json::Value>>,
+    /// The git repository sessions start from. Empty string = none (its
+    /// ref goes with it); absent = unchanged.
+    #[serde(default)]
+    pub repo_url: Option<String>,
+    /// Branch, tag or commit of the repository. Empty string = the default
+    /// branch; absent = unchanged.
+    #[serde(default)]
+    pub repo_ref: Option<String>,
 }
 
 impl PatchProjectReq {
-    /// Whether the request does nothing but archive, unarchive or change
-    /// who sees the project — all a personal project lets this editor do.
-    pub(crate) fn touches_only_archive_or_visibility(&self) -> bool {
+    /// Whether the request does nothing but archive, unarchive, change who
+    /// sees the project or which repository it starts from — all a personal
+    /// project lets this editor do.
+    pub(crate) fn touches_only_personal_settings(&self) -> bool {
         let PatchProjectReq {
             name,
             public: _,
             archived: _,
+            repo_url: _,
+            repo_ref: _,
             description,
             slug,
             category,
@@ -161,6 +180,11 @@ pub struct ProjectSummary {
     /// the profile that lists it (see [`attach_owner_username`]).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owner_username: Option<String>,
+    /// The git repository its sessions start from, and the branch, tag or
+    /// commit to check out (`arena_core::project_repo`). Filled by
+    /// [`attach_kinds`]; `None` for a project without one.
+    pub repo_url: Option<String>,
+    pub repo_ref: Option<String>,
     pub public: bool,
     pub archived_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_at: chrono::DateTime<chrono::Utc>,
@@ -263,6 +287,9 @@ pub enum ProjectError {
     /// Making a personal project private is a Premium choice.
     #[error("premium_required")]
     PremiumRequired,
+    /// A repository ololo would not clone; the detail says why.
+    #[error("invalid_repo: {0}")]
+    InvalidRepo(String),
     #[error("database error: {0}")]
     Db(#[from] sea_orm::DbErr),
 }
@@ -291,6 +318,7 @@ crate::api::error::impl_api_error!(ProjectError {
     ),
     Self::PersonalProject => (CONFLICT, "personal_project"),
     Self::PremiumRequired => (FORBIDDEN, "premium_required"),
+    Self::InvalidRepo(detail) => (UNPROCESSABLE_ENTITY, "invalid_repo", "detail": detail),
     Self::Db(_) => (INTERNAL_SERVER_ERROR, "database_error"),
 });
 
@@ -449,6 +477,8 @@ pub fn to_summary_with_sessions(
         slug: m.slug,
         kind: KIND_CHALLENGE,
         owner_username: None,
+        repo_url: None,
+        repo_ref: None,
         description: m.description,
         category: m.category,
         tags,
@@ -498,19 +528,25 @@ pub const KIND_CHALLENGE: &str = "challenge";
 /// [`ProjectSummary::kind`] of a user's own project.
 pub const KIND_PERSONAL: &str = "personal";
 
-/// Mark the personal projects among `summaries` — one query for the lot.
+/// Mark the personal projects among `summaries` and name the repository
+/// each starts from — one query apiece for the lot.
 pub async fn attach_kinds(
     db: &DatabaseConnection,
     summaries: &mut [ProjectSummary],
 ) -> Result<(), sea_orm::DbErr> {
     let ids: Vec<Uuid> = summaries.iter().map(|s| s.id).collect();
     let personal = arena_core::personal::personal_project_ids(db, &ids).await?;
+    let mut repos = arena_core::project_repo::repos_of(db, &ids).await?;
     for summary in summaries {
         summary.kind = if personal.contains(&summary.id) {
             KIND_PERSONAL
         } else {
             KIND_CHALLENGE
         };
+        if let Some(repo) = repos.remove(&summary.id) {
+            summary.repo_url = Some(repo.url);
+            summary.repo_ref = repo.git_ref;
+        }
     }
     Ok(())
 }

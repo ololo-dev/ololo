@@ -36,6 +36,8 @@ export const load: PageServerLoad = async ({ locals, fetch, parent, url }) => {
         session_duration_secs: spec.session_duration_secs,
         // A copy is a new project: private only for whoever may make one.
         public: project.public || !options.private_allowed,
+        repo_url: project.repo_url ?? "",
+        repo_ref: project.repo_ref ?? "",
       };
     } catch {
       // Not theirs, or gone: start from an empty form.

@@ -52,6 +52,9 @@ pub async fn post_create(
     if let Some(ref url) = req.cover_image_url {
         validate_cover_image_url(url)?;
     }
+    let repo =
+        arena_core::project_repo::requested(req.repo_url.as_deref(), req.repo_ref.as_deref())
+            .map_err(ProjectError::InvalidRepo)?;
 
     let now = Utc::now();
     let id = Uuid::new_v4();
@@ -110,7 +113,10 @@ pub async fn post_create(
         part_ordinal: Set(None),
     };
     let model = am.insert(&state.db).await?;
-    Ok((StatusCode::CREATED, Json(to_summary(model, false, 0, None))).into_response())
+    arena_core::project_repo::set_repo(&state.db, model.id, repo.as_ref()).await?;
+    let mut summary = to_summary(model, false, 0, None);
+    attach_kinds(&state.db, std::slice::from_mut(&mut summary)).await?;
+    Ok((StatusCode::CREATED, Json(summary)).into_response())
 }
 
 /// `GET /api/projects/:id`
@@ -142,7 +148,7 @@ pub async fn patch_one(
     // a project that no longer exists. Making it private takes what a
     // private one takes at creation.
     if arena_core::personal::is_personal_project(&state.db, row.id).await? {
-        if !req.touches_only_archive_or_visibility() {
+        if !req.touches_only_personal_settings() {
             return Err(ProjectError::PersonalProject);
         }
         if req.public == Some(false) && row.public {
@@ -155,6 +161,17 @@ pub async fn patch_one(
             }
         }
     }
+
+    // The repository: validated up front with the rest, written last.
+    let repo_change = {
+        let current = arena_core::project_repo::repo_of(&state.db, row.id).await?;
+        arena_core::project_repo::patched(
+            current.as_ref(),
+            req.repo_url.as_deref(),
+            req.repo_ref.as_deref(),
+        )
+        .map_err(ProjectError::InvalidRepo)?
+    };
 
     let new_name = match &req.name {
         Some(n) => Some(validate_name(n)?),
@@ -200,6 +217,7 @@ pub async fn patch_one(
         && req.session_duration_secs.is_none()
         && req.idle_timeout_secs.is_none()
         && req.memory_schema.is_none()
+        && repo_change.is_none()
     {
         let tc = tasks::Entity::find()
             .filter(tasks::Column::ProjectIdFk.eq(row.id))
@@ -327,6 +345,9 @@ pub async fn patch_one(
 
     am.updated_at = Set(now);
     let updated = am.update(&state.db).await?;
+    if let Some(repo) = repo_change {
+        arena_core::project_repo::set_repo(&state.db, updated.id, repo.as_ref()).await?;
+    }
     let tc = tasks::Entity::find()
         .filter(tasks::Column::ProjectIdFk.eq(updated.id))
         .count(&state.db)

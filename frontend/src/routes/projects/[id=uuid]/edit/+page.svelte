@@ -6,6 +6,7 @@
   import MarkdownField from '$lib/components/MarkdownField.svelte';
   import TagInput from '$lib/components/TagInput.svelte';
   import CoverImageUpload from '$lib/components/CoverImageUpload.svelte';
+  import ProjectRepoFields from '$lib/components/projects/ProjectRepoFields.svelte';
   import AccordionSection from '$lib/components/AccordionSection.svelte';
   import TaskRow from '$lib/components/TaskRow.svelte';
   import TaskDrawer from '$lib/components/TaskDrawer.svelte';
@@ -291,6 +292,12 @@
               <input type="hidden" name="clear_cover_image" value={String(coverImageCleared)} />
             </div>
 
+            <ProjectRepoFields
+              url={data.project.repo_url}
+              gitRef={data.project.repo_ref}
+              idPrefix="edit"
+            />
+
             <!-- Session-memory schema (owner-editable, collapsible) -->
             <ProjectMemorySchemaFields
               open={memoryOpen}
@@ -338,7 +345,15 @@
             {/if}
 
             {#if form?.action === 'editProject' && form?.error}
-              <p class="mt-4 text-sm text-brand-red">Error: {form.error}</p>
+              <p class="mt-4 text-sm text-brand-red">
+                {#if form.error === 'invalid_repo'}
+                  Repository: {'detail' in form && typeof form.detail === 'string'
+                    ? form.detail
+                    : 'not a URL ololo can clone.'}
+                {:else}
+                  Error: {form.error}
+                {/if}
+              </p>
             {/if}
 
           </div>

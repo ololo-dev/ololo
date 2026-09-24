@@ -20,6 +20,7 @@ mod memory_sync;
 mod permissions;
 mod player_ws;
 mod probe;
+mod project_repo;
 mod snapshot;
 mod task_stats;
 mod tui;

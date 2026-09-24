@@ -243,6 +243,44 @@ describe("PersonalProjectForm", () => {
     expect(kept.disabled).toBe(false);
   });
 
+  it("names the repository the work happens in, and its ref only beside one", async () => {
+    render(PersonalProjectForm, {
+      options: options(),
+      submitLabel: "Create project",
+      cancelHref: "/projects",
+    });
+    const url = screen.getByTestId("pp-repo-url") as HTMLInputElement;
+    const ref = screen.getByTestId("pp-repo-ref") as HTMLInputElement;
+    expect(url.name).toBe("repo_url");
+    expect(ref.disabled).toBe(true);
+    expect(screen.getByTestId("pp-repo-summary").textContent?.trim()).toBe("Your folder");
+
+    await fireEvent.input(url, { target: { value: "git@github.com:me/app.git" } });
+    expect(ref.disabled).toBe(false);
+    expect(screen.getByTestId("pp-repo-summary").textContent?.trim()).toBe("github.com/me/app");
+  });
+
+  it("brings back the repository of the project being edited", () => {
+    render(PersonalProjectForm, {
+      options: options(),
+      initial: {
+        name: "CSV export",
+        description: "Add a CSV export.",
+        tasks: [],
+        judges: ["correctness"],
+        session_duration_secs: 3600,
+        repo_url: "https://github.com/me/app.git",
+        repo_ref: "develop",
+      },
+      submitLabel: "Save changes",
+      cancelHref: "/projects/p",
+    });
+    expect((screen.getByTestId("pp-repo-url") as HTMLInputElement).value).toBe(
+      "https://github.com/me/app.git",
+    );
+    expect((screen.getByTestId("pp-repo-ref") as HTMLInputElement).value).toBe("develop");
+  });
+
   it("previews a suggested map before it replaces anything", async () => {
     suggest.mockResolvedValue([
       { title: "Serve the CSV", description: "GET /x.csv" },

@@ -64,6 +64,14 @@ pub struct PersonalProjectReq {
     /// replace. `false` takes [`private_allowed`].
     #[serde(default)]
     pub public: Option<bool>,
+    /// The repository the work happens in — cloned for whoever starts or
+    /// joins a session in a folder that does not hold it yet. Blank = none;
+    /// absent = none on create, unchanged on replace.
+    #[serde(default)]
+    pub repo_url: Option<String>,
+    /// Its branch, tag or commit; blank = the default branch.
+    #[serde(default)]
+    pub repo_ref: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -273,10 +281,15 @@ pub(crate) async fn summary(
         .await?;
     let range = compute_points_range(db, row.id).await?;
     let reviews = judge_review_count(db, row.id).await?;
+    let repo = arena_core::project_repo::repo_of(db, row.id).await?;
     let mut out =
         to_summary_with_sessions(row, active, task_count as i64, range, Some(played as i64));
     out.judge_review_count = Some(reviews);
     out.kind = KIND_PERSONAL;
+    if let Some(repo) = repo {
+        out.repo_url = Some(repo.url);
+        out.repo_ref = repo.git_ref;
+    }
     Ok(out)
 }
 
@@ -391,6 +404,12 @@ pub async fn post_create(
     if !public && !private_allowed(&state.db, &user).await? {
         return Err(PersonalProjectError::PremiumRequired);
     }
+    let repo =
+        arena_core::project_repo::requested(req.repo_url.as_deref(), req.repo_ref.as_deref())
+            .map_err(|detail| PersonalProjectError::Invalid {
+                field: "repo_url",
+                detail,
+            })?;
     let eligible = build::eligible_judges(&state.db).await?;
     if eligible.is_empty() {
         return Err(PersonalProjectError::NoJudgesAvailable);
@@ -406,6 +425,7 @@ pub async fn post_create(
         .transaction::<_, (), PersonalProjectError>(|txn| {
             let spec = spec.clone();
             let eligible = eligible.clone();
+            let repo = repo.clone();
             Box::pin(async move {
                 let now = Utc::now();
                 let points = project_points();
@@ -450,6 +470,7 @@ pub async fn post_create(
                 }
                 .insert(txn)
                 .await?;
+                arena_core::project_repo::set_repo(txn, project_id, repo.as_ref()).await?;
                 Ok(())
             })
         })
@@ -512,6 +533,18 @@ pub async fn put_one(
     if req.public == Some(false) && project.public && !private_allowed(&state.db, &user).await? {
         return Err(PersonalProjectError::PremiumRequired);
     }
+    let repo_change = {
+        let current = arena_core::project_repo::repo_of(&state.db, project_id).await?;
+        arena_core::project_repo::patched(
+            current.as_ref(),
+            req.repo_url.as_deref(),
+            req.repo_ref.as_deref(),
+        )
+        .map_err(|detail| PersonalProjectError::Invalid {
+            field: "repo_url",
+            detail,
+        })?
+    };
     let eligible = build::eligible_judges(&state.db).await?;
     if eligible.is_empty() {
         return Err(PersonalProjectError::NoJudgesAvailable);
@@ -525,6 +558,7 @@ pub async fn put_one(
         .transaction::<_, (), PersonalProjectError>(|txn| {
             let spec = spec.clone();
             let eligible = eligible.clone();
+            let repo_change = repo_change.clone();
             Box::pin(async move {
                 // Checked inside the transaction: a session created between
                 // the load and here must not find its tasks replaced.
@@ -563,6 +597,9 @@ pub async fn put_one(
                 am.spec = Set(spec_json);
                 am.updated_at = Set(now);
                 am.update(txn).await?;
+                if let Some(repo) = repo_change {
+                    arena_core::project_repo::set_repo(txn, project_id, repo.as_ref()).await?;
+                }
                 Ok(())
             })
         })

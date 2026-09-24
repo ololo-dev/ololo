@@ -11,6 +11,7 @@ pub mod llm;
 pub mod memory;
 pub mod personal;
 pub mod probe_engine;
+pub mod project_repo;
 pub mod protocol;
 pub mod quota;
 pub mod rlimit;

@@ -78,6 +78,8 @@ describe("routes/projects/new/+page.svelte", () => {
           judges: ["correctness"],
           session_duration_secs: 3600,
           public: true,
+          repo_url: "",
+          repo_ref: "",
         },
       },
     });

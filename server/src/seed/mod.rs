@@ -544,6 +544,10 @@ async fn seed_envelope(
     if let Err(e) = crate::validation::tags::validate_tags(&envelope.project.tags) {
         return SeedOutcome::Failed(format!("project tags: {e}"));
     }
+    let repo = match crate::api::admin_export_import::envelope_repo(envelope) {
+        Ok(repo) => repo,
+        Err(e) => return SeedOutcome::Failed(format!("project {e}")),
+    };
 
     // Resolve category: find-or-create so a seed definition can introduce a
     // new category. Blank or over-long names are dropped with a warning.
@@ -628,6 +632,7 @@ async fn seed_envelope(
             let proj_intervals = envelope.project.intervals.clone();
             let memory_schema_json = memory_schema_json.clone();
             let judge_id_by_slug = judge_id_by_slug.clone();
+            let repo = repo.clone();
             Box::pin(async move {
                 let project_id = Uuid::new_v4();
                 let now = chrono::Utc::now();
@@ -676,6 +681,7 @@ async fn seed_envelope(
                     )
                     .await?;
                 }
+                arena_core::project_repo::set_repo(txn, project_id, repo.as_ref()).await?;
 
                 Ok(project_id)
             })

@@ -354,10 +354,11 @@ pub async fn run_similarity_checks(
     let Ok(Some(session)) = sessions::Entity::find_by_id(session_id).one(db).await else {
         return;
     };
-    // A personal project has one player working in their own repository:
-    // there is no one to copy from, and its corpus would be the same
-    // codebase played before.
-    if arena_core::personal::is_personal_project(db, session.project_id_fk)
+    // Work on existing code has nothing to compare: every player of a
+    // project with a repository started from the same files, and a personal
+    // project's corpus would be its own codebase played before. Measured
+    // across players, both read as plagiarism that is not there.
+    if arena_core::project_repo::project_starts_from_existing_code(db, session.project_id_fk)
         .await
         .unwrap_or(false)
     {

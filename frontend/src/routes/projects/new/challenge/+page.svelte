@@ -4,6 +4,7 @@
   import MarkdownField from '$lib/components/MarkdownField.svelte';
   import TagInput from '$lib/components/TagInput.svelte';
   import CoverImageUpload from '$lib/components/CoverImageUpload.svelte';
+  import ProjectRepoFields from '$lib/components/projects/ProjectRepoFields.svelte';
   import ProjectSessionDurationField from '$lib/components/ProjectSessionDurationField.svelte';
   import { untrack } from 'svelte';
 
@@ -175,6 +176,8 @@
                 <CoverImageUpload value={coverImageUrl} onchange={(url) => (coverImageUrl = url)} />
                 <input type="hidden" name="cover_image_url" value={coverImageUrl ?? ''} />
               </div>
+
+              <ProjectRepoFields idPrefix="create" />
 
               {#if data.isAdmin}
                 <!-- Points defaults (admin only, collapsed by default) -->
@@ -378,6 +381,8 @@
                     Project name is required.
                   {:else if form.error === 'invalid_session_duration'}
                     Session duration must be between 60 and 86400 seconds.
+                  {:else if form.error === 'invalid_repo'}
+                    Repository: {form.detail ?? 'not a URL ololo can clone.'}
                   {:else}
                     An error occurred. Please try again.
                   {/if}

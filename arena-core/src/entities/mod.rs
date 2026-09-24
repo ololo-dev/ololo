@@ -20,6 +20,7 @@ pub mod personal_projects;
 pub mod player_memory;
 pub mod players;
 pub mod probes;
+pub mod project_repos;
 pub mod projects;
 pub mod refresh_tokens;
 pub mod session_scheduler_state;

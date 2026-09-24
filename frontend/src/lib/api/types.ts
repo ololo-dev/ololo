@@ -159,6 +159,11 @@ export interface Project {
   owner_user_id: string;
   /** The owner's username, on a personal project's own page. */
   owner_username?: string | null;
+  /** The git repository its sessions start from — ololo clones it before a
+   *  session starts in a folder that does not hold it — and the branch,
+   *  tag or commit to check out. Absent from older servers. */
+  repo_url?: string | null;
+  repo_ref?: string | null;
   public: boolean;
   archived_at: string | null;
   created_at: string;
@@ -221,6 +226,11 @@ export interface PersonalProjectRequest {
   session_duration_secs?: number;
   /** `false` keeps it private — Premium, where plans are on. */
   public?: boolean;
+  /** The repository the work happens in; empty = none. Absent leaves an
+   *  existing project's as it is. */
+  repo_url?: string;
+  /** Its branch, tag or commit; empty = the default branch. */
+  repo_ref?: string;
 }
 
 /** A personal project as its owner asked for it. */
@@ -329,6 +339,9 @@ export interface CreateProjectRequest {
   session_duration_secs?: number;
   idle_timeout_secs?: number;
   memory_schema?: Record<string, string | number | boolean>;
+  /** Blank or absent = no repository. */
+  repo_url?: string;
+  repo_ref?: string;
 }
 
 export interface PatchProjectRequest {
@@ -347,6 +360,11 @@ export interface PatchProjectRequest {
   idle_timeout_secs?: number;
   /** Session-memory schema. Explicit `null` clears it; absent leaves it as is. */
   memory_schema?: Record<string, string | number | boolean> | null;
+  /** Empty string = no repository (its ref goes with it). A URL sets the
+   *  repository whole: its ref is `repo_ref`, absent = default branch. */
+  repo_url?: string;
+  /** Alone, moves the current repository's checkout; empty = default branch. */
+  repo_ref?: string;
 }
 
 export interface TaskInput {

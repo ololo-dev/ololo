@@ -92,6 +92,7 @@ async fn import_inherits_project_default_for_omitted_task_points() {
             memory_schema: None,
             show_tasks: true,
             parts: Vec::new(),
+            repo: None,
         },
         tasks: vec![ExportTask {
             ordinal: 0,
@@ -175,6 +176,7 @@ async fn import_task_override_beats_project_default() {
             memory_schema: None,
             show_tasks: true,
             parts: Vec::new(),
+            repo: None,
         },
         tasks: vec![ExportTask {
             ordinal: 0,
@@ -258,6 +260,7 @@ async fn import_rolls_back_on_bad_ordinal() {
             memory_schema: None,
             show_tasks: true,
             parts: Vec::new(),
+            repo: None,
         },
         tasks: vec![ExportTask {
             ordinal: -1,
@@ -340,6 +343,7 @@ async fn import_rejects_unsupported_schema_version() {
             memory_schema: None,
             show_tasks: true,
             parts: Vec::new(),
+            repo: None,
         },
         tasks: vec![],
     };

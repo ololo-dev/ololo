@@ -48,6 +48,7 @@ mod player_snapshot_score_fallback;
 mod player_snapshot_visibility;
 mod project_ai_test;
 mod project_judges_top_players;
+mod project_repos;
 mod project_seed_defs;
 mod project_session_duration;
 mod project_session_duration_api;

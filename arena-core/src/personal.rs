@@ -164,18 +164,6 @@ pub async fn personal_project_ids<C: ConnectionTrait>(
     Ok(ids.into_iter().collect())
 }
 
-/// Whether the session runs a personal project. A missing session is not
-/// personal — callers treat it as whatever they did before this existed.
-pub async fn is_personal_session<C: ConnectionTrait>(
-    db: &C,
-    session_id: Uuid,
-) -> Result<bool, DbErr> {
-    let Some(session) = sessions::Entity::find_by_id(session_id).one(db).await? else {
-        return Ok(false);
-    };
-    is_personal_project(db, session.project_id_fk).await
-}
-
 /// The ids of personal projects, as a subquery — for readers that must
 /// leave them out (`Column::ProjectIdFk.not_in_subquery(..)`).
 pub fn personal_project_ids_query() -> sea_orm::sea_query::SelectStatement {

@@ -26,7 +26,12 @@
       </p>
       <PersonalProjectForm
         options={data.options}
-        initial={form?.values ?? { ...data.detail.spec, public: project.public }}
+        initial={form?.values ?? {
+          ...data.detail.spec,
+          public: project.public,
+          repo_url: project.repo_url ?? "",
+          repo_ref: project.repo_ref ?? "",
+        }}
         submitLabel="Save changes"
         cancelHref="/projects/{project.id}"
         error={form?.error ? { error: form.error, field: form.field, detail: form.detail } : null}

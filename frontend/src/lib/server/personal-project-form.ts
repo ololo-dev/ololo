@@ -13,6 +13,9 @@ export interface PersonalFormValues {
   judges: string[];
   session_duration_secs: number;
   public: boolean;
+  /** Empty = no repository. */
+  repo_url: string;
+  repo_ref: string;
 }
 
 function slugs(raw: unknown): string[] {
@@ -53,18 +56,32 @@ export function parsePersonalForm(data: FormData): {
   const session_duration_secs = Number.isFinite(duration) && duration > 0 ? duration : 0;
   // Public unless the form says, in so many words, private.
   const isPublic = String(data.get("public") ?? "true") !== "false";
+  // Always sent, so a cleared field drops the repository on an edit.
+  const repo_url = String(data.get("repo_url") ?? "").trim();
+  const repo_ref = repo_url ? String(data.get("repo_ref") ?? "").trim() : "";
 
   const request: PersonalProjectRequest = {
     description,
     tasks: tasks.map(({ description, ...t }) => (description ? { ...t, description } : t)),
     judges,
     public: isPublic,
+    repo_url,
+    repo_ref,
   };
   if (name) request.name = name;
   if (session_duration_secs) request.session_duration_secs = session_duration_secs;
   return {
     request,
-    values: { name, description, tasks, judges, session_duration_secs, public: isPublic },
+    values: {
+      name,
+      description,
+      tasks,
+      judges,
+      session_duration_secs,
+      public: isPublic,
+      repo_url,
+      repo_ref,
+    },
   };
 }
 

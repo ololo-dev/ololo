@@ -38,6 +38,8 @@ export const actions: Actions = {
       tags = [];
     }
     const cover_image_url = String(data.get("cover_image_url") ?? "").trim() || undefined;
+    const repo_url = String(data.get("repo_url") ?? "").trim() || undefined;
+    const repo_ref = repo_url ? String(data.get("repo_ref") ?? "").trim() || undefined : undefined;
 
     // Points defaults (admin only). Empty inputs serialize as null.
     const pv = String(data.get("points_value") ?? "").trim();
@@ -75,6 +77,7 @@ export const actions: Actions = {
     if (name.length < 1 || name.length > 200) {
       return fail(422, {
         error: "invalid_name",
+        detail: null,
         name,
         description,
         public: String(isPublic),
@@ -93,14 +96,18 @@ export const actions: Actions = {
           points,
           intervals,
           session_duration_secs,
+          repo_url,
+          repo_ref,
         },
         { fetch },
       );
       throw redirect(303, `/projects/${project.id}`);
     } catch (err) {
       if (err instanceof ApiError) {
+        const body = (err.body ?? {}) as { detail?: unknown };
         return fail(err.status, {
           error: err.code ?? "error",
+          detail: typeof body.detail === "string" ? body.detail : null,
           name,
           description,
           public: String(isPublic),

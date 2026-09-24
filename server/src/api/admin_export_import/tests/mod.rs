@@ -150,6 +150,7 @@ fn empty_project() -> ExportProject {
         memory_schema: None,
         show_tasks: true,
         parts: Vec::new(),
+        repo: None,
     }
 }
 

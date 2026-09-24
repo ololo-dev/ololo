@@ -13,11 +13,11 @@ pub(crate) use common::{
     KIND_PERSONAL, compute_points_range, load_allowed_categories, project_has_active_sessions,
     to_summary_with_sessions, validate_slug,
 };
-pub(crate) use read::judge_review_count;
 pub use read::{
     get_by_slug, get_by_user_slug, get_categories, get_judges, get_list, get_one, get_parts,
     get_top_players,
 };
+pub(crate) use read::{judge_review_count, page_summary};
 pub use write::{delete_one, patch_one, post_create};
 
 pub(crate) mod common;

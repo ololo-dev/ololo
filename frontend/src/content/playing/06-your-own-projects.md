@@ -18,6 +18,10 @@ would brief a colleague. The judges read exactly these words, so say what
 "done" means: the behaviour you expect, the cases that matter, what must not
 break.
 
+If the work lives in a git repository others can reach, name it under
+**Repository** (and a branch, tag or commit if not the default). Then whoever
+starts or joins a session in a folder without it gets it cloned there first.
+
 Then, optionally, draw the **navigation map**: the tasks the work splits
 into, in order. Each task is judged on its own, and the code's health is
 measured when it ends. Leave the map empty and the whole description is one
@@ -69,7 +73,8 @@ from with a square.
 
 Not alone? Give the session's join code to a teammate: `ololo join <code>` in
 their own copy of the repository makes them a player, judged on their own work
-beside yours. Only you start sessions of your project.
+beside yours — and if the project names its repository, an empty folder is
+enough: ololo clones it for them. Only you start sessions of your project.
 
 ### Who sees it
 

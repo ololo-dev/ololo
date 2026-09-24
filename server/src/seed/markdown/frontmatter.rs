@@ -55,6 +55,13 @@ pub(crate) struct ReadmeProject {
     /// readme as a campaign parent (no `tasks/` directory of its own).
     #[serde(default)]
     pub(crate) parts: Vec<String>,
+    /// The git repository sessions start from — cloned into the player's
+    /// folder before a session starts there. Absent → none.
+    #[serde(default)]
+    pub(crate) repo: Option<String>,
+    /// Its branch, tag or commit. Absent → the default branch.
+    #[serde(default)]
+    pub(crate) repo_ref: Option<String>,
 }
 
 fn default_show_tasks() -> bool {

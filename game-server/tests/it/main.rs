@@ -14,6 +14,7 @@ mod judge_registrar_tests;
 mod judge_vision_images;
 mod open_ended_lifecycle_tests;
 mod player_agent_single_flight;
+mod player_agent_socket_done_tests;
 mod player_agent_tests;
 mod player_agent_ws_auth_tests;
 mod presence_tests;

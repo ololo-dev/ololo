@@ -795,16 +795,29 @@ async fn probes_passed(state: &GameServerState, test_id: Uuid, player_id: Uuid) 
         .is_some()
 }
 
+/// What the player's socket does next.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CurrentTask {
+    /// Dispatch this task's probes.
+    Task(Uuid),
+    /// The player has finished every task and was told so; the session goes
+    /// on for the others. Keep the socket and wait for the session's end, as
+    /// after the last task — a reconnecting finished player is not sent away
+    /// only to dial straight back.
+    PlayerDone,
+    /// Nothing more for this socket: close it.
+    Stop,
+}
+
 /// Resolve the currently scheduled task id for the session, bootstrapping the
-/// scheduler state (and starting the session) on first dispatch. Returns `None`
-/// when there are no tasks — the caller should then finish the session and break.
+/// scheduler state (and starting the session) on first dispatch.
 pub async fn resolve_current_task_id(
     state: &GameServerState,
     session_id: Uuid,
     player_id: Uuid,
     join_code: &str,
     socket: &mut WebSocket,
-) -> Option<Uuid> {
+) -> CurrentTask {
     let row = match session_scheduler_state::Entity::find()
         .filter(session_scheduler_state::Column::SessionIdFk.eq(session_id))
         .filter(session_scheduler_state::Column::PlayerIdFk.eq(player_id))
@@ -814,12 +827,12 @@ pub async fn resolve_current_task_id(
         Ok(r) => r,
         Err(e) => {
             tracing::error!(session_id = %session_id, player_id = %player_id, error = %e, "player_agent: DB error loading scheduler state");
-            return None;
+            return CurrentTask::Stop;
         }
     };
     // A completed player reconnecting must NOT be re-bootstrapped onto the
-    // first task — acknowledge their per-player completion and let the
-    // caller close the socket.
+    // first task — acknowledge their per-player completion; the caller keeps
+    // the socket until the session ends.
     if row
         .as_ref()
         .is_some_and(|r| r.state == arena_core::session_completion::SCHEDULER_STATE_COMPLETED)
@@ -833,23 +846,24 @@ pub async fn resolve_current_task_id(
         };
         let json = serde_json::to_string(&frame).unwrap_or_default();
         let _ = socket.send(axum::extract::ws::Message::Text(json)).await;
-        return None;
+        return CurrentTask::PlayerDone;
     }
-    let existing = row.and_then(|r| r.task_id);
-    if existing.is_none() {
-        match bootstrap_scheduler_state(state, session_id, player_id, join_code).await {
+    match row.and_then(|r| r.task_id) {
+        Some(id) => CurrentTask::Task(id),
+        None => match bootstrap_scheduler_state(state, session_id, player_id, join_code).await {
             Some(id) => {
                 ensure_session_running(state, session_id).await;
-                Some(id)
+                CurrentTask::Task(id)
             }
             None => {
                 tracing::info!(session_id = %session_id, "player_agent: no tasks for session, finishing");
-                finish_no_tasks(state, session_id, player_id, join_code, socket).await;
-                None
+                if finish_no_tasks(state, session_id, player_id, join_code, socket).await {
+                    CurrentTask::Stop
+                } else {
+                    CurrentTask::PlayerDone
+                }
             }
-        }
-    } else {
-        existing
+        },
     }
 }
 
@@ -1129,13 +1143,15 @@ pub async fn update_next_probe_at(
     }
 }
 
+/// Returns whether the session finished (every player done); otherwise the
+/// player alone is done and was told so.
 pub async fn finish_no_tasks(
     state: &GameServerState,
     session_id: Uuid,
     player_id: Uuid,
     join_code: &str,
     socket: &mut axum::extract::ws::WebSocket,
-) {
+) -> bool {
     // With zero tasks every eligible player is trivially done, so the
     // all-done check finishes the session immediately on first connect
     // (preserving the historical behavior). The guard only bites in
@@ -1154,6 +1170,7 @@ pub async fn finish_no_tasks(
     };
     let json = serde_json::to_string(&frame).unwrap_or_default();
     let _ = socket.send(axum::extract::ws::Message::Text(json)).await;
+    finished
 }
 
 /// Persist a `task_started` activity_event row and publish `ZmqEvent::TaskStarted`

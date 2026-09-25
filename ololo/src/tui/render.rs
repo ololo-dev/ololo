@@ -13,7 +13,7 @@ pub(crate) mod header;
 mod help;
 mod main;
 mod markdown;
-mod paste_picker;
+pub(crate) mod paste_picker;
 mod permission;
 mod probes;
 mod terminal_guard;

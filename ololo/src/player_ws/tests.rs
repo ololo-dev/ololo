@@ -234,3 +234,124 @@ fn decode_judge_lifecycle_frames() {
         other => panic!("expected JudgeScored, got {other:?}"),
     }
 }
+
+// ── liveness ─────────────────────────────────────────────────────────
+
+/// Short clocks for the tests: ping every 50 ms, dead after 400 ms of silence.
+const QUICK: super::Liveness = super::Liveness {
+    ping_every: std::time::Duration::from_millis(50),
+    silence_limit: std::time::Duration::from_millis(400),
+};
+
+/// A one-connection WebSocket server running `serve` on the accepted socket.
+async fn one_shot_server<F, Fut>(serve: F) -> String
+where
+    F: FnOnce(tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>) -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = ()> + Send + 'static,
+{
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+        serve(ws).await;
+    });
+    format!("ws://127.0.0.1:{port}/ws/player/agent/TEST")
+}
+
+const FINAL: &str =
+    r#"{"type":"session_complete","session_id":"s","reason":"all_tasks_completed"}"#;
+
+/// The incident on plum (2026-09-24): the socket stayed open, the server's
+/// frames stopped arriving, and the agent waited 16 minutes for probes that
+/// were being scored as no response. Silence now ends the connection so the
+/// caller dials again.
+#[tokio::test]
+async fn a_connection_gone_silent_is_dropped_so_the_agent_redials() {
+    let url = one_shot_server(|ws| async move {
+        // Accept, then neither send nor read: a half-open path.
+        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+        drop(ws);
+    })
+    .await;
+    let started = std::time::Instant::now();
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        super::connect_once(&url, "ololo_test_pat", None, None, None, QUICK),
+    )
+    .await
+    .expect("the agent must give up on a silent connection");
+    assert!(
+        matches!(outcome, Ok(false)),
+        "reconnect, not finish: {outcome:?}"
+    );
+    let waited = started.elapsed();
+    assert!(
+        waited >= QUICK.silence_limit,
+        "not before the limit: {waited:?}"
+    );
+}
+
+/// A quiet server that answers pings is alive: nothing is dropped before
+/// the session's own end arrives.
+#[tokio::test]
+async fn a_quiet_server_that_answers_pings_keeps_the_connection() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+    let url = one_shot_server(|mut ws| async move {
+        let until = tokio::time::Instant::now() + std::time::Duration::from_millis(1_200);
+        loop {
+            tokio::select! {
+                _ = tokio::time::sleep_until(until) => break,
+                m = ws.next() => match m {
+                    Some(Ok(Message::Ping(data))) => {
+                        let _ = ws.send(Message::Pong(data)).await;
+                    }
+                    Some(Ok(_)) => {}
+                    _ => return,
+                },
+            }
+        }
+        let _ = ws.send(Message::Text(FINAL.into())).await;
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    })
+    .await;
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        super::connect_once(&url, "ololo_test_pat", None, None, None, QUICK),
+    )
+    .await
+    .expect("the session end arrives");
+    assert!(
+        matches!(outcome, Ok(true)),
+        "three silence limits of pongs keep it: {outcome:?}"
+    );
+}
+
+/// The countdown alone proves the server alive, whether or not it reads.
+#[tokio::test]
+async fn a_server_that_keeps_counting_down_keeps_the_connection() {
+    use futures_util::SinkExt;
+    use tokio_tungstenite::tungstenite::Message;
+    let url = one_shot_server(|mut ws| async move {
+        for left in (0..12).rev() {
+            let tick = format!(
+                r#"{{"type":"running_countdown","session_id":"s","seconds_remaining":{left},"version":1}}"#
+            );
+            if ws.send(Message::Text(tick)).await.is_err() {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        let _ = ws.send(Message::Text(FINAL.into())).await;
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    })
+    .await;
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        super::connect_once(&url, "ololo_test_pat", None, None, None, QUICK),
+    )
+    .await
+    .expect("the session end arrives");
+    assert!(matches!(outcome, Ok(true)), "{outcome:?}");
+}

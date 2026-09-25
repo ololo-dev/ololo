@@ -1286,3 +1286,47 @@ async fn the_bonus_is_paid_on_the_tree_with_its_tests() {
         paid.answer
     );
 }
+
+/// A repository with no README or AGENTS.md still names its test script:
+/// the manifest is read (its scripts, not its versions).
+#[tokio::test]
+async fn a_repository_without_docs_is_read_through_its_manifest() {
+    let rig = setup().await;
+    enable_tests(&rig).await;
+    let mut inbox = agent_inbox(&rig);
+    rig.write(
+        "package.json",
+        r#"{"name":"money","version":"0.1.0","scripts":{"test":"node --test test/","start":"node scripts/serve.js"},"devDependencies":{"jsdom":"^25.0.0"}}"#,
+    );
+    rig.write("test/a.test.js", "import test from 'node:test';\n");
+    rig.commit(&Kind::Session, None, "session start @ x", None);
+    game_server::health_tests::refresh_with(
+        &rig.state,
+        rig.session_id,
+        rig.player_id,
+        |_system: String, user: String| async move {
+            assert!(user.contains("=== package.json ==="), "{user}");
+            assert!(
+                user.contains("node --test test/"),
+                "the scripts travel: {user}"
+            );
+            assert!(!user.contains("^25.0.0"), "versions do not: {user}");
+            Ok::<_, String>(r#"{"test": "npm test", "coverage": null}"#.to_string())
+        },
+    )
+    .await;
+    let row = arena_core::entities::player_test_commands::Entity::find()
+        .one(&rig.state.db)
+        .await
+        .unwrap()
+        .expect("stored");
+    assert_eq!(row.test_command.as_deref(), Some("npm test"));
+    assert_eq!(row.source_list(), vec!["package.json".to_string()]);
+    match inbox.try_recv() {
+        Ok(arena_core::protocol::PlayerAgentFrame::HealthTests(cfg)) => {
+            assert_eq!(cfg.command(), Some(("npm test", false)));
+            assert_eq!(cfg.sources, vec!["package.json".to_string()]);
+        }
+        other => panic!("expected the commands, got {other:?}"),
+    }
+}

@@ -32,6 +32,33 @@ use wire::ResolveError;
 /// Maximum stdout bytes captured and reported back (matches server constant).
 const STDOUT_TAIL_MAX_BYTES: usize = 64 * 1024;
 
+/// How the agent tells a live connection from a dead one. The game server
+/// sends a countdown every second — in the lobby, between probes, paused,
+/// and while a finished player waits for the session to end — and answers
+/// pings, so a connection it has gone silent on is dead however open the
+/// socket looks: a proxy lost it, and nothing will ever arrive on it. The
+/// agent pings every `ping_every` (a quiet but live server answers with a
+/// pong, which is a frame) and after `silence_limit` without any frame
+/// drops the connection and dials again.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Liveness {
+    pub ping_every: Duration,
+    pub silence_limit: Duration,
+}
+
+impl Default for Liveness {
+    fn default() -> Self {
+        Self {
+            ping_every: Duration::from_secs(15),
+            silence_limit: Duration::from_secs(60),
+        }
+    }
+}
+
+/// How long a ping may take to leave: a write stuck longer means the
+/// connection is gone.
+const PING_WRITE_LIMIT: Duration = Duration::from_secs(5);
+
 /// Reconnect backoff parameters: start 1 s, ×2, cap 30 s.
 const BACKOFF_INITIAL_MS: u64 = 1_000;
 const BACKOFF_MULTIPLIER: f64 = 2.0;
@@ -214,6 +241,7 @@ async fn connect_once(
     sink: SinkArg,
     viewer_player_id: Option<Uuid>,
     memory: Option<&mut SnapshotChannel>,
+    liveness: Liveness,
 ) -> Result<bool> {
     let mut request = ws_url
         .into_client_request()
@@ -246,9 +274,51 @@ async fn connect_once(
     let mut judge_checks: std::collections::HashMap<Uuid, String> =
         std::collections::HashMap::new();
 
+    // When the server was last heard from. Handling a frame can take long —
+    // a probe runs for up to its deadline, a permission prompt waits for the
+    // player — and none of that is the server's silence: the clock restarts
+    // once the frame is handled.
+    let mut heard_at = std::time::Instant::now();
+    let mut handled = false;
+    let mut ping = tokio::time::interval_at(
+        tokio::time::Instant::now() + liveness.ping_every,
+        liveness.ping_every,
+    );
+    ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
     loop {
+        if handled {
+            heard_at = std::time::Instant::now();
+            handled = false;
+        }
         let msg = tokio::select! {
-            m = read.next() => m,
+            m = read.next() => {
+                handled = true;
+                m
+            }
+            _ = ping.tick() => {
+                let silent = heard_at.elapsed();
+                if silent >= liveness.silence_limit {
+                    let msg = format!(
+                        "No word from the game server for {}s — the connection is dead. Reconnecting…",
+                        silent.as_secs()
+                    );
+                    crate::ui::warn(&msg);
+                    emit(sink.clone(), TuiEvent::Log { level: LogLevel::Warn, msg });
+                    return Ok(false);
+                }
+                match tokio::time::timeout(PING_WRITE_LIMIT, write.send(Message::Ping(Vec::new())))
+                    .await
+                {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => return Err(e.into()),
+                    Err(_) => {
+                        crate::ui::warn("The game server connection stopped taking writes. Reconnecting…");
+                        return Ok(false);
+                    }
+                }
+                continue;
+            }
             // The sync task finished a push and wants the server told. It
             // cannot reach the socket itself, so it hands the frame here.
             Some(frame) = async {

@@ -158,7 +158,7 @@ fn a_failing_judge_registered_check_asks_for_a_fix() {
 
 #[test]
 fn a_click_selects_a_bubble_and_a_second_click_sends_it() {
-    use crate::tui::render::chat::{bubble_at, chat_area, compose_bar_row};
+    use crate::tui::render::chat::{bubble_at, chat_area};
     let mut app = fresh_app(120, 40);
     app.has_pty = true;
     app.sidebar_view = SidebarView::Chat;
@@ -169,23 +169,18 @@ fn a_click_selects_a_bubble_and_a_second_click_sends_it() {
 
     let area = chat_area(&app, 120, 40).expect("chat pane is on screen");
     let col = area.x + area.width / 2;
-    // Sweep the pane's rows: the transcript is bottom-anchored, so bubbles
-    // sit above the compose bar; every hit maps to a message index.
+    // Sweep the pane's rows: the transcript is bottom-anchored, down to the
+    // pane's last row; every hit maps to a message index.
     let hits: Vec<(u16, usize)> = (0..40u16)
         .filter_map(|row| bubble_at(&app, 120, 40, col, row).map(|i| (row, i)))
         .collect();
     assert!(!hits.is_empty(), "some row must hit a bubble");
     let last_idx = app.chat_transcript().len() - 1;
-    let (row, idx) = *hits
+    let (_, idx) = *hits
         .iter()
         .rev()
         .find(|(_, i)| *i == last_idx)
         .expect("the newest bubble is clickable");
-    assert_ne!(
-        compose_bar_row(&app, 120, 40),
-        Some(row),
-        "a bubble row is not the compose bar"
-    );
 
     app.chat_click_bubble(idx);
     assert_eq!(
@@ -210,25 +205,6 @@ fn a_click_selects_a_bubble_and_a_second_click_sends_it() {
         app.input_focus,
         crate::tui::app::InputFocus::Pty,
         "sending hands focus to the agent"
-    );
-}
-
-#[test]
-fn clicking_the_compose_bar_still_opens_the_compose_line() {
-    use crate::tui::render::chat::compose_bar_row;
-    let mut app = fresh_app(120, 40);
-    app.has_pty = true;
-    app.sidebar_view = SidebarView::Chat;
-    app.on_event(crate::tui::event::TuiEvent::ProbeResult(task_probe(
-        0, "Wx", "brief",
-    )));
-    let row = compose_bar_row(&app, 120, 40).expect("compose bar exists with a pty");
-    // The run loop routes a click on this row to the compose line, and the
-    // hit-test must not claim it as a bubble.
-    assert_eq!(
-        crate::tui::render::chat::bubble_at(&app, 120, 40, 100, row),
-        None,
-        "the compose bar row is not a bubble"
     );
 }
 
@@ -284,7 +260,7 @@ fn artifact_request_block_sits_on_its_own_background() {
 }
 
 #[test]
-fn chat_pane_shows_the_message_button_and_the_input_line() {
+fn chat_pane_has_no_message_line() {
     let mut app = fresh_app(120, 40);
     app.has_pty = true;
     app.on_event(crate::tui::event::TuiEvent::ProbeResult(task_probe(
@@ -292,26 +268,10 @@ fn chat_pane_shows_the_message_button_and_the_input_line() {
     )));
     let flat = header_flat(&app, 120, 40);
     assert!(
-        flat.contains("message the agent"),
-        "the compose button is visible: {flat}"
+        !flat.contains("message the agent") && !flat.contains("✉") && !flat.contains("m message"),
+        "no message button, no input line, no key hint: {flat}"
     );
-
-    app.open_chat_compose();
-    for c in "hello agent".chars() {
-        app.on_key(
-            crossterm::event::KeyCode::Char(c),
-            crossterm::event::KeyModifiers::NONE,
-        );
-    }
-    let flat = header_flat(&app, 120, 40);
-    assert!(
-        flat.contains("hello agent"),
-        "typed text is visible in the input line: {flat}"
-    );
-    assert!(
-        !flat.contains("message the agent"),
-        "the button yields to the input line: {flat}"
-    );
+    assert!(!flat.contains("❯"), "no input prompt: {flat}");
 }
 
 #[test]
@@ -516,8 +476,8 @@ fn chat_pane_keeps_a_status_row_above_the_compose_bar() {
         "status row counts down: {flat}"
     );
     assert!(
-        flat.contains("message the agent"),
-        "compose bar survives under the status row"
+        !flat.contains("message the agent"),
+        "no message line under the status row"
     );
     // Without anything to say, the row yields its line to the transcript.
     app.judge_runs.clear();

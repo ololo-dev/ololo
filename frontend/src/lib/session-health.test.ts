@@ -169,6 +169,18 @@ describe("the project's tests in a checkpoint", () => {
     expect(testsLines(null)).toEqual([]);
   });
 
+  it("says why a checkpoint has no tests: no command, or not run yet", () => {
+    const at = "2026-09-25T08:27:35Z";
+    expect(testsLines(null, { sources: [], updated_at: at })).toEqual([
+      { label: "tests", value: "no test command in the docs or manifests", tone: "amber" },
+    ]);
+    expect(
+      testsLines(undefined, { test: "npm test", sources: ["package.json"], updated_at: at }),
+    ).toEqual([{ label: "tests", value: "not run yet · npm test" }]);
+    // A session that does not score tests says nothing.
+    expect(testsLines(null, null)).toEqual([]);
+  });
+
   it("puts a run's verdict in words", () => {
     expect(testsVerdict({ counts: { passed: 3, failed: 0 } })).toBe("3 passed");
     expect(testsVerdict({ counts: { passed: 0, failed: 0 } })).toBe("no tests ran");

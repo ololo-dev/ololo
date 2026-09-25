@@ -34,7 +34,6 @@ fn rows(has_pty: bool) -> Vec<(&'static str, &'static str)> {
         ("click", "select a bubble · same bubble again: send"),
         ("PgUp/PgDn", "scroll"),
         ("wheel", "scroll the chat"),
-        ("m", "message the agent (clicking the ✉ bar works too)"),
         ("Esc", "clear selection, jump to the latest"),
         ("", "Probe details"),
     ]);

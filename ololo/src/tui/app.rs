@@ -156,6 +156,39 @@ pub struct PasteItem {
     /// Artifact requests: when they close.
     pub deadline: Option<std::time::Instant>,
     pub source: PasteSource,
+    /// What the item hands over, as [`TuiApp::pasted`] remembers it.
+    pub key: String,
+    /// The agent already has it: pasted before, from F3, a chat bubble or
+    /// a probe's details.
+    pub pasted: bool,
+}
+
+/// What a paste hands over, whichever way it went — F3, a chat bubble, a
+/// probe's details — so the same thing is recognised as already pasted:
+/// a task by its brief, an artifact request by its judge and ask, a check
+/// by its probe.
+fn brief_key(brief: &str) -> String {
+    format!("brief\n{}", brief.trim())
+}
+
+fn request_paste_key(judge: &str, instruction: &str) -> String {
+    format!("request\n{judge}\n{}", instruction.trim())
+}
+
+fn check_key(probe_id: Uuid) -> String {
+    format!("check\n{probe_id}")
+}
+
+/// A chat bubble's paste key, when it is one of the things F3 offers.
+fn chat_msg_key(m: &ChatMsg<'_>) -> Option<String> {
+    match m {
+        ChatMsg::Brief { text } => Some(brief_key(text)),
+        ChatMsg::Check { probe, .. } => Some(check_key(probe.probe_id)),
+        ChatMsg::Request {
+            judge, instruction, ..
+        } => Some(request_paste_key(judge, instruction)),
+        _ => None,
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -262,9 +295,6 @@ pub struct TuiApp {
     pub next_probe_due: Option<std::time::Instant>,
     /// The player's done-notes in arrival order, for the chat view.
     pub done_notes: Vec<DoneNote>,
-    /// The chat compose line: `Some(text)` while the player is typing a
-    /// message to the agent; `None` otherwise.
-    pub chat_input: Option<String>,
     pub probes: VecDeque<ProbeResultInfo>,
     pub dropped_count: Arc<AtomicU64>,
     pub should_quit: Option<QuitReason>,
@@ -336,6 +366,9 @@ pub struct TuiApp {
     request_probes_seen: Vec<Uuid>,
     /// F3 with more than one thing to hand the agent: pick which.
     pub paste_picker: Option<PastePicker>,
+    /// What was handed to the agent this session, by [`PasteItem::key`]:
+    /// F3 marks it, and pastes it at once only when it is new.
+    pub pasted: std::collections::HashSet<String>,
     /// Text queued for pasting into the agent PTY ("p" in the probe
     /// popup). The render loop owns the PTY writer and drains this.
     pub pty_paste_pending: Option<String>,
@@ -374,7 +407,6 @@ impl TuiApp {
             judge_runs: Vec::new(),
             next_probe_due: None,
             done_notes: Vec::new(),
-            chat_input: None,
             probes: VecDeque::new(),
             dropped_count,
             should_quit: None,
@@ -407,6 +439,7 @@ impl TuiApp {
             request_deadlines: HashMap::new(),
             request_probes_seen: Vec::new(),
             paste_picker: None,
+            pasted: std::collections::HashSet::new(),
             pty_paste_pending: None,
             permission_popup: None,
             permission_cursor: 0,
@@ -1073,40 +1106,6 @@ impl TuiApp {
             }
             return;
         }
-        // Chat compose line: while open it swallows every key — the text
-        // is a message being typed, not commands.
-        if self.chat_input.is_some() {
-            match code {
-                KeyCode::Enter => {
-                    let text = self
-                        .chat_input
-                        .take()
-                        .unwrap_or_default()
-                        .trim()
-                        .to_string();
-                    if !text.is_empty() {
-                        self.send_chat_message(text);
-                    }
-                    self.restore_stashed_focus();
-                }
-                KeyCode::Esc => {
-                    self.chat_input = None;
-                    self.restore_stashed_focus();
-                }
-                KeyCode::Backspace => {
-                    if let Some(input) = self.chat_input.as_mut() {
-                        input.pop();
-                    }
-                }
-                KeyCode::Char(c) if !modifiers.contains(KeyModifiers::CONTROL) => {
-                    if let Some(input) = self.chat_input.as_mut() {
-                        input.push(c);
-                    }
-                }
-                _ => {}
-            }
-            return;
-        }
         // F10 quits when focus is Tui, forwards when focus is Pty.
         if code == KeyCode::F(10) {
             if self.input_focus == InputFocus::Tui {
@@ -1192,7 +1191,16 @@ impl TuiApp {
                 // PTY (drained by the render loop) and hands focus over so
                 // the user can follow up with the agent directly.
                 KeyCode::Char('p') if self.has_pty => {
-                    if let Some(text) = self.probe_by_id(pid).map(probe_paste_text) {
+                    if let Some(p) = self.probe_by_id(pid) {
+                        let text = probe_paste_text(p);
+                        let key = match parse_artifact_request(&p.command) {
+                            Some(req) => request_paste_key(
+                                req.judge,
+                                &request_instruction(&p.test_description, req.instruction),
+                            ),
+                            None => check_key(pid),
+                        };
+                        self.pasted.insert(key);
                         self.pty_paste_pending = Some(text);
                         self.focus_return = None; // explicit hand-over wins
                         self.set_input_focus(InputFocus::Pty);
@@ -1204,7 +1212,7 @@ impl TuiApp {
         }
         // Chat view (Tui focus): ↑/↓ select a bubble (the view follows the
         // selection), ⏎/p sends the selected bubble to the hosted agent,
-        // m opens the compose line, PgUp/PgDn scroll freely.
+        // PgUp/PgDn scroll freely.
         if self.sidebar_view == SidebarView::Chat {
             match code {
                 KeyCode::Up | KeyCode::Char('k') => self.chat_select_by(1),
@@ -1224,7 +1232,6 @@ impl TuiApp {
                 KeyCode::Enter | KeyCode::Char('p') if self.chat_cursor.is_some() => {
                     self.send_selected_bubble();
                 }
-                KeyCode::Char('m') | KeyCode::Enter => self.open_chat_compose(),
                 KeyCode::Char('?') => self.show_help = true,
                 _ => {}
             }
@@ -1257,29 +1264,6 @@ impl TuiApp {
         // agent's grid changes size on every flip — not only when the
         // sidebar was hidden.
         self.pty_resize_pending = true;
-    }
-
-    /// Open the chat compose line (the "✉ message" button / `m`). Only
-    /// meaningful with a hosted agent — the message's destination.
-    pub fn open_chat_compose(&mut self) {
-        if !self.has_pty || self.chat_input.is_some() {
-            return;
-        }
-        self.stash_focus_for_modal();
-        self.chat_input = Some(String::new());
-        self.chat_scroll = 0;
-    }
-
-    /// Deliver a composed chat message the way F3 delivers a probe: queue
-    /// it as a paste into the agent PTY and hand focus over. No auto-Enter
-    /// and no chat bubble — the player sees the text land in the agent's
-    /// own input, can edit it there, and submits it themselves; the agent
-    /// transcript is the record.
-    fn send_chat_message(&mut self, text: String) {
-        self.pty_paste_pending = Some(text);
-        self.focus_return = None; // explicit hand-over wins
-        self.set_input_focus(InputFocus::Pty);
-        self.chat_scroll = 0;
     }
 
     /// Move the chat bubble selection: positive = towards older messages
@@ -1336,13 +1320,17 @@ impl TuiApp {
         let Some(cur) = self.chat_cursor else {
             return;
         };
-        let text = {
+        let chosen = {
             let msgs = self.chat_transcript();
-            msgs.len()
-                .checked_sub(1 + cur)
-                .and_then(|idx| msgs.get(idx).map(chat_msg_paste_text))
+            msgs.len().checked_sub(1 + cur).and_then(|idx| {
+                msgs.get(idx)
+                    .map(|m| (chat_msg_paste_text(m), chat_msg_key(m)))
+            })
         };
-        if let Some(text) = text {
+        if let Some((text, key)) = chosen {
+            if let Some(key) = key {
+                self.pasted.insert(key);
+            }
             self.pty_paste_pending = Some(text);
             self.focus_return = None; // explicit hand-over wins
             self.set_input_focus(InputFocus::Pty);
@@ -1419,24 +1407,27 @@ impl TuiApp {
         }
     }
 
-    /// F3: hand the agent what is open. One thing — an artifact request,
-    /// the task brief, a failed check — is pasted at once, as before; several
-    /// open a picker so the player chooses which.
+    /// F3: hand the agent what is open. One new thing — an artifact
+    /// request, the task brief, a failed check — is pasted at once, as
+    /// before. Several, or one the agent already has, open the picker, where
+    /// what was pasted before is marked and the cursor starts on the first
+    /// thing that was not: F3 never re-sends a brief behind the player's back.
     fn paste_last_failed(&mut self) {
         if !self.has_pty {
             return;
         }
         let items = self.paste_items();
-        match items.len() {
-            0 => {}
-            1 => {
-                let item = items.into_iter().next().expect("one item");
+        match items.as_slice() {
+            [] => {}
+            [only] if !only.pasted => {
+                let item = only.clone();
                 self.paste_item(&item);
             }
             _ => {
+                let cursor = items.iter().position(|i| !i.pasted).unwrap_or(0);
                 self.stash_focus_for_modal();
                 self.show_help = false;
-                self.paste_picker = Some(PastePicker { items, cursor: 0 });
+                self.paste_picker = Some(PastePicker { items, cursor });
             }
         }
     }
@@ -1491,15 +1482,15 @@ impl TuiApp {
             if time_left(deadline).is_some_and(|l| l.is_zero()) {
                 continue;
             }
+            let instruction = request_instruction(&p.test_description, req.instruction);
+            let key = request_paste_key(req.judge, &instruction);
             requests.push(PasteItem {
                 kind: PasteKind::Request,
-                label: format!(
-                    "{} asks: {}",
-                    req.judge,
-                    first_line(&request_instruction(&p.test_description, req.instruction))
-                ),
+                label: format!("{} asks: {}", req.judge, first_line(&instruction)),
                 deadline,
                 source: PasteSource::Probe(p.probe_id),
+                pasted: self.pasted.contains(&key),
+                key,
             });
         }
         requests.sort_by_key(|i| i.deadline.unwrap_or_else(far_future));
@@ -1507,11 +1498,14 @@ impl TuiApp {
         if let Some(p) = self.probes.iter().rev().find(|p| {
             Some(p.task_ordinal) == self.max_task_ordinal && !p.task_description.is_empty()
         }) {
+            let key = brief_key(&p.task_description);
             items.push(PasteItem {
                 kind: PasteKind::Brief,
                 label: format!("Task #{}: {} — the brief", p.task_ordinal, p.task_title),
                 deadline: None,
                 source: PasteSource::Brief(p.probe_id),
+                pasted: self.pasted.contains(&key),
+                key,
             });
         }
         if let Some(p) = self
@@ -1523,11 +1517,14 @@ impl TuiApp {
             } else {
                 p.test_label.clone()
             };
+            let key = check_key(p.probe_id);
             items.push(PasteItem {
                 kind: PasteKind::FailedCheck,
                 label: format!("Failed check: {what}"),
                 deadline: None,
                 source: PasteSource::Probe(p.probe_id),
+                pasted: self.pasted.contains(&key),
+                key,
             });
         }
         items
@@ -1547,6 +1544,7 @@ impl TuiApp {
             }),
         };
         if let Some(text) = text {
+            self.pasted.insert(item.key.clone());
             self.pty_paste_pending = Some(text);
             self.focus_return = None; // explicit hand-over wins
             self.set_input_focus(InputFocus::Pty);
@@ -2264,7 +2262,6 @@ impl TuiApp {
             self.sidebar_cursor = None;
             self.probe_popup = None;
             self.show_help = false;
-            self.chat_input = None;
         }
         self.input_focus = focus;
     }

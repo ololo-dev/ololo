@@ -5,6 +5,7 @@
     HealthCheckpointView,
     LeaderboardEntry,
     MemberInfo,
+    PlayerTestCommandsView,
     ScoreHistoryPoint,
     SessionHealthPayload,
   } from "$lib/types/arena";
@@ -538,7 +539,10 @@
     }
   }
 
-  function healthLines(cp: HealthCheckpointView): { label: string; value: string; tone?: string }[] {
+  function healthLines(
+    cp: HealthCheckpointView,
+    commands?: PlayerTestCommandsView | null,
+  ): { label: string; value: string; tone?: string }[] {
     const lines: { label: string; value: string; tone?: string }[] = [];
     const m = cp.server?.metrics ?? cp.client?.metrics ?? null;
     const tone = LEVEL_COLORS[cp.level ?? "unknown"].fg;
@@ -580,7 +584,7 @@
       });
     }
     // The project's own tests, when they run: part of the score.
-    for (const line of testsLines(cp.tests)) {
+    for (const line of cp.score == null ? [] : testsLines(cp.tests, commands)) {
       lines.push({
         label: line.label,
         value: line.value,
@@ -664,7 +668,7 @@
       } else {
         lines.push({ label: "points", value: String(meta.total) });
       }
-      if (cp) lines.push(...healthLines(cp));
+      if (cp) lines.push(...healthLines(cp, hookHealth?.players[members[i].player_id]?.test_commands));
     }
     if (lines.length === 0) {
       tip = null;

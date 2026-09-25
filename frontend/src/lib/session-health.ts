@@ -8,6 +8,7 @@ import type {
   HealthLevel,
   HealthTestsView,
   HealthThresholds,
+  PlayerTestCommandsView,
   SessionHealthPayload,
   SuiteResult,
 } from "$lib/types/arena";
@@ -176,9 +177,22 @@ function failing(result: SuiteResult): boolean {
 
 /** The project's tests in a checkpoint's tooltip: what the counted run
  *  said and scored, where its log is, and a check's own run that ended
- *  without numbers. */
-export function testsLines(tests: HealthTestsView | null | undefined): TooltipLine[] {
-  if (!tests) return [];
+ *  without numbers. Without a run, what the player's docs and manifests
+ *  gave (`commands`, when the session scores tests): no test command at
+ *  all, or one that has not run yet — so a chart without tests says why. */
+export function testsLines(
+  tests: HealthTestsView | null | undefined,
+  commands?: PlayerTestCommandsView | null,
+): TooltipLine[] {
+  if (!tests) {
+    if (!commands) return [];
+    const command = commands.coverage ?? commands.test;
+    return [
+      command
+        ? { label: "tests", value: `not run yet · ${command}` }
+        : { label: "tests", value: "no test command in the docs or manifests", tone: "amber" },
+    ];
+  }
   const lines: TooltipLine[] = [];
   const run = tests.counted;
   if (run) {

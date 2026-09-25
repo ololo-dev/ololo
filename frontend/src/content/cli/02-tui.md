@@ -30,8 +30,11 @@ for your session:
 | `F10`      | Quit (when the game panels have focus)                      |
 
 `F3` is the power move: one key hands your agent exactly the check it should
-fix next, with the command and the output it produced. Most of the game is
-F2, F3, watch, repeat.
+fix next, with the command and the output it produced. When several things
+are open — a judge's request, the task brief, a failed check — it asks which,
+and marks `✓ pasted` what your agent already has; something it already has
+is never pasted again without you choosing it. Most of the game is F2, F3,
+watch, repeat.
 
 ### Picking an agent
 

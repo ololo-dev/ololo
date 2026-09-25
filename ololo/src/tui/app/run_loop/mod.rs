@@ -460,8 +460,7 @@ pub async fn run(
                         // from either focus, because reading the chat must
                         // not require an F9 round-trip: wheel scrolls the
                         // transcript, a click on a bubble selects it (again:
-                        // sends it to the agent), a click on the compose bar
-                        // opens the compose line.
+                        // sends it to the agent).
                         {
                             let (term_cols, term_rows) =
                                 crossterm::terminal::size().unwrap_or((80, 24));
@@ -482,17 +481,9 @@ pub async fn run(
                                     crossterm::event::MouseEventKind::Down(
                                         crossterm::event::MouseButton::Left,
                                     ) => {
-                                        if crate::tui::render::chat::compose_bar_row(
-                                            &app, term_cols, term_rows,
-                                        ) == Some(m.row)
-                                        {
-                                            app.open_chat_compose();
-                                        } else if let Some(idx) =
-                                            crate::tui::render::chat::bubble_at(
-                                                &app, term_cols, term_rows, m.column,
-                                                m.row,
-                                            )
-                                        {
+                                        if let Some(idx) = crate::tui::render::chat::bubble_at(
+                                            &app, term_cols, term_rows, m.column, m.row,
+                                        ) {
                                             app.chat_click_bubble(idx);
                                         }
                                     }

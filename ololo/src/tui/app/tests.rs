@@ -1362,7 +1362,7 @@ fn chat_selection_steps_back_to_follow_mode_and_esc_clears() {
 }
 
 #[test]
-fn enter_without_a_selection_still_opens_the_compose_line() {
+fn the_chat_has_no_message_line_m_and_a_bare_enter_do_nothing() {
     use crossterm::event::{KeyCode, KeyModifiers};
     let mut app = fresh_app();
     app.has_pty = true;
@@ -1372,68 +1372,18 @@ fn enter_without_a_selection_still_opens_the_compose_line() {
         1,
         "brief",
     )));
+    app.on_key(KeyCode::Char('m'), KeyModifiers::NONE);
     app.on_key(KeyCode::Enter, KeyModifiers::NONE);
     assert!(
-        app.chat_input.is_some(),
-        "no selection: Enter is the compose shortcut"
-    );
-    assert!(app.pty_paste_pending.is_none());
-}
-
-#[test]
-fn chat_compose_pastes_into_the_agent_like_f3() {
-    use crossterm::event::{KeyCode, KeyModifiers};
-    let mut app = fresh_app();
-    app.has_pty = true;
-    app.on_event(TuiEvent::ProbeResult(chat_probe(
-        Uuid::new_v4(),
-        0,
-        1,
-        "brief",
-    )));
-
-    app.open_chat_compose();
-    assert_eq!(app.chat_input.as_deref(), Some(""));
-    assert_eq!(app.input_focus, InputFocus::Tui, "compose pulls focus");
-
-    for c in "fix it".chars() {
-        app.on_key(KeyCode::Char(c), KeyModifiers::NONE);
-    }
-    app.on_key(KeyCode::Backspace, KeyModifiers::NONE);
-    app.on_key(KeyCode::Char('t'), KeyModifiers::NONE);
-    app.on_key(KeyCode::Enter, KeyModifiers::NONE);
-
-    assert!(app.chat_input.is_none(), "submit closes the compose line");
-    assert_eq!(
-        app.pty_paste_pending.as_deref(),
-        Some("fix it"),
-        "the message is queued as a paste — same mechanism as F3/probe 'p'"
+        app.pty_paste_pending.is_none(),
+        "nothing is sent to the agent"
     );
     assert_eq!(
         app.input_focus,
-        InputFocus::Pty,
-        "focus lands in the agent so the player can edit and submit"
+        InputFocus::Tui,
+        "focus stays in the game panels"
     );
-}
-
-#[test]
-fn chat_compose_esc_cancels_without_sending() {
-    use crossterm::event::{KeyCode, KeyModifiers};
-    let mut app = fresh_app();
-    app.has_pty = true;
-    app.open_chat_compose();
-    app.on_key(KeyCode::Char('x'), KeyModifiers::NONE);
-    app.on_key(KeyCode::Esc, KeyModifiers::NONE);
-    assert!(app.chat_input.is_none());
-    assert!(app.pty_paste_pending.is_none());
-}
-
-#[test]
-fn chat_compose_needs_a_hosted_agent() {
-    let mut app = fresh_app();
-    app.has_pty = false;
-    app.open_chat_compose();
-    assert!(app.chat_input.is_none(), "no agent — nowhere to send");
+    assert_eq!(app.chat_cursor, None, "and nothing is selected");
 }
 
 #[test]
@@ -2081,4 +2031,122 @@ fn f3_skips_an_expired_request_and_esc_closes_the_picker() {
     press(&mut app, crossterm::event::KeyCode::Esc);
     assert!(app.paste_picker.is_none());
     assert!(app.pty_paste_pending.is_none());
+}
+
+// ── F3 marks what the agent already has ──────────────────────────────
+
+#[test]
+fn f3_pastes_a_new_brief_at_once_and_marks_it_the_second_time() {
+    let mut app = fresh_app();
+    app.has_pty = true;
+    let pid = arrive(&mut app, Uuid::new_v4(), 0, "Ledger");
+    grade(&mut app, pid, arena_core::protocol::ProbeOutcome::Pass);
+    // Only the brief is open, and the agent does not have it: pasted.
+    press(&mut app, crossterm::event::KeyCode::F(3));
+    assert!(app.paste_picker.is_none());
+    let text = app.pty_paste_pending.take().expect("brief pasted");
+    assert!(text.contains("Task brief:"), "{text}");
+
+    // Again: the agent has it — the picker says so instead of re-sending.
+    app.set_input_focus(InputFocus::Tui);
+    press(&mut app, crossterm::event::KeyCode::F(3));
+    let picker = app
+        .paste_picker
+        .as_ref()
+        .expect("the picker shows what was pasted");
+    assert_eq!(picker.items.len(), 1);
+    assert!(picker.items[0].pasted, "the brief is marked");
+    assert!(
+        app.pty_paste_pending.is_none(),
+        "nothing re-sent behind the back"
+    );
+    // Choosing it still pastes it, on purpose.
+    press(&mut app, crossterm::event::KeyCode::Enter);
+    assert!(app.pty_paste_pending.take().is_some());
+}
+
+#[test]
+fn f3_starts_the_picker_on_what_the_agent_does_not_have() {
+    let mut app = fresh_app();
+    app.has_pty = true;
+    let tid = Uuid::new_v4();
+    let first = arrive(&mut app, tid, 0, "Ledger");
+    grade(&mut app, first, arena_core::protocol::ProbeOutcome::Pass);
+    press(&mut app, crossterm::event::KeyCode::F(3));
+    app.pty_paste_pending.take().expect("brief pasted");
+    app.set_input_focus(InputFocus::Tui);
+
+    // A check fails: the brief (pasted) and the failure (new) are open.
+    let failed = arrive(&mut app, tid, 0, "Ledger");
+    grade(&mut app, failed, arena_core::protocol::ProbeOutcome::Error);
+    press(&mut app, crossterm::event::KeyCode::F(3));
+    let picker = app.paste_picker.as_ref().expect("two things: picker");
+    let kinds: Vec<(crate::tui::app::PasteKind, bool)> =
+        picker.items.iter().map(|i| (i.kind, i.pasted)).collect();
+    assert_eq!(
+        kinds,
+        vec![
+            (crate::tui::app::PasteKind::Brief, true),
+            (crate::tui::app::PasteKind::FailedCheck, false),
+        ]
+    );
+    assert_eq!(picker.cursor, 1, "the cursor starts on the new thing");
+    press(&mut app, crossterm::event::KeyCode::Enter);
+    let text = app.pty_paste_pending.take().expect("the failure is pasted");
+    assert!(!text.contains("Task brief:"), "{text}");
+}
+
+#[test]
+fn a_brief_sent_from_the_chat_is_marked_in_f3() {
+    let mut app = fresh_app();
+    app.has_pty = true;
+    let pid = arrive(&mut app, Uuid::new_v4(), 0, "Ledger");
+    grade(&mut app, pid, arena_core::protocol::ProbeOutcome::Pass);
+    // Select the brief bubble in the chat and send it.
+    let msgs = app.chat_transcript();
+    let brief_idx = msgs
+        .iter()
+        .position(|m| matches!(m, ChatMsg::Brief { .. }))
+        .expect("the brief is in the chat");
+    let from_newest = msgs.len() - 1 - brief_idx;
+    drop(msgs);
+    app.chat_cursor = Some(from_newest);
+    app.send_selected_bubble();
+    app.pty_paste_pending.take().expect("bubble sent");
+    app.set_input_focus(InputFocus::Tui);
+
+    press(&mut app, crossterm::event::KeyCode::F(3));
+    let picker = app
+        .paste_picker
+        .as_ref()
+        .expect("already pasted: the picker");
+    assert!(picker.items[0].pasted, "the chat's paste counts");
+}
+
+#[test]
+fn the_picker_marks_pasted_items() {
+    let mut app = fresh_app();
+    app.has_pty = true;
+    let pid = arrive(&mut app, Uuid::new_v4(), 0, "Ledger");
+    grade(&mut app, pid, arena_core::protocol::ProbeOutcome::Pass);
+    press(&mut app, crossterm::event::KeyCode::F(3));
+    app.pty_paste_pending.take();
+    app.set_input_focus(InputFocus::Tui);
+    press(&mut app, crossterm::event::KeyCode::F(3));
+    let backend = ratatui::backend::TestBackend::new(100, 24);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    terminal
+        .draw(|f| crate::tui::render::paste_picker::render_paste_picker(f, &app))
+        .unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let flat: String = (0..24u16)
+        .map(|y| {
+            (0..100u16)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(flat.contains("✓ pasted"), "{flat}");
+    assert!(flat.contains("the agent has it"), "{flat}");
 }

@@ -72,9 +72,13 @@ directory. In practice:
   read your history from the session's opening snapshot, and old work in the
   folder is what they flag. (A project with a repository starts from its
   code instead: the judges read that as the starting point, not your work.)
-- To reconnect after a crash or a dropped network, run `ololo join` again
-  **from the same directory**: you come back as the same player, with your
-  score and your task position.
+- While it runs, ololo keeps its connection alive by itself: a dropped
+  connection is dialled again, and so is one that has gone silent — the
+  game server speaks every second, so a minute without a word means the
+  connection is dead even if it looks open.
+- To reconnect after a crash, run `ololo join` again **from the same
+  directory**: you come back as the same player, with your score and your
+  task position.
 - Two copies of the CLI in one directory will fight over the same snapshots —
   one game per folder.
 - Keep `git` installed. Without it nothing reaches the server, and the judges

@@ -83,7 +83,16 @@ pub async fn run_connect_loop(
 ) -> bool {
     let mut attempts: u64 = 0;
     loop {
-        match connect_once(ws_url, pat, sink.clone(), viewer_player_id, memory.as_mut()).await {
+        match connect_once(
+            ws_url,
+            pat,
+            sink.clone(),
+            viewer_player_id,
+            memory.as_mut(),
+            super::Liveness::default(),
+        )
+        .await
+        {
             Ok(true) => return true,
             Ok(false) => {
                 // The socket had been established and then dropped — a

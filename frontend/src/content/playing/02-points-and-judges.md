@@ -96,7 +96,9 @@ duplication, complexity and dead code.
 When a session also scores tests, ololo learns how to run yours from your
 `AGENTS.md` or `README.md` — the same model that reads session memory reads
 them, so write the commands down plainly: "Run the tests: `npm test`",
-"Coverage: `npm run coverage`". After a check's health analysis, when your
+"Coverage: `npm run coverage`". When the docs say nothing, the project's
+manifests do: a `test` script in `package.json`, a `Makefile` target,
+`Cargo.toml`, `go.mod`. After a check's health analysis, when your
 code changed since the last run and a minute has passed since it started,
 ololo runs the coverage command (it runs the tests too), or the test command
 when that is all your docs name, in your folder with `CI=1`. The whole output
@@ -108,7 +110,8 @@ your tests itself.
 They join the health score as two more of jscpd's dimensions: _tests_, the
 share failing (none failing scores 100, one in ten 50), and _coverage_ (81%
 scores 72). A check whose code was not tested again counts the last run, and
-the tooltip says which. No test command in your docs means neither dimension
-— the score is your code's alone, as before. The command obeys the same
+the tooltip says which. No test command in your docs or manifests means
+neither dimension — the score is your code's alone, as before, and the
+tooltip says so. The command obeys the same
 permission rules as checks in `.ololo/settings.json`: one no rule allows does
 not run, and the chart says so.

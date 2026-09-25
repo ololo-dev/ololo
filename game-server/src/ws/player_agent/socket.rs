@@ -6,8 +6,8 @@ use crate::ws::player_agent::interval::clamp_interval_bounds;
 use crate::ws::player_agent::probe_action::{ProbeAction, decide_probe_action};
 use crate::ws::player_agent::registry_guard::{RegistryGuard, is_current_connection};
 use crate::ws::player_agent::scheduler::{
-    advance_to_next_task, ensure_adapted_test, pick_next_adapted_test, resolve_current_task_id,
-    test_position, update_next_probe_at,
+    CurrentTask, advance_to_next_task, ensure_adapted_test, pick_next_adapted_test,
+    resolve_current_task_id, test_position, update_next_probe_at,
 };
 use crate::ws::player_agent::scoring::{broadcast_leaderboard, publish_score_change};
 use arena_core::entities::{players, probes, sessions, tasks};
@@ -110,6 +110,47 @@ pub async fn resolve_socket_player(
 /// `player_id` arrives pre-resolved: the upgrade handler authenticates the
 /// PAT and runs [`resolve_socket_player`] BEFORE accepting the upgrade, so an
 /// unauthenticated or non-member caller never reaches this loop.
+/// A player with nothing left to play idles until the session itself ends —
+/// mirrors the paused wait: sleep in 1s slices while forwarding session
+/// broadcasts (the countdown, the leaderboard, the final SessionComplete)
+/// and answering the agent's pings, so the real `all_tasks_completed` /
+/// `time_expired` / `cancelled` reason reaches the client when the session
+/// ends and the agent never mistakes the wait for a dead connection.
+async fn idle_until_session_ends(
+    socket: &mut WebSocket,
+    session_rx: &mut Option<broadcast::Receiver<ArenaFrame>>,
+    state: &GameServerState,
+    session_id: Uuid,
+    player_id: Uuid,
+    join_code: &str,
+) {
+    loop {
+        let status = match sessions::Entity::find_by_id(session_id)
+            .one(&state.db)
+            .await
+        {
+            Ok(Some(s)) => s.status,
+            _ => return,
+        };
+        if matches!(decide_probe_action(status), ProbeAction::Exit) {
+            // Flush the queued final broadcast before closing.
+            drain_during_sleep(
+                socket, session_rx, state, session_id, player_id, join_code, 1,
+            )
+            .await;
+            return;
+        }
+        if drain_during_sleep(
+            socket, session_rx, state, session_id, player_id, join_code, 1,
+        )
+        .await
+            == SleepOutcome::Disconnected
+        {
+            return; // client closed the socket
+        }
+    }
+}
+
 pub async fn handle_player_agent_socket(
     mut socket: WebSocket,
     session_id: Uuid,
@@ -305,8 +346,23 @@ pub async fn handle_player_agent_socket(
             match resolve_current_task_id(&state, session_id, player_id, &join_code, &mut socket)
                 .await
             {
-                Some(id) => id,
-                None => break,
+                CurrentTask::Task(id) => id,
+                // A finished player (reconnecting, say, after its agent lost
+                // a silent connection) waits for the session's end here,
+                // exactly as after its last task.
+                CurrentTask::PlayerDone => {
+                    idle_until_session_ends(
+                        &mut socket,
+                        &mut session_rx,
+                        &state,
+                        session_id,
+                        player_id,
+                        &join_code,
+                    )
+                    .await;
+                    break;
+                }
+                CurrentTask::Stop => break,
             };
 
         let task_row = match tasks::Entity::find_by_id(task_id).one(&state.db).await {
@@ -546,48 +602,15 @@ pub async fn handle_player_agent_socket(
                     let json = serde_json::to_string(&frame).unwrap_or_default();
                     let _ = socket.send(Message::Text(json)).await;
                     update_next_probe_at(&state, session_id, player_id, None).await;
-                    // Idle until the session itself ends — mirrors the paused
-                    // wait above: sleep in 1s slices while forwarding session
-                    // broadcasts (leaderboard, final SessionComplete) so the
-                    // real `all_tasks_completed`/`time_expired`/`cancelled`
-                    // reason reaches the client when the session ends.
-                    loop {
-                        let status = match sessions::Entity::find_by_id(session_id)
-                            .one(&state.db)
-                            .await
-                        {
-                            Ok(Some(s)) => s.status,
-                            _ => break,
-                        };
-                        if matches!(decide_probe_action(status), ProbeAction::Exit) {
-                            // Flush the queued final broadcast before closing.
-                            drain_during_sleep(
-                                &mut socket,
-                                &mut session_rx,
-                                &state,
-                                session_id,
-                                player_id,
-                                &join_code,
-                                1,
-                            )
-                            .await;
-                            break;
-                        }
-                        if drain_during_sleep(
-                            &mut socket,
-                            &mut session_rx,
-                            &state,
-                            session_id,
-                            player_id,
-                            &join_code,
-                            1,
-                        )
-                        .await
-                            == SleepOutcome::Disconnected
-                        {
-                            break; // client closed the socket
-                        }
-                    }
+                    idle_until_session_ends(
+                        &mut socket,
+                        &mut session_rx,
+                        &state,
+                        session_id,
+                        player_id,
+                        &join_code,
+                    )
+                    .await;
                     break;
                 }
                 continue;

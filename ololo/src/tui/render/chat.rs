@@ -94,18 +94,9 @@ pub(crate) fn chat_area(app: &TuiApp, term_cols: u16, term_rows: u16) -> Option<
     Some(body[1])
 }
 
-/// The compose bar's terminal row, when the chat pane shows one.
-pub(crate) fn compose_bar_row(app: &TuiApp, term_cols: u16, term_rows: u16) -> Option<u16> {
-    if !app.has_pty {
-        return None;
-    }
-    let area = chat_area(app, term_cols, term_rows)?;
-    (area.height > 2).then(|| area.y + area.height - 2)
-}
-
 /// The transcript bubble under the terminal cell `(col, row)`, as an index
 /// into `chat_transcript()`. `None` on borders, blank separator rows, the
-/// compose bar, or outside the pane.
+/// input line, or outside the pane.
 pub(crate) fn bubble_at(
     app: &TuiApp,
     term_cols: u16,
@@ -118,8 +109,8 @@ pub(crate) fn bubble_at(
         return None;
     }
     let inner_w = area.width.saturating_sub(4).max(1) as usize;
-    let (compose_rows, status_rows) = bottom_rows(app, inner_w);
-    let inner_h = area.height.saturating_sub(2 + compose_rows + status_rows) as usize;
+    let status_rows = status_rows(app, inner_w);
+    let inner_h = area.height.saturating_sub(2 + status_rows) as usize;
     let row_off = row.checked_sub(area.y + 1)? as usize;
     if row_off >= inner_h {
         return None;
@@ -135,17 +126,14 @@ pub(crate) fn bubble_at(
         .position(|&(s, e)| line_idx >= s && line_idx < e)
 }
 
-/// Rows the pane keeps below the transcript: the compose bar (with a
-/// hosted agent) and the live status (while the session has something to
-/// say about what happens next) — up to `STATUS_MAX_ROWS` of it, so a
-/// narrow pane wraps the sentence instead of cutting it.
-fn bottom_rows(app: &TuiApp, inner_w: usize) -> (u16, u16) {
-    let compose = if app.has_pty { 1 } else { 0 };
-    let status = app
-        .live_status()
+/// Rows the pane keeps below the transcript for the live status (while
+/// the session has something to say about what happens next) — up to
+/// `STATUS_MAX_ROWS` of it, so a narrow pane wraps the sentence instead of
+/// cutting it.
+fn status_rows(app: &TuiApp, inner_w: usize) -> u16 {
+    app.live_status()
         .map(|st| status_lines(&st, inner_w).len() as u16)
-        .unwrap_or(0);
-    (compose, status)
+        .unwrap_or(0)
 }
 
 /// The most rows the status may take from the transcript.
@@ -154,12 +142,11 @@ const STATUS_MAX_ROWS: usize = 2;
 pub(crate) fn render_chat(f: &mut Frame, area: Rect, app: &TuiApp) {
     // Borders (2) + horizontal padding (2) around the text.
     let inner_w = area.width.saturating_sub(4).max(1) as usize;
-    // With a hosted agent the last inner row is the compose bar — the
-    // "✉ message" button, or the input line while typing. Above it, the
-    // status row says what the session is doing and what comes next.
+    // Under the transcript, the status row says what the session is doing
+    // and what comes next.
     let status = app.live_status();
-    let (compose_rows, status_rows) = bottom_rows(app, inner_w);
-    let inner_h = area.height.saturating_sub(2 + compose_rows + status_rows) as usize;
+    let status_rows = status_rows(app, inner_w);
+    let inner_h = area.height.saturating_sub(2 + status_rows) as usize;
 
     let msgs = app.chat_transcript();
     // The selected bubble (chat_cursor counts up from the newest).
@@ -182,9 +169,7 @@ pub(crate) fn render_chat(f: &mut Frame, area: Rect, app: &TuiApp) {
         title = format!(" chat | {passed}/{proj_total} tasks ");
     }
 
-    let hint = if app.chat_input.is_some() {
-        " ⏎ paste to agent · Esc cancel ".to_string()
-    } else if selected.is_some() && app.has_pty {
+    let hint = if selected.is_some() && app.has_pty {
         " ⏎ send to agent · ↑↓ move · Esc: latest ".to_string()
     } else if selected.is_some() {
         " ↑↓ move · Esc: latest ".to_string()
@@ -206,16 +191,16 @@ pub(crate) fn render_chat(f: &mut Frame, area: Rect, app: &TuiApp) {
     let inner = block.inner(area);
     f.render_widget(block, area);
     let transcript = Rect {
-        height: inner.height.saturating_sub(compose_rows + status_rows),
+        height: inner.height.saturating_sub(status_rows),
         ..inner
     };
     f.render_widget(Paragraph::new(Text::from(visible)), transcript);
     if let Some(st) = status.as_ref()
         && status_rows > 0
-        && inner.height >= compose_rows + status_rows
+        && inner.height >= status_rows
     {
         let rows = Rect {
-            y: inner.y + inner.height - status_rows - compose_rows,
+            y: inner.y + inner.height - status_rows,
             height: status_rows,
             ..inner
         };
@@ -224,45 +209,6 @@ pub(crate) fn render_chat(f: &mut Frame, area: Rect, app: &TuiApp) {
             rows,
         );
     }
-    if compose_rows > 0 && inner.height > 0 {
-        let bar = Rect {
-            y: inner.y + inner.height - 1,
-            height: 1,
-            ..inner
-        };
-        f.render_widget(compose_line(app, bar.width as usize), bar);
-    }
-}
-
-/// The compose bar: an idle "✉ message" button, or the input line while
-/// the player is typing. Clicking the bar (or pressing `m`) opens it.
-fn compose_line(app: &TuiApp, width: usize) -> Paragraph<'static> {
-    let line = match app.chat_input.as_ref() {
-        Some(text) => Line::from(vec![
-            Span::styled(
-                " ❯ ".to_string(),
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            // Long input: keep the tail (where typing happens) in view.
-            Span::styled(
-                {
-                    let budget = width.saturating_sub(5);
-                    let chars: Vec<char> = text.chars().collect();
-                    let skip = chars.len().saturating_sub(budget);
-                    chars[skip..].iter().collect::<String>()
-                },
-                Style::default().fg(Color::White),
-            ),
-            Span::styled("▏".to_string(), Style::default().fg(Color::Green)),
-        ]),
-        None => Line::from(Span::styled(
-            format!("{:^width$}", "[ ✉ message the agent — m or click ]"),
-            Style::default().fg(Color::DarkGray),
-        )),
-    };
-    Paragraph::new(line)
 }
 
 /// Braille spinner frames — the same idiom the agent CLIs use for "working".

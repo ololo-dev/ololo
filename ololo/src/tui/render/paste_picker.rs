@@ -1,6 +1,7 @@
 //! The F3 picker: when several things are open for the agent — artifact
 //! requests, the task brief, a failed check — the player chooses which one
-//! to paste. Artifact requests carry their live countdown.
+//! to paste. Artifact requests carry their live countdown; what the agent
+//! already has is marked `✓ pasted`.
 
 use crate::tui::app::{PasteKind, TuiApp, fmt_countdown, time_left};
 use ratatui::Frame;
@@ -9,13 +10,19 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph};
 
+/// The mark of an item the agent already has.
+const PASTED: &str = " ✓ pasted ";
+
 pub(crate) fn render_paste_picker(f: &mut Frame, app: &TuiApp) {
     let Some(picker) = app.paste_picker.as_ref() else {
         return;
     };
     let area = f.area();
     let w = area.width.saturating_sub(4).clamp(30, 96);
-    let label_w = (w as usize).saturating_sub(4 + 4 + 3 + 16).max(10);
+    // Number, glyph, borders and padding, the countdown and the mark.
+    let label_w = (w as usize)
+        .saturating_sub(4 + 4 + 3 + 16 + PASTED.chars().count())
+        .max(10);
 
     let mut lines: Vec<Line> = Vec::new();
     for (i, item) in picker.items.iter().enumerate() {
@@ -37,10 +44,21 @@ pub(crate) fn render_paste_picker(f: &mut Frame, app: &TuiApp) {
         } else {
             Style::default()
         };
+        // Pasted before: the label steps back, the mark says why.
+        let label_color = if item.pasted {
+            Color::Gray
+        } else {
+            Color::White
+        };
         let mut spans = vec![
             Span::styled(format!(" {} ", i + 1), base.fg(Color::DarkGray)),
             Span::styled(format!("{glyph} "), base.fg(glyph_color)),
-            Span::styled(format!("{label:<label_w$}"), base.fg(Color::White)),
+            Span::styled(format!("{label:<label_w$}"), base.fg(label_color)),
+            if item.pasted {
+                Span::styled(PASTED, base.fg(Color::Green))
+            } else {
+                Span::styled(" ".repeat(PASTED.chars().count()), base)
+            },
         ];
         match time_left(item.deadline) {
             Some(left) => {
@@ -67,10 +85,15 @@ pub(crate) fn render_paste_picker(f: &mut Frame, app: &TuiApp) {
         h,
     );
     f.render_widget(Clear, rect);
+    let hint = if picker.items.iter().any(|i| i.pasted) {
+        " ✓ the agent has it · ↑/↓ choose · ⏎ or 1–9 paste · Esc close "
+    } else {
+        " ↑/↓ choose · ⏎ or 1–9 paste · Esc close "
+    };
     let block = Block::default()
         .title(" paste to the agent ")
         .title_bottom(Line::from(Span::styled(
-            " ↑/↓ choose · ⏎ or 1–9 paste · Esc close ",
+            hint,
             Style::default().fg(Color::DarkGray),
         )))
         .borders(Borders::ALL)

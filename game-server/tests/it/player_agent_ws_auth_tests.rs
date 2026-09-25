@@ -20,7 +20,7 @@ use tokio::sync::Semaphore;
 use tower::ServiceExt;
 use uuid::Uuid;
 
-async fn setup_db() -> DatabaseConnection {
+pub(crate) async fn setup_db() -> DatabaseConnection {
     let db = sea_orm::Database::connect("sqlite::memory:")
         .await
         .expect("connect");
@@ -28,7 +28,7 @@ async fn setup_db() -> DatabaseConnection {
     db
 }
 
-fn test_state(db: DatabaseConnection) -> GameServerState {
+pub(crate) fn test_state(db: DatabaseConnection) -> GameServerState {
     let secret = b"test-secret-32-bytes-or-more-xxxxxxx".to_vec();
     GameServerState {
         db,
@@ -50,7 +50,7 @@ fn test_state(db: DatabaseConnection) -> GameServerState {
     }
 }
 
-async fn insert_user(db: &DatabaseConnection) -> Uuid {
+pub(crate) async fn insert_user(db: &DatabaseConnection) -> Uuid {
     users::ActiveModel {
         id: Set(Uuid::new_v4()),
         email: Set(format!("u{}@example.com", Uuid::new_v4())),
@@ -72,7 +72,7 @@ async fn insert_user(db: &DatabaseConnection) -> Uuid {
     .id
 }
 
-async fn insert_pat(db: &DatabaseConnection, user_id: Uuid, token: &str) {
+pub(crate) async fn insert_pat(db: &DatabaseConnection, user_id: Uuid, token: &str) {
     cli_tokens::ActiveModel {
         id: Set(Uuid::new_v4()),
         token_hash: Set(arena_core::auth::hash_pat(token)),
@@ -85,7 +85,11 @@ async fn insert_pat(db: &DatabaseConnection, user_id: Uuid, token: &str) {
     .expect("insert cli token");
 }
 
-async fn insert_player(db: &DatabaseConnection, session_id: Uuid, user_id: Uuid) -> Uuid {
+pub(crate) async fn insert_player(
+    db: &DatabaseConnection,
+    session_id: Uuid,
+    user_id: Uuid,
+) -> Uuid {
     players::ActiveModel {
         id: Set(Uuid::new_v4()),
         session_id_fk: Set(session_id),
@@ -107,7 +111,7 @@ async fn insert_player(db: &DatabaseConnection, session_id: Uuid, user_id: Uuid)
 
 /// Seed owner + project + lobby session bound to `state.server_id`.
 /// Returns (session_id, owner_user_id).
-async fn seed_session(state: &GameServerState, join_code: &str) -> (Uuid, Uuid) {
+pub(crate) async fn seed_session(state: &GameServerState, join_code: &str) -> (Uuid, Uuid) {
     let db = &state.db;
     let owner = insert_user(db).await;
 
@@ -287,7 +291,7 @@ async fn spoofed_player_id_is_forbidden() {
 /// Serve the router on an ephemeral port. `WebSocketUpgrade` extraction
 /// needs a real hyper connection (`OnUpgrade` extension), so the happy path
 /// cannot be driven through `oneshot`.
-async fn serve(app: axum::Router) -> std::net::SocketAddr {
+pub(crate) async fn serve(app: axum::Router) -> std::net::SocketAddr {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind");

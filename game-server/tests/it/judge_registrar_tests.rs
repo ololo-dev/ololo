@@ -290,20 +290,13 @@ async fn the_mode_is_inferred_from_command_or_instruction() {
     assert!(out.contains("unknown register_probe mode"), "{out}");
 }
 
-/// A judge re-driven after the queue gave up on its capture finds the
-/// participant on the next task. Nothing registered now would ever be
-/// dispatched; the registrar says so instead of opening a request that
-/// holds the judge for another whole cap (ZNQZEB).
-#[tokio::test]
-async fn registration_refuses_once_the_participant_moved_on() {
+/// The participant finishes the seeded task and moves on to a new one:
+/// the scheduler cursor points at it, as it does the moment a task with a
+/// later one fires its judges.
+async fn move_on(db: &DatabaseConnection, seeded: &Seeded) -> tasks::Model {
     use arena_core::entities::session_scheduler_state;
-    let db = setup_db().await;
-    let state = test_state(db.clone());
-    let seeded = seed(&db).await;
-    let reg = registrar(&state, &seeded, 2);
-
     let this_task = tasks::Entity::find_by_id(seeded.task_id)
-        .one(&db)
+        .one(db)
         .await
         .unwrap()
         .expect("task");
@@ -327,10 +320,10 @@ async fn registration_refuses_once_the_participant_moved_on() {
         completion_bonus_points: Set(0),
         evaluation: Set(None),
     }
-    .insert(&db)
+    .insert(db)
     .await
     .expect("next task");
-    let cursor = session_scheduler_state::ActiveModel {
+    session_scheduler_state::ActiveModel {
         id: Set(Uuid::new_v4()),
         session_id_fk: Set(seeded.session_id),
         player_id_fk: Set(seeded.player_id),
@@ -340,27 +333,67 @@ async fn registration_refuses_once_the_participant_moved_on() {
         created_at: Set(Utc::now()),
         updated_at: Set(Utc::now()),
     }
-    .insert(&db)
+    .insert(db)
     .await
     .expect("cursor");
+    next_task
+}
 
-    let ask = serde_json::json!({
-        "mode": "interactive", "instruction": "Screenshot the forecast",
-        "content_type": "image/png", "deadline_secs": 300
-    });
-    let out = reg.register(&ask).await;
+/// A task with a later one moves the participant on as soon as its judges
+/// fire, so a judge asking for a capture finds them on the next task. The
+/// ask is registered and the next task's queue hands it over first — it
+/// used to be refused outright, and UX Review never saw a screenshot on
+/// any task but the last (3MXLFN).
+#[tokio::test]
+async fn a_capture_asked_after_the_participant_moved_on_rides_the_next_task() {
+    use game_server::ws::player_agent::scheduler::earlier_task_judge_test;
+    let db = setup_db().await;
+    let state = test_state(db.clone());
+    let seeded = seed(&db).await;
+    let reg = registrar(&state, &seeded, 2);
+    let next_task = move_on(&db, &seeded).await;
+
+    let out = reg
+        .register(&serde_json::json!({
+            "mode": "interactive", "instruction": "Screenshot the forecast",
+            "content_type": "image/png"
+        }))
+        .await;
+    let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(parsed["status"], "queued", "{out}");
+    assert!(reg.interactive_pending(), "the run pauses for the capture");
+
+    let asked = earlier_task_judge_test(&state, next_task.id, seeded.session_id, seeded.player_id)
+        .await
+        .expect("the next task's queue carries the ask");
+    assert_eq!(
+        asked.task_id, seeded.task_id,
+        "the ask belongs to the judged task"
+    );
+    assert_eq!(asked.registered_by_judge_id, Some(seeded.judge_id));
+}
+
+/// A command run after the participant moved on would test their newer
+/// work, not the task judged — and, red, hold the next task's queue until
+/// the phase cap. It is refused; nothing is registered.
+#[tokio::test]
+async fn a_run_asked_after_the_participant_moved_on_is_refused() {
+    let db = setup_db().await;
+    let state = test_state(db.clone());
+    let seeded = seed(&db).await;
+    let reg = registrar(&state, &seeded, 2);
+    move_on(&db, &seeded).await;
+
+    let out = reg
+        .register(&serde_json::json!({
+            "mode": "deterministic", "command": "node test.js",
+            "validation": "result.includes('ok')"
+        }))
+        .await;
     let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
     assert!(
         parsed["error"].as_str().unwrap_or("").contains("moved on"),
         "{out}"
-    );
-    let run = serde_json::json!({
-        "mode": "deterministic", "command": "node test.js", "validation": "result.includes('ok')"
-    });
-    let out = reg.register(&run).await;
-    assert!(
-        out.contains("moved on"),
-        "deterministic asks are refused too: {out}"
     );
     assert!(
         tests::Entity::find()
@@ -371,14 +404,49 @@ async fn registration_refuses_once_the_participant_moved_on() {
             .is_empty(),
         "nothing was registered"
     );
+}
 
-    // Cursor back on this task: the same ask is welcome.
-    let mut back: session_scheduler_state::ActiveModel = cursor.into();
-    back.task_id = Set(Some(seeded.task_id));
-    back.update(&db).await.expect("cursor back");
-    let out = reg.register(&ask).await;
+/// A judge re-driven after the phase gave up on its capture used to ask
+/// again and wait a whole cap more (ZNQZEB). Once the participant has moved
+/// on, a fresh capture after an aged-out one is refused.
+#[tokio::test]
+async fn a_fresh_capture_after_an_aged_out_one_is_refused_once_moved_on() {
+    let db = setup_db().await;
+    let state = test_state(db.clone());
+    let seeded = seed(&db).await;
+    let reg = registrar(&state, &seeded, 2);
+
+    let first = reg
+        .register(&serde_json::json!({
+            "mode": "interactive", "instruction": "Screenshot the forecast",
+            "content_type": "image/png"
+        }))
+        .await;
+    let first: serde_json::Value = serde_json::from_str(&first).unwrap();
+    assert_eq!(first["status"], "queued", "{first}");
+    // Registered long before the phase cap: it aged out undelivered.
+    let ask = tests::Entity::find()
+        .filter(tests::Column::RegisteredByJudgeId.eq(seeded.judge_id))
+        .one(&db)
+        .await
+        .unwrap()
+        .expect("the first ask");
+    let mut aged: tests::ActiveModel = ask.into();
+    aged.created_at = Set(Utc::now() - Duration::seconds(1_000));
+    aged.update(&db).await.expect("age the ask");
+    move_on(&db, &seeded).await;
+
+    let out = reg
+        .register(&serde_json::json!({
+            "mode": "interactive", "instruction": "Screenshot the forecast on a phone",
+            "content_type": "image/png", "confirm": true
+        }))
+        .await;
     let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-    assert_eq!(parsed["status"], "queued", "{out}");
+    assert!(
+        parsed["error"].as_str().unwrap_or("").contains("aged out"),
+        "{out}"
+    );
 }
 
 #[tokio::test]

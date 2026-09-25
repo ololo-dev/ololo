@@ -181,6 +181,51 @@ describe("the project's tests in a checkpoint", () => {
     expect(testsLines(null, null)).toEqual([]);
   });
 
+  it("says why a run measured no coverage", () => {
+    const at = "2026-09-25T11:37:34Z";
+    const run = (coverage_run: boolean) => ({
+      counted: {
+        command: coverage_run ? "npm run coverage" : "npm test",
+        coverage_run,
+        result: { exit_code: 0, counts: { passed: 30, failed: 0 } },
+        duration_ms: 1200,
+        probe_seq: 14,
+        inherited: false,
+      },
+      tests_score: 100,
+    });
+    const coverageLine = (lines: ReturnType<typeof testsLines>) =>
+      lines.find((l) => l.label === "coverage");
+    // 3MXLFN: the docs named `npm test` and nothing that measures coverage.
+    expect(
+      coverageLine(
+        testsLines(run(false), { test: "npm test", sources: ["AGENTS.md"], updated_at: at }),
+      ),
+    ).toEqual({
+      label: "coverage",
+      value: "not measured · no coverage command in the docs or manifests",
+      tone: "amber",
+    });
+    expect(coverageLine(testsLines(run(true)))).toEqual({
+      label: "coverage",
+      value: "not measured · the coverage run printed no summary",
+      tone: "amber",
+    });
+    // Named after the counted run: the next one measures it.
+    expect(
+      coverageLine(
+        testsLines(run(false), {
+          test: "npm test",
+          coverage: "npm run coverage",
+          sources: ["AGENTS.md"],
+          updated_at: at,
+        }),
+      ),
+    ).toEqual({ label: "coverage", value: "not measured yet · npm run coverage" });
+    // Without the commands there is nothing to say why.
+    expect(coverageLine(testsLines(run(false)))).toBeUndefined();
+  });
+
   it("puts a run's verdict in words", () => {
     expect(testsVerdict({ counts: { passed: 3, failed: 0 } })).toBe("3 passed");
     expect(testsVerdict({ counts: { passed: 0, failed: 0 } })).toBe("no tests ran");

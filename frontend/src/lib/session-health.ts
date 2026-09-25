@@ -179,7 +179,9 @@ function failing(result: SuiteResult): boolean {
  *  said and scored, where its log is, and a check's own run that ended
  *  without numbers. Without a run, what the player's docs and manifests
  *  gave (`commands`, when the session scores tests): no test command at
- *  all, or one that has not run yet — so a chart without tests says why. */
+ *  all, or one that has not run yet — so a chart without tests says why.
+ *  A run without coverage says why too: its coverage command printed no
+ *  summary, the docs name none, or one was named after that run. */
 export function testsLines(
   tests: HealthTestsView | null | undefined,
   commands?: PlayerTestCommandsView | null,
@@ -205,6 +207,20 @@ export function testsLines(
       const score =
         tests.coverage_score != null ? ` · score ${Math.round(tests.coverage_score)}` : "";
       lines.push({ label: "coverage", value: `${pct.toFixed(1)}%${score}` });
+    } else if (run.coverage_run) {
+      lines.push({
+        label: "coverage",
+        value: "not measured · the coverage run printed no summary",
+        tone: "amber",
+      });
+    } else if (commands && !commands.coverage) {
+      lines.push({
+        label: "coverage",
+        value: "not measured · no coverage command in the docs or manifests",
+        tone: "amber",
+      });
+    } else if (commands?.coverage) {
+      lines.push({ label: "coverage", value: `not measured yet · ${commands.coverage}` });
     }
     if (run.log) lines.push({ label: "log", value: run.log });
   }

@@ -145,6 +145,52 @@ impl JudgeProbeRegistrar {
             .is_some_and(|current| current != self.task_id)
     }
 
+    /// This judge already asked for a capture on this task — its own
+    /// request or one it attached to — and the judge phase gave up on it:
+    /// no pass, and the phase cap ran out on the clock
+    /// `judge_phase_expired_since` reads. A fresh ask would only start
+    /// another cap for a participant who did not answer the first.
+    async fn earlier_ask_aged_out(&self) -> bool {
+        use crate::ws::player_agent::scheduler::{
+            judge_phase_cap_secs, judge_phase_expired_since, last_artifact_at,
+        };
+        let watched: Vec<Uuid> = artifact_request_watchers::Entity::find()
+            .filter(artifact_request_watchers::Column::JudgeId.eq(self.judge_id))
+            .all(&self.state.db)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|w| w.test_id)
+            .collect();
+        let asks: Vec<tests::Model> = self
+            .interactive_tests()
+            .await
+            .into_iter()
+            .filter(|t| t.registered_by_judge_id == Some(self.judge_id) || watched.contains(&t.id))
+            .collect();
+        if asks.is_empty() {
+            return false;
+        }
+        let last_artifact =
+            last_artifact_at(&self.state, self.task_id, self.session_id, self.player_id).await;
+        let cap = judge_phase_cap_secs(&self.state, self.task_id, self.session_id).await;
+        for ask in &asks {
+            let passed = probes::Entity::find()
+                .filter(probes::Column::TestId.eq(ask.id))
+                .filter(probes::Column::PlayerId.eq(self.player_id))
+                .filter(probes::Column::Outcome.eq("pass"))
+                .one(&self.state.db)
+                .await
+                .ok()
+                .flatten()
+                .is_some();
+            if !passed && judge_phase_expired_since(ask, last_artifact, cap) {
+                return true;
+            }
+        }
+        false
+    }
+
     async fn interactive_tests(&self) -> Vec<tests::Model> {
         tests::Entity::find()
             .filter(tests::Column::SessionId.eq(self.session_id))
@@ -698,22 +744,6 @@ impl JudgeProbeRegistrar {
 #[async_trait]
 impl ProbeRegistrar for JudgeProbeRegistrar {
     async fn register(&self, args: &serde_json::Value) -> String {
-        // The queue dispatches probes for the participant's CURRENT task
-        // only. A judge re-driven after the judge phase gave up on its
-        // capture — the participant already on the next task — used to
-        // register a fresh one that nobody would ever hand over, and then
-        // wait its whole cap for it (ZNQZEB: five dead minutes, a third
-        // full run). Once the participant has moved on, the evidence at
-        // hand is all there will be.
-        if self.participant_moved_on().await {
-            return serde_json::json!({
-                "error": "the participant has already moved on to the next task — nothing \
-                          registered now can be dispatched to them; give your verdict from \
-                          the evidence you have (null with a rationale where you genuinely \
-                          cannot assess)"
-            })
-            .to_string();
-        }
         // The shape says what was meant: a `command` is a deterministic
         // probe, an `instruction` a capture. A model that omits `mode`
         // (4I2GFR: test-quality's first call) gets the probe, not a lecture.
@@ -726,6 +756,39 @@ impl ProbeRegistrar for JudgeProbeRegistrar {
                 None
             }
         });
+        // A task with a later one fires its judges and moves the participant
+        // on at once, so a judge usually runs with them on the next task
+        // already. That alone refuses nothing: an earlier task's open asks
+        // ride the current task's queue first (`earlier_task_judge_test`).
+        // Refusing every ask here once the participant had moved on left
+        // UX Review blind on every task but the last (3MXLFN: all eight of
+        // its captures refused, the visual review never happened). Two asks
+        // do not survive the move.
+        if self.participant_moved_on().await {
+            // A run would test the newer work, not the task judged — and,
+            // red, it would hold the next task's queue until the phase cap.
+            if mode == Some("deterministic") {
+                return serde_json::json!({
+                    "error": "the participant has already moved on to the next task — a \
+                              command run now would test their newer work, not this task's; \
+                              give your verdict from the task's probe results and the \
+                              committed files"
+                })
+                .to_string();
+            }
+            // A re-driven judge whose capture the phase gave up on used to
+            // ask again and wait a whole cap more (ZNQZEB: five dead
+            // minutes, a third full run).
+            if self.earlier_ask_aged_out().await {
+                return serde_json::json!({
+                    "error": "your earlier request for this task aged out undelivered and the \
+                              participant has moved on to the next task; give your verdict \
+                              from the evidence you have (null with a rationale where you \
+                              genuinely cannot assess)"
+                })
+                .to_string();
+            }
+        }
         match mode {
             Some("interactive") => self.register_interactive(args).await,
             Some("deterministic") => self.register_deterministic(args).await,

@@ -245,6 +245,15 @@ pub fn build_tasks(spec: &PersonalSpec, catalog: &[PanelJudge]) -> Vec<BuiltTask
         .collect()
 }
 
+/// What the first task tells the player about code health — the same
+/// paragraph the catalog projects' first tasks carry.
+pub const HEALTH_NOTE: &str = "When a session tracks code health, every check scores it as one \
+     composite: duplication, complexity and dead code in the code you commit, plus your tests \
+     (the share failing) and their coverage once ololo can run them. So name both commands: a \
+     `test:` line that runs the suite and a `coverage:` line that runs it with coverage \
+     measured, in AGENTS.md or README.md (or `test` and `coverage` scripts in package.json). \
+     The task's health bonus is paid on that score.";
+
 /// The brief of task `index`. The single-task form is the description
 /// itself; a map entry gets its own words first, then the project around
 /// it, so the agent reads what to do before it reads why.
@@ -257,6 +266,8 @@ fn brief(spec: &PersonalSpec, map: &[PersonalTaskSpec], index: usize, done: &str
             "\n\nYou are working in an existing codebase: the repository this session runs in. \
              Change what this goal needs and keep everything else working.",
         );
+        out.push_str("\n\n");
+        out.push_str(HEALTH_NOTE);
         out.push_str(&format!(
             "\n\nWhen you are done, write {done} with a short description of what you changed \
              and why (at least 10 words)."
@@ -295,6 +306,11 @@ fn brief(spec: &PersonalSpec, map: &[PersonalTaskSpec], index: usize, done: &str
         "\nYou are working in an existing codebase: the repository this session runs in. \
          Do this task only, and keep everything else working.",
     );
+    // Said once, where the work starts.
+    if index == 0 {
+        out.push_str("\n\n");
+        out.push_str(HEALTH_NOTE);
+    }
     out.push_str(&format!(
         "\n\nWhen this task is done, write {done} with a short description of what you \
          changed and why (at least 10 words)."
@@ -520,6 +536,29 @@ mod tests {
                 .contains("3. Document it — a later task, not part of this one")
         );
         assert!(second.content.contains(".ololo/task-2-done.md"));
+    }
+
+    /// The first task says how code health is scored — tests and coverage
+    /// included, once the commands are named — and only the first.
+    #[test]
+    fn the_first_task_says_how_code_health_is_scored() {
+        let built = build_tasks(&spec(&["Add the endpoint", "Add the button"]), &panel());
+        assert!(
+            built[0].content.contains(HEALTH_NOTE),
+            "{}",
+            built[0].content
+        );
+        assert!(built[0].content.contains("`coverage:`"));
+        assert!(!built[1].content.contains(HEALTH_NOTE));
+        assert!(
+            built[0]
+                .content
+                .trim_end()
+                .ends_with("(at least 10 words)."),
+            "the done-file instruction still ends the brief"
+        );
+        let whole = build_tasks(&spec(&[]), &panel());
+        assert!(whole[0].content.contains(HEALTH_NOTE));
     }
 
     #[test]

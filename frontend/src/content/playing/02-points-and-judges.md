@@ -112,6 +112,7 @@ share failing (none failing scores 100, one in ten 50), and _coverage_ (81%
 scores 72). A check whose code was not tested again counts the last run, and
 the tooltip says which. No test command in your docs or manifests means
 neither dimension — the score is your code's alone, as before, and the
-tooltip says so. The command obeys the same
+tooltip says so. A test command without a coverage command means tests
+but no coverage, and the tooltip says that too. The command obeys the same
 permission rules as checks in `.ololo/settings.json`: one no rule allows does
 not run, and the chart says so.

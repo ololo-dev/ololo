@@ -200,7 +200,18 @@ async fn create_session(
     cookie: &str,
     name: &str,
 ) -> (StatusCode, serde_json::Value) {
-    let (_, project) = create_project(app, cookie, "default-project").await;
+    create_session_on(app, cookie, cookie, name).await
+}
+
+/// A session `cookie`'s user starts on a project `project_cookie`'s user
+/// created — only an admin creates a catalog project.
+async fn create_session_on(
+    app: &axum::Router,
+    project_cookie: &str,
+    cookie: &str,
+    name: &str,
+) -> (StatusCode, serde_json::Value) {
+    let (_, project) = create_project(app, project_cookie, "default-project").await;
     let project_id = project["id"]
         .as_str()
         .expect("project id from create_project");
@@ -446,7 +457,7 @@ async fn admin_can_pause_session_not_owned() {
     let admin_cookie = login(app.clone(), "admin@x.test", "password-12345").await;
 
     let (_, owner_cookie) = register_and_login(app.clone(), "owner@x.test", "password-12345").await;
-    let (_, s) = create_session(&app, &owner_cookie, "owner-session").await;
+    let (_, s) = create_session_on(&app, &admin_cookie, &owner_cookie, "owner-session").await;
     let id = s["id"].as_str().expect("id");
     let sid = Uuid::parse_str(id).expect("uuid");
 

@@ -213,6 +213,24 @@ pub async fn make_user_admin(state: &AppState, user_id: Uuid) {
     am.update(&state.db).await.expect("set is_admin");
 }
 
+/// Hand project `project_id` to `owner` directly in the DB. Only an admin
+/// creates a catalog project, so a test that needs one owned by somebody
+/// else — one from before that rule, or one an admin handed over — creates
+/// it as the admin and gives it away here.
+pub async fn give_project(state: &AppState, project_id: &str, owner: Uuid) {
+    use sea_orm::sea_query::Expr;
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+    use server::entities::projects;
+    let id = Uuid::parse_str(project_id).expect("project id");
+    let res = projects::Entity::update_many()
+        .col_expr(projects::Column::OwnerUserIdFk, Expr::value(owner))
+        .filter(projects::Column::Id.eq(id))
+        .exec(&state.db)
+        .await
+        .expect("give project");
+    assert_eq!(res.rows_affected, 1, "project {project_id} exists");
+}
+
 /// Helper: set `allow_user_project_creation` via PUT /api/admin/settings (admin required).
 pub async fn set_project_creation_setting(app: &axum::Router, admin_cookie: &str, value: &str) {
     let resp = app

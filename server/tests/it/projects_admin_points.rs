@@ -114,42 +114,22 @@ async fn create_project_with_slug(
 use crate::common;
 use crate::common::*;
 
-#[tokio::test]
-async fn create_project_allowed_for_non_admin_when_setting_true() {
-    let state = test_state().await;
-    let app = build_router(state);
-    // Alice is admin; Bob is non-admin.
-    let (_, alice_cookie) =
-        register_and_login(app.clone(), "alice@gate3.test", "password-12345").await;
-    let (_, bob_cookie) = register_and_login(app.clone(), "bob@gate3.test", "password-12345").await;
-
-    // Ensure setting is "true" (it is after migration, but be explicit).
-    set_project_creation_setting(&app, &alice_cookie, "true").await;
-
-    // Bob (non-admin) creates a project — must succeed.
-    let (status, body) = create_project(&app, &bob_cookie, "Bob's Project").await;
-    assert_eq!(
-        status,
-        StatusCode::CREATED,
-        "non-admin should be allowed when setting=true; body={body}"
-    );
-}
-
 // ──────────── Admin cross-ownership tests (Contract: FR-001, FR-002, FR-003, FR-004) ────────────
 
 #[tokio::test]
 async fn admin_can_get_one_not_owned() {
     let state = test_state().await;
-    let app = build_router(state);
+    let app = build_router(state.clone());
     // admin registers first → is_admin = true
     let (_, admin_cookie) = register_and_login(app.clone(), "admin@x.test", "password-12345").await;
     // user_a registers second → not admin
-    let (_, cookie_a) = register_and_login(app.clone(), "usera@x.test", "password-12345").await;
+    let (user_a, _) = register_and_login(app.clone(), "usera@x.test", "password-12345").await;
 
-    // user_a creates a private project
-    let (s, body) = create_project_private(&app, &cookie_a, "user-a-private").await;
+    // a private project of user_a's (only an admin creates catalog projects)
+    let (s, body) = create_project_private(&app, &admin_cookie, "user-a-private").await;
     assert_eq!(s, StatusCode::CREATED, "create: {body}");
     let pid = body["id"].as_str().expect("pid").to_string();
+    give_project(&state, &pid, user_a).await;
 
     // admin can GET it
     let resp = app
@@ -173,13 +153,14 @@ async fn admin_can_get_one_not_owned() {
 #[tokio::test]
 async fn admin_can_patch_one_not_owned() {
     let state = test_state().await;
-    let app = build_router(state);
+    let app = build_router(state.clone());
     let (_, admin_cookie) = register_and_login(app.clone(), "admin@x.test", "password-12345").await;
-    let (_, cookie_a) = register_and_login(app.clone(), "usera@x.test", "password-12345").await;
+    let (user_a, _) = register_and_login(app.clone(), "usera@x.test", "password-12345").await;
 
-    let (s, body) = create_project(&app, &cookie_a, "original-name").await;
+    let (s, body) = create_project(&app, &admin_cookie, "original-name").await;
     assert_eq!(s, StatusCode::CREATED, "create: {body}");
     let pid = body["id"].as_str().expect("pid").to_string();
+    give_project(&state, &pid, user_a).await;
 
     let resp = app
         .oneshot(req(
@@ -202,14 +183,15 @@ async fn admin_can_patch_one_not_owned() {
 #[tokio::test]
 async fn admin_patch_slug_collides_in_owner_namespace() {
     let state = test_state().await;
-    let app = build_router(state);
+    let app = build_router(state.clone());
     let (_, admin_cookie) = register_and_login(app.clone(), "admin@x.test", "password-12345").await;
-    let (_, cookie_a) = register_and_login(app.clone(), "usera@x.test", "password-12345").await;
+    let (user_a, _) = register_and_login(app.clone(), "usera@x.test", "password-12345").await;
 
     // user_a has two projects; admin sets slug "taken-slug" on project-1
-    let (s1, b1) = create_project(&app, &cookie_a, "Project A").await;
+    let (s1, b1) = create_project(&app, &admin_cookie, "Project A").await;
     assert_eq!(s1, StatusCode::CREATED, "create A: {b1}");
     let pid1 = b1["id"].as_str().expect("pid1").to_string();
+    give_project(&state, &pid1, user_a).await;
     let resp = app
         .clone()
         .oneshot(req(
@@ -223,9 +205,10 @@ async fn admin_patch_slug_collides_in_owner_namespace() {
     let (ss, _, sb) = read_body(resp).await;
     assert_eq!(ss, StatusCode::OK, "set slug on project A: {sb}");
 
-    let (s2, b2) = create_project(&app, &cookie_a, "Project B").await;
+    let (s2, b2) = create_project(&app, &admin_cookie, "Project B").await;
     assert_eq!(s2, StatusCode::CREATED, "create B: {b2}");
     let pid2 = b2["id"].as_str().expect("pid2").to_string();
+    give_project(&state, &pid2, user_a).await;
 
     // admin tries to set project B's slug to "taken-slug" (same owner namespace) → 409
     let resp = app
@@ -249,15 +232,16 @@ async fn admin_patch_slug_collides_in_owner_namespace() {
 #[tokio::test]
 async fn admin_patch_slug_no_collision_across_owner_namespace() {
     let state = test_state().await;
-    let app = build_router(state);
+    let app = build_router(state.clone());
     let (_, admin_cookie) = register_and_login(app.clone(), "admin@x.test", "password-12345").await;
-    let (_, cookie_a) = register_and_login(app.clone(), "usera@x.test", "password-12345").await;
-    let (_, cookie_b) = register_and_login(app.clone(), "userb@x.test", "password-12345").await;
+    let (user_a, _) = register_and_login(app.clone(), "usera@x.test", "password-12345").await;
+    let (user_b, _) = register_and_login(app.clone(), "userb@x.test", "password-12345").await;
 
     // user_a has slug "shared-slug" — set via admin on a private project
-    let (sa, ba) = create_project(&app, &cookie_a, "A Project").await;
+    let (sa, ba) = create_project(&app, &admin_cookie, "A Project").await;
     assert_eq!(sa, StatusCode::CREATED, "create A: {ba}");
     let pid_a = ba["id"].as_str().expect("pid_a").to_string();
+    give_project(&state, &pid_a, user_a).await;
     // make private first (avoids the public-slug unique constraint), then set slug
     let resp = app
         .clone()
@@ -273,9 +257,10 @@ async fn admin_patch_slug_no_collision_across_owner_namespace() {
     assert_eq!(ss, StatusCode::OK, "set slug for user_a: {sb}");
 
     // user_b creates a project; admin makes it private and sets its slug to "shared-slug" (different owner namespace) → 200
-    let (sc, bc) = create_project(&app, &cookie_b, "B Project").await;
+    let (sc, bc) = create_project(&app, &admin_cookie, "B Project").await;
     assert_eq!(sc, StatusCode::CREATED, "create B: {bc}");
     let pid_b = bc["id"].as_str().expect("pid_b").to_string();
+    give_project(&state, &pid_b, user_b).await;
 
     let resp = app
         .oneshot(req(
@@ -298,13 +283,14 @@ async fn admin_patch_slug_no_collision_across_owner_namespace() {
 #[tokio::test]
 async fn admin_can_delete_one_not_owned() {
     let state = test_state().await;
-    let app = build_router(state);
+    let app = build_router(state.clone());
     let (_, admin_cookie) = register_and_login(app.clone(), "admin@x.test", "password-12345").await;
-    let (_, cookie_a) = register_and_login(app.clone(), "usera@x.test", "password-12345").await;
+    let (user_a, _) = register_and_login(app.clone(), "usera@x.test", "password-12345").await;
 
-    let (s, body) = create_project(&app, &cookie_a, "to-delete").await;
+    let (s, body) = create_project(&app, &admin_cookie, "to-delete").await;
     assert_eq!(s, StatusCode::CREATED, "create: {body}");
     let pid = body["id"].as_str().expect("pid").to_string();
+    give_project(&state, &pid, user_a).await;
 
     let resp = app
         .clone()

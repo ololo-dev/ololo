@@ -104,12 +104,22 @@ async fn register_and_login(app: axum::Router, email: &str) -> (Uuid, String) {
 }
 
 async fn create_session(app: &axum::Router, cookie: &str) -> (String, String) {
+    create_session_on(app, cookie, cookie).await
+}
+
+/// A session `cookie`'s user starts on a project `project_cookie`'s user
+/// created — only an admin creates a catalog project.
+async fn create_session_on(
+    app: &axum::Router,
+    project_cookie: &str,
+    cookie: &str,
+) -> (String, String) {
     let resp = app
         .clone()
         .oneshot(req_with_cookie(
             Method::POST,
             "/api/projects",
-            cookie,
+            project_cookie,
             Some(serde_json::json!({ "name": format!("proj-{}", Uuid::new_v4()) })),
         ))
         .await
@@ -436,13 +446,11 @@ async fn get_metadata_403_non_admin() {
     let app = build_router(state.clone());
 
     // First registered user becomes admin automatically; register them first.
-    let (admin_id, cookie_admin) =
-        register_and_login(app.clone(), "admin-meta-403-first@x.test").await;
-    let _ = (admin_id, cookie_admin);
+    let (_, cookie_admin) = register_and_login(app.clone(), "admin-meta-403-first@x.test").await;
 
-    // Second user is non-admin.
+    // Second user is non-admin, and starts a session on the admin's project.
     let (_, cookie_user) = register_and_login(app.clone(), "nonadmin-meta-403@x.test").await;
-    let (_, join_code) = create_session(&app, &cookie_user).await;
+    let (_, join_code) = create_session_on(&app, &cookie_admin, &cookie_user).await;
 
     let resp = app
         .oneshot(req_with_cookie(

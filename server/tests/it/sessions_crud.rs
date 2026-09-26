@@ -51,6 +51,15 @@ async fn create_session(
     let project_id = project["id"]
         .as_str()
         .expect("project id from create_project");
+    create_session_in(app, cookie, project_id, name).await
+}
+
+async fn create_session_in(
+    app: &axum::Router,
+    cookie: &str,
+    project_id: &str,
+    name: &str,
+) -> (StatusCode, serde_json::Value) {
     let resp = app
         .clone()
         .oneshot(req(
@@ -113,12 +122,16 @@ async fn create_session_rejects_long_name() {
 #[tokio::test]
 async fn list_sessions_returns_only_user_visible() {
     let state = test_state().await;
-    let app = build_router(state);
+    let app = build_router(state.clone());
     let (_, cookie_a) = register_and_login(app.clone(), "alice@x.test", "password-12345").await;
-    let (_, cookie_b) = register_and_login(app.clone(), "bob@x.test", "password-12345").await;
+    let (bob, cookie_b) = register_and_login(app.clone(), "bob@x.test", "password-12345").await;
 
     let (_, s1) = create_session(&app, &cookie_a, "alice-1").await;
-    let (_, _s2) = create_session(&app, &cookie_b, "bob-1").await;
+    // Bob's own project — only an admin creates one, so it is handed over.
+    let (_, project) = create_project(&app, &cookie_a, "bob-project").await;
+    let bob_project = project["id"].as_str().expect("project id").to_string();
+    give_project(&state, &bob_project, bob).await;
+    let (_, _s2) = create_session_in(&app, &cookie_b, &bob_project, "bob-1").await;
 
     let resp = app
         .clone()

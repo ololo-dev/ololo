@@ -58,11 +58,12 @@
               ></div>
             </div>
             <span class="text-sm text-brand-text">
-              Allow non-admin users to create projects
+              Allow users to create their own projects
             </span>
           </label>
           <p class="mt-1 text-xs text-brand-muted">
-            When disabled, only administrators can create new projects.
+            Personal projects at /projects/new, played in each user's own repository. Catalog
+            challenge projects stay admin-only. When disabled, only administrators create projects.
           </p>
           <input type="hidden" name="allow_creation" value={allowProjectCreation ? 'true' : 'false'} />
         </div>

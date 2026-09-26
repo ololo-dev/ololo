@@ -2,7 +2,6 @@ use super::common::*;
 use crate::api::intervals::{
     ExportIntervals, IntervalsResp, resolve_intervals, validate_resolved_intervals,
 };
-use crate::api::settings::is_project_creation_allowed;
 use crate::auth::jwt::AccessClaims;
 use crate::state::AppState;
 use arena_core::entities::{projects, sessions, tasks, users};
@@ -21,13 +20,15 @@ pub async fn post_create(
     let user_id = parse_user_id(&claims)?;
     let name = validate_name(&req.name)?;
 
-    // FR-004–FR-009: gate non-admin users when allow_user_project_creation ≠ "true".
-    // Admin check: DB lookup (is_admin column); no JWT claim for is_admin in this codebase.
+    // A catalog (challenge) project is an admin's: everyone else creates a
+    // personal project (`/api/personal-projects`), which is what the
+    // `allow_user_project_creation` setting opens to users. Admin check: DB
+    // lookup (is_admin column); no JWT claim for is_admin in this codebase.
     let user = users::Entity::find_by_id(user_id)
         .one(&state.db)
         .await?
         .ok_or(ProjectError::Forbidden)?;
-    if !user.is_admin && !is_project_creation_allowed(&state.db).await? {
+    if !user.is_admin {
         return Err(ProjectError::CreationRestricted);
     }
 

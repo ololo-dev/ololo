@@ -474,4 +474,29 @@ async fn create_project_allowed_for_admin_when_setting_false() {
     );
 }
 
-// AC-008: Non-admin POST /api/projects returns 201 when setting is "true".
+/// Opening project creation to users opens their own projects
+/// (`/api/personal-projects`), never the catalog: a non-admin's
+/// POST /api/projects is refused with the setting on too.
+#[tokio::test]
+async fn create_project_stays_admin_only_when_users_may_create() {
+    let state = test_state().await;
+    let app = build_router(state);
+    let (_, alice_cookie) =
+        register_and_login(app.clone(), "alice@gate3.test", "password-12345").await;
+    let (_, bob_cookie) = register_and_login(app.clone(), "bob@gate3.test", "password-12345").await;
+
+    set_project_creation_setting(&app, &alice_cookie, "true").await;
+
+    let (status, body) = create_project(&app, &bob_cookie, "Bob's Challenge").await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "a catalog project is an admin's; body={body}"
+    );
+    let (status, body) = create_project(&app, &alice_cookie, "Alice's Challenge").await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "admins still create; body={body}"
+    );
+}

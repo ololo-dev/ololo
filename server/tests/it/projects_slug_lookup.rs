@@ -387,15 +387,16 @@ async fn duplicate_slug_same_owner_409() {
 #[tokio::test]
 async fn non_admin_patch_slug_forbidden_403() {
     let state = test_state().await;
-    let app = build_router(state);
+    let app = build_router(state.clone());
     // alice is first registered → admin; bob is second → not admin
-    let (_, _cookie_a) = register_and_login(app.clone(), "alice@x.test", "password-12345").await;
-    let (_, cookie_b) = register_and_login(app.clone(), "bob@x.test", "password-12345").await;
+    let (_, cookie_a) = register_and_login(app.clone(), "alice@x.test", "password-12345").await;
+    let (bob, cookie_b) = register_and_login(app.clone(), "bob@x.test", "password-12345").await;
 
-    // Bob creates his own project
-    let (cs, cb) = create_project(&app, &cookie_b, "bob-proj").await;
+    // Bob's own project — only an admin creates one, so alice hands it over
+    let (cs, cb) = create_project(&app, &cookie_a, "bob-proj").await;
     assert_eq!(cs, StatusCode::CREATED, "create: {cb}");
     let pid = cb["id"].as_str().expect("pid").to_string();
+    give_project(&state, &pid, bob).await;
 
     // Bob (non-admin) tries to set a slug — should be forbidden
     let resp = app

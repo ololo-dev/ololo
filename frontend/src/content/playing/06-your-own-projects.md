@@ -28,6 +28,12 @@ measured when it ends. Leave the map empty and the whole description is one
 task. **Suggest tasks** drafts a map from your description; you see it before
 it replaces anything.
 
+The quickest way in is **Play your own work** at the top of the projects on
+the home page: describe the work and ololo drafts the whole project — a name
+and a map — with the default judges, session length and visibility. **Start
+project** creates it as it is and gives you the command to start it; **Edit
+project** opens it in this form first.
+
 Pick the judges — correctness, code quality and tests are on by default — and
 the session length. They review every task, unless a task chooses its own:
 **Choose judges** on a task gives it a panel of its own, say architecture for

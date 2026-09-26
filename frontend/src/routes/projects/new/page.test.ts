@@ -1,5 +1,7 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import { render, screen } from "@testing-library/svelte";
+import { tick } from "svelte";
+import { saveProjectDraft } from "$lib/project-draft";
 import NewProjectPage from "./+page.svelte";
 import type { PersonalProjectOptions } from "$lib/api";
 
@@ -47,6 +49,7 @@ const baseData = {
   user: null,
   options,
   initial: null,
+  draftRequested: false,
 };
 
 describe("routes/projects/new/+page.svelte", () => {
@@ -88,5 +91,49 @@ describe("routes/projects/new/+page.svelte", () => {
     );
     expect((screen.getByTestId("pp-name") as HTMLInputElement).value).toBe("CSV export");
     expect(screen.getAllByTestId("pp-task-title")).toHaveLength(1);
+  });
+
+  describe("a project drafted on the landing", () => {
+    afterEach(() => sessionStorage.clear());
+
+    const draft = {
+      name: "CSV export for reports",
+      description: "Add a CSV export to the reports page.",
+      tasks: [
+        { title: "Add the export endpoint", description: "GET /reports.csv returns the rows." },
+        { title: "Add the download button", description: "" },
+      ],
+      judges: ["correctness"],
+      session_duration_secs: 0,
+      public: true,
+      repo_url: "",
+      repo_ref: "",
+    };
+
+    it("fills the form from the draft this tab kept", async () => {
+      saveProjectDraft(draft);
+      render(NewProjectPage, { data: { ...baseData, draftRequested: true }, form: null });
+      await tick();
+      expect((screen.getByTestId("pp-name") as HTMLInputElement).value).toBe(
+        "CSV export for reports",
+      );
+      expect((screen.getByTestId("pp-description") as HTMLTextAreaElement).value).toBe(
+        "Add a CSV export to the reports page.",
+      );
+      const titles = screen.getAllByTestId("pp-task-title") as HTMLInputElement[];
+      expect(titles.map((t) => t.value)).toEqual([
+        "Add the export endpoint",
+        "Add the download button",
+      ]);
+      // A draft without a length gets the instance's default, not zero.
+      expect((screen.getByTestId("pp-duration") as HTMLSelectElement).value).toBe("7200");
+    });
+
+    it("ignores a kept draft unless the page was opened for it", async () => {
+      saveProjectDraft(draft);
+      render(NewProjectPage, { data: baseData, form: null });
+      await tick();
+      expect((screen.getByTestId("pp-name") as HTMLInputElement).value).toBe("");
+    });
   });
 });

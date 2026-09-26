@@ -57,6 +57,22 @@ pub async fn get_public_plans(State(state): State<AppState>) -> Response {
     axum::Json(body).into_response()
 }
 
+/// `GET /api/public/project-creation` — whether signed-in users may create
+/// their own projects here. The landing offers its "describe your work"
+/// block to visitors only when signing up can lead to a project; a DB
+/// hiccup reads as closed.
+#[derive(Serialize)]
+pub struct ProjectCreationResponse {
+    pub allowed: bool,
+}
+
+pub async fn get_project_creation(State(state): State<AppState>) -> Response {
+    let allowed = crate::api::settings::is_project_creation_allowed(&state.db)
+        .await
+        .unwrap_or(false);
+    axum::Json(ProjectCreationResponse { allowed }).into_response()
+}
+
 /// One live (lobby or running) session of a public project, as the landing
 /// page shows it. The join code doubles as the session-page URL (`/s/<code>`),
 /// which is already public via `GET /api/sessions/by-code/:join_code`.

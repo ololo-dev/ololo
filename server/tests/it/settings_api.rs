@@ -829,3 +829,40 @@ async fn settings_put_health_keys_validate_and_persist() {
         arena_core::protocol::Thresholds::default()
     );
 }
+
+/// The landing reads whether users may create projects without signing in:
+/// its "describe your work" block is offered to a visitor only when signing
+/// up can lead to a project.
+#[tokio::test]
+async fn project_creation_is_readable_without_signing_in() {
+    let app = build_router(test_state().await);
+    let (_, cookie) =
+        register_and_login(app.clone(), "admin@settings-public.test", "password-12345").await;
+    for (value, allowed) in [("false", false), ("true", true)] {
+        let (status, body) = read_body(
+            app.clone()
+                .oneshot(put_settings_req(
+                    &cookie,
+                    "allow_user_project_creation",
+                    value,
+                ))
+                .await
+                .expect("put resp"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "PUT {value}: {body}");
+
+        let anonymous = Request::builder()
+            .method(Method::GET)
+            .uri("/api/public/project-creation")
+            .body(Body::empty())
+            .expect("request");
+        let (status, body) = read_body(app.clone().oneshot(anonymous).await.expect("resp")).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            body,
+            serde_json::json!({ "allowed": allowed }),
+            "after PUT {value}"
+        );
+    }
+}

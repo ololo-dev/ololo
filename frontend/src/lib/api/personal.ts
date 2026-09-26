@@ -46,16 +46,41 @@ export function updatePersonalProject(
   });
 }
 
+/** A project drafted from a description: a name for the work, when the
+ *  model gave one, and its navigation map. */
+export interface SuggestedProject {
+  name: string | null;
+  tasks: PersonalTask[];
+}
+
+/** Draft a project for a description; nothing is stored. */
+export async function suggestPersonalProject(
+  description: string,
+  name: string | undefined,
+  opts: { fetch?: FetchLike } = {},
+): Promise<SuggestedProject> {
+  const data = await request<{ name?: string | null; tasks: PersonalTask[] }>(
+    "/api/personal-projects/suggest-tasks",
+    { method: "POST", body: { description, name }, fetch: opts.fetch },
+  );
+  return { name: data.name ?? null, tasks: data.tasks };
+}
+
 /** A draft navigation map for a description; nothing is stored. */
 export async function suggestPersonalTasks(
   description: string,
   name: string | undefined,
   opts: { fetch?: FetchLike } = {},
 ): Promise<PersonalTask[]> {
-  const data = await request<{ tasks: PersonalTask[] }>("/api/personal-projects/suggest-tasks", {
-    method: "POST",
-    body: { description, name },
+  return (await suggestPersonalProject(description, name, opts)).tasks;
+}
+
+/** Whether signed-in users may create their own projects on this instance
+ *  (no auth needed): the landing offers a visitor its "describe your work"
+ *  block only when signing up can lead to a project. */
+export async function getProjectCreationOpen(opts: { fetch?: FetchLike } = {}): Promise<boolean> {
+  const data = await request<{ allowed: boolean }>("/api/public/project-creation", {
     fetch: opts.fetch,
   });
-  return data.tasks;
+  return data.allowed === true;
 }

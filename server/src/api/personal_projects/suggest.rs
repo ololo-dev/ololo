@@ -1,6 +1,7 @@
 //! `POST /api/personal-projects/suggest-tasks` — a draft navigation map for
-//! a description, from the `project_ai` model. Nothing is stored: the form
-//! shows the draft and the user keeps, edits or discards it.
+//! a description, and a name for the work, from the `project_ai` model.
+//! Nothing is stored: the form (or the landing's popup) shows the draft and
+//! the user keeps, edits or discards it.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
@@ -32,7 +33,19 @@ pub struct SuggestedTask {
 
 #[derive(Debug, Serialize)]
 pub struct SuggestResp {
+    /// A name for the work, when the model gave one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     pub tasks: Vec<SuggestedTask>,
+}
+
+/// The shape the prompt asks for.
+#[derive(Debug, Deserialize)]
+struct Draft {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(alias = "steps")]
+    tasks: Vec<SuggestedTask>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -77,9 +90,10 @@ crate::api::error::impl_api_error!(SuggestError {
 
 /// Hardcoded; the user's words go in the user message only.
 const SYSTEM: &str = "\
-You plan work on an EXISTING software project. Split the task the user describes into a \
-navigation map: 2 to 6 steps, in the order a developer would do them.\n\
+You plan work on an EXISTING software project. Name the work the user describes and split it \
+into a navigation map: 2 to 6 steps, in the order a developer would do them.\n\
 Rules:\n\
+- \"name\": what the work is, as a title of 2-6 words\n\
 - Every step is one coherent, reviewable change that leaves the code working.\n\
 - Do not add setup, research, review or release steps unless the task asks for them.\n\
 - A small task may need only 2 steps; never pad the map.\n\
@@ -87,8 +101,8 @@ Rules:\n\
   - \"title\": imperative, 3-10 words\n\
   - \"description\": 1-2 sentences saying what is true when the step is finished\n\
 - No markdown, no code blocks, no commands in the fields.\n\
-Return ONLY a valid JSON array — no explanation, no preamble, no code fence.\n\
-Example: [{\"title\":\"...\",\"description\":\"...\"}]";
+Return ONLY a valid JSON object — no explanation, no preamble, no code fence.\n\
+Example: {\"name\":\"...\",\"tasks\":[{\"title\":\"...\",\"description\":\"...\"}]}";
 
 /// Suggestions per user per window: each one is a paid model call.
 const MAX_PER_WINDOW: usize = 10;
@@ -113,23 +127,48 @@ fn allow(user_id: Uuid, now: Instant) -> bool {
     true
 }
 
-/// Parse the model's answer into at most [`personal::MAX_TASKS`] steps,
-/// dropping entries with no title and trimming overlong fields.
-pub(super) fn parse(raw: &str) -> Result<Vec<SuggestedTask>, SuggestError> {
+/// The text between the first `open` and the last `close`: some models wrap
+/// the JSON in prose despite the prompt.
+fn outermost(body: &str, open: char, close: char) -> Option<&str> {
+    match (body.find(open), body.rfind(close)) {
+        (Some(start), Some(end)) if end > start => Some(&body[start..=end]),
+        _ => None,
+    }
+}
+
+/// Parse the model's answer into a name, when it gave a usable one, and at
+/// most [`personal::MAX_TASKS`] steps, dropping entries with no title and
+/// trimming overlong fields. A bare array of steps — the shape the prompt
+/// asked for before it named the work — still reads, without a name.
+pub(super) fn parse(raw: &str) -> Result<(Option<String>, Vec<SuggestedTask>), SuggestError> {
     let s = raw.trim();
     let body = s
         .strip_prefix("```json")
         .or_else(|| s.strip_prefix("```"))
         .map(|rest| rest.trim_end_matches("```").trim())
         .unwrap_or(s);
-    // Some models wrap the array in prose despite the prompt: take the
-    // outermost brackets.
-    let body = match (body.find('['), body.rfind(']')) {
-        (Some(start), Some(end)) if end > start => &body[start..=end],
-        _ => body,
+    let (name, drafts) = match outermost(body, '{', '}')
+        .and_then(|object| serde_json::from_str::<Draft>(object).ok())
+    {
+        Some(draft) => (draft.name, draft.tasks),
+        None => {
+            let array = outermost(body, '[', ']').unwrap_or(body);
+            let tasks: Vec<SuggestedTask> =
+                serde_json::from_str(array).map_err(|_| SuggestError::AiParseError)?;
+            (None, tasks)
+        }
     };
-    let drafts: Vec<SuggestedTask> =
-        serde_json::from_str(body).map_err(|_| SuggestError::AiParseError)?;
+    let name = name
+        .map(|n| {
+            n.trim()
+                .trim_matches('"')
+                .trim_end_matches('.')
+                .trim()
+                .chars()
+                .take(personal::MAX_NAME_CHARS)
+                .collect::<String>()
+        })
+        .filter(|n| !n.is_empty());
     let tasks: Vec<SuggestedTask> = drafts
         .into_iter()
         .filter_map(|t| {
@@ -154,7 +193,7 @@ pub(super) fn parse(raw: &str) -> Result<Vec<SuggestedTask>, SuggestError> {
     if tasks.is_empty() {
         return Err(SuggestError::AiParseError);
     }
-    Ok(tasks)
+    Ok((name, tasks))
 }
 
 pub async fn suggest_tasks(
@@ -199,9 +238,8 @@ pub async fn suggest_tasks(
         Duration::from_secs(120),
     )
     .await?;
-    Ok(Json(SuggestResp {
-        tasks: parse(&raw)?,
-    }))
+    let (name, tasks) = parse(&raw)?;
+    Ok(Json(SuggestResp { name, tasks }))
 }
 
 #[cfg(test)]
@@ -212,7 +250,8 @@ mod tests {
     fn parses_a_fenced_array_and_drops_empty_titles() {
         let raw = "```json\n[{\"title\":\" Add the endpoint \",\"description\":\"GET /x.csv\"},\
                    {\"title\":\"  \"},{\"title\":\"Add the button\"}]\n```";
-        let tasks = parse(raw).expect("parses");
+        let (name, tasks) = parse(raw).expect("parses");
+        assert_eq!(name, None, "a bare array names nothing");
         assert_eq!(
             tasks,
             [
@@ -234,15 +273,43 @@ mod tests {
             .map(|i| format!("{{\"title\":\"Step {i}\",\"description\":\"d\"}}"))
             .collect();
         let raw = format!("Sure! Here is the plan:\n[{}]\nGood luck.", many.join(","));
-        let tasks = parse(&raw).expect("parses");
+        let (_, tasks) = parse(&raw).expect("parses");
         assert_eq!(tasks.len(), personal::MAX_TASKS);
         assert_eq!(tasks[0].title, "Step 0");
+    }
+
+    #[test]
+    fn the_object_answer_names_the_work() {
+        let raw = "Here you go: {\"name\": \" \\\"CSV export for reports.\\\" \", \
+                   \"tasks\": [{\"title\":\"Add the endpoint\",\"description\":\"GET /x.csv\"}]}";
+        let (name, tasks) = parse(raw).expect("parses");
+        assert_eq!(name.as_deref(), Some("CSV export for reports"));
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].title, "Add the endpoint");
+
+        let long = format!(
+            "{{\"name\":\"{}\",\"steps\":[{{\"title\":\"Only step\"}}]}}",
+            "n".repeat(personal::MAX_NAME_CHARS + 20)
+        );
+        let (name, tasks) = parse(&long).expect("steps is read as tasks");
+        assert_eq!(
+            name.map(|n| n.chars().count()),
+            Some(personal::MAX_NAME_CHARS)
+        );
+        assert_eq!(tasks[0].title, "Only step");
+
+        let (name, _) = parse("{\"name\":\"  \",\"tasks\":[{\"title\":\"A\"}]}").expect("parses");
+        assert_eq!(name, None, "a blank name is no name");
     }
 
     #[test]
     fn an_answer_without_steps_is_a_parse_error() {
         assert!(matches!(parse("[]"), Err(SuggestError::AiParseError)));
         assert!(matches!(parse("no idea"), Err(SuggestError::AiParseError)));
+        assert!(matches!(
+            parse("{\"name\":\"X\",\"tasks\":[]}"),
+            Err(SuggestError::AiParseError)
+        ));
     }
 
     #[test]

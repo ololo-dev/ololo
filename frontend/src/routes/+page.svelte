@@ -4,6 +4,7 @@
   import HowItWorksChart from '$lib/components/HowItWorksChart.svelte'
   import ProjectCard from '$lib/components/projects/ProjectCard.svelte'
   import StartSessionPopup from '$lib/components/projects/StartSessionPopup.svelte'
+  import ProjectFromDescription from '$lib/components/projects/ProjectFromDescription.svelte'
   import { SITE_URL, SITE_NAME, DEFAULT_DESCRIPTION, DEFAULT_OG_IMAGE, pageTitle } from '$lib/seo'
   import { getContext, onMount } from 'svelte'
   import { type Project, type PublicActiveSession } from '$lib/api'
@@ -57,6 +58,13 @@
     if (groups.has('')) ordered.push({ category: null, projects: groups.get('')! })
     return ordered
   })
+
+  // "Play your own work" tops the projects for whoever can end up with a
+  // project of their own: a signed-in user allowed to create one, or a
+  // visitor on an instance where signing up allows it.
+  const ownProjectOpen = $derived(
+    data.isAdmin || data.allowProjectCreation || (!data.isAuthenticated && data.projectCreationOpen)
+  )
 
   // "Start session" popup shared by the landing's project cards.
   let startSlug = $state<string | null>(null)
@@ -370,6 +378,13 @@
         </a>
       {/if}
     </div>
+
+    {#if ownProjectOpen}
+      <ProjectFromDescription
+        isAuthenticated={data.isAuthenticated}
+        onSignIn={() => auth.open('register')}
+      />
+    {/if}
 
     {#if sluggedProjects.length > 0}
       <!-- Same cards as /projects (shared ProjectCard), grouped by category:

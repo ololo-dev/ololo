@@ -13,7 +13,9 @@ import {
 } from "$lib/server/personal-project-form";
 
 // A new personal project: the user's own work, played in their own
-// repository. `?from=<project id>` starts from one of theirs (duplicate).
+// repository. `?from=<project id>` starts from one of theirs (duplicate);
+// `?draft=1` from the one the landing drafted, which the page reads from
+// this tab's storage once it is in the browser.
 export const load: PageServerLoad = async ({ locals, fetch, parent, url }) => {
   if (!locals.isAuthenticated) {
     throw redirect(303, `/login?next=${encodeURIComponent(url.pathname + url.search)}`);
@@ -43,7 +45,7 @@ export const load: PageServerLoad = async ({ locals, fetch, parent, url }) => {
       // Not theirs, or gone: start from an empty form.
     }
   }
-  return { options, initial };
+  return { options, initial, draftRequested: url.searchParams.has("draft") };
 };
 
 export const actions: Actions = {

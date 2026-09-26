@@ -5,25 +5,33 @@ import {
   createSession,
   getProjectCategories,
   listActiveSessions,
+  getProjectCreationOpen,
   ApiError,
 } from "$lib/api";
 
-export const load: PageServerLoad = async ({ fetch }) => {
+export const load: PageServerLoad = async ({ fetch, locals }) => {
   // Fetch projects for both authenticated and unauthenticated visitors.
   // Unauthenticated callers receive only public projects (backend returns 200
   // via Option<AccessClaims>); authenticated non-admins see own + public.
   // Catches remain for transient backend errors — the landing renders
   // without either section rather than 500ing.
-  const [projects, activeSessions, categories] = await Promise.all([
+  const [projects, activeSessions, categories, projectCreationOpen] = await Promise.all([
     listProjects(false, { fetch }).catch(() => []),
     listActiveSessions({ fetch }).catch(() => []),
     getProjectCategories({ fetch }).catch(() => []),
+    // Whether signing up can lead to a project of one's own: what a
+    // visitor's "Play your own work" block depends on. A signed-in
+    // visitor's own rights come with the layout.
+    locals.isAuthenticated
+      ? Promise.resolve(false)
+      : getProjectCreationOpen({ fetch }).catch(() => false),
   ]);
   return {
     // Personal projects are their owners' own work, not the catalog.
     projects: projects.filter((p) => p.kind !== "personal"),
     activeSessions,
     categories,
+    projectCreationOpen,
   };
 };
 

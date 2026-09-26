@@ -1,8 +1,24 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import type { PageData, ActionData } from "./$types";
   import PersonalProjectForm from "$lib/components/projects/PersonalProjectForm.svelte";
+  import { readProjectDraft, type ProjectDraft } from "$lib/project-draft";
 
   let { data, form }: { data: PageData; form: ActionData } = $props();
+
+  // The project the landing drafted ("Edit project"), handed over in this
+  // tab's storage — the server cannot see it, so the form starts empty and
+  // is rebuilt around it once the page is in the browser.
+  let draft = $state<ProjectDraft | null>(null);
+  onMount(() => {
+    if (data.draftRequested && !form) draft = readProjectDraft();
+  });
+  const fromDraft = $derived(
+    draft && {
+      ...draft,
+      session_duration_secs: draft.session_duration_secs || data.options.session.default_secs,
+    },
+  );
 </script>
 
 <svelte:head>
@@ -27,12 +43,14 @@
       </p>
     {/if}
 
-    <PersonalProjectForm
-      options={data.options}
-      initial={form?.values ?? data.initial}
-      submitLabel="Create project"
-      cancelHref="/projects"
-      error={form ?? null}
-    />
+    {#key draft}
+      <PersonalProjectForm
+        options={data.options}
+        initial={form?.values ?? fromDraft ?? data.initial}
+        submitLabel="Create project"
+        cancelHref="/projects"
+        error={form ?? null}
+      />
+    {/key}
   </div>
 </div>

@@ -104,6 +104,10 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/api/public/judges", get(api::public::get_public_judges))
         .route(
+            "/api/public/project-creation",
+            get(api::public::get_project_creation),
+        )
+        .route(
             "/api/sessions",
             get(api::sessions::get_list).post(api::sessions::post_create),
         )

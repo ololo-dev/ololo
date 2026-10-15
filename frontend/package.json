@@ -21,6 +21,7 @@
 		"isomorphic-dompurify": "^2.36.0",
 		"lucide-svelte": "0.408.0",
 		"marked": "^14.1.4",
+		"shiki": "^4.5.0",
 		"uplot": "^1.6.32",
 		"vaul-svelte": "^0.3.2"
 	},

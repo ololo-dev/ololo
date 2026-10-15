@@ -470,6 +470,14 @@ pub fn build_router(state: AppState) -> Router {
             get(api::players::get_player_history),
         )
         .route(
+            "/api/sessions/:code/players/:player_id/files",
+            get(api::players::get_player_files),
+        )
+        .route(
+            "/api/sessions/:code/players/:player_id/files/content",
+            get(api::players::get_player_file),
+        )
+        .route(
             "/api/sessions/:code/players/:player_id/memory",
             get(api::players::get_player_memory),
         )

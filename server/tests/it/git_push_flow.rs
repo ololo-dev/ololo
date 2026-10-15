@@ -325,6 +325,48 @@ async fn git_push_round_trip_lands_in_history() {
     assert_eq!(t1_files[0]["path"].as_str().unwrap(), "a.txt");
     assert_eq!(t1_files[0]["status"].as_str().unwrap(), "added");
 
+    // 8. The Files tab: HEAD's tree, and a file's text at HEAD or pinned to
+    //    an older commit.
+    let get = |uri: String| {
+        let app = app.clone();
+        let cookie = cookie.clone();
+        async move {
+            let resp = app
+                .oneshot(
+                    Request::builder()
+                        .method(Method::GET)
+                        .uri(uri)
+                        .header(header::COOKIE, &cookie)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            read_json(resp).await
+        }
+    };
+    let files_uri = format!("/api/sessions/{join_code}/players/{player_id}/files");
+    let (sc, body) = get(files_uri.clone()).await;
+    assert_eq!(sc, StatusCode::OK, "{body}");
+    assert_eq!(body["head"]["sha"], commits[0]["sha"]);
+    assert_eq!(body["head"]["subject"], "feat(t2): update");
+    assert_eq!(
+        body["files"],
+        serde_json::json!([{ "path": "a.txt", "size": 3 }])
+    );
+
+    let (sc, body) = get(format!("{files_uri}/content?path=a.txt")).await;
+    assert_eq!(sc, StatusCode::OK, "{body}");
+    assert_eq!(body["content"], "v2\n");
+    let t1_sha = commits[1]["sha"].as_str().unwrap();
+    let (_, body) = get(format!("{files_uri}/content?path=a.txt&sha={t1_sha}")).await;
+    assert_eq!(body["content"], "v1\n", "pinned to the first commit");
+
+    let (sc, _) = get(format!("{files_uri}/content?path=missing.txt")).await;
+    assert_eq!(sc, StatusCode::NOT_FOUND);
+    let (sc, _) = get(format!("{files_uri}/content?path=a.txt&sha=HEAD~1")).await;
+    assert_eq!(sc, StatusCode::NOT_FOUND, "rev syntax is refused");
+
     unsafe {
         std::env::remove_var("OLOLO_GIT_REPOS_DIR");
     }

@@ -1,9 +1,7 @@
 use crate::auth::jwt::AccessClaims;
 use crate::state::AppState;
-use arena_core::entities::sessions;
 use axum::Json;
 use axum::extract::{Path, State};
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use std::path::Path as FsPath;
 
 use super::error::PlayerError;
@@ -36,27 +34,10 @@ pub async fn get_player_history(
     claims: AccessClaims,
 ) -> Result<Json<PlayerHistoryResponse>, PlayerError> {
     let user_id = claims.user_id().map_err(|_| PlayerError::Forbidden)?;
-
-    let session = sessions::Entity::find()
-        .filter(sessions::Column::JoinCode.eq(code.to_uppercase()))
-        .one(&state.db)
-        .await
-        .map_err(|e| PlayerError::Internal(e.to_string()))?
-        .ok_or(PlayerError::NotFound)?;
-
-    let player = super::find_player_by_param(&state.db, session.id, &player_param)
-        .await
-        .map_err(|e| PlayerError::Internal(e.to_string()))?
-        .ok_or(PlayerError::NotFound)?;
-    let player_id = player.id;
     // Owner-only, except admins may view any player's history.
-    if player.user_id_fk != Some(user_id)
-        && !crate::auth::is_user_admin(&state.db, user_id)
-            .await
-            .map_err(|e| PlayerError::Internal(e.to_string()))?
-    {
-        return Err(PlayerError::Forbidden);
-    }
+    let (session, player) =
+        super::authorize_player_inspect(&state.db, &code, &player_param, user_id).await?;
+    let player_id = player.id;
 
     // Resolve the bare repo path.
     let Some(base) = crate::git_store::repos_base_dir() else {

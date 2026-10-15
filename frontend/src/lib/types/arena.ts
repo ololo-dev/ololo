@@ -486,6 +486,23 @@ export interface PlayerHistoryResponse {
   commits: PlayerHistoryCommit[];
 }
 
+/** `GET …/players/:id/files` — the player repo's tree at HEAD. */
+export interface PlayerFilesResponse {
+  /** `null` before the first push. */
+  head: { sha: string; subject: string; author_time: string } | null;
+  files: { path: string; size: number }[];
+  truncated: boolean;
+}
+
+/** `GET …/players/:id/files/content?path=&sha=` — one file at a commit. */
+export interface PlayerFileContent {
+  path: string;
+  size: number;
+  binary: boolean;
+  too_large: boolean;
+  content: string | null;
+}
+
 export interface PlayerDeltaPayload {
   seq: number;
   task_id: string;

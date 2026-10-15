@@ -94,14 +94,17 @@ async fn a_signed_in_stranger_reads_a_public_run_but_not_its_history() {
     assert_eq!(sc, StatusCode::OK, "stranger on a public run: {body}");
     assert_eq!(body["player_id"].as_str(), Some(player_id.as_str()));
 
-    // The inspection surface is not part of the deal: diffs stay guarded.
-    let hist_uri = format!("/api/sessions/{code}/players/{player_id}/history");
-    let resp = app
-        .clone()
-        .oneshot(req_with_cookie(Method::GET, &hist_uri, &stranger, None))
-        .await
-        .expect("stranger history");
-    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    // The inspection surface is not part of the deal: diffs and the
+    // source tree stay guarded.
+    for tail in ["history", "files", "files/content?path=README.md"] {
+        let uri = format!("/api/sessions/{code}/players/{player_id}/{tail}");
+        let resp = app
+            .clone()
+            .oneshot(req_with_cookie(Method::GET, &uri, &stranger, None))
+            .await
+            .expect("stranger inspect");
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN, "{tail}");
+    }
 }
 
 #[tokio::test]

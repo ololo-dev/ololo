@@ -6,7 +6,7 @@
 
 use crate::auth::jwt::AccessClaims;
 use crate::state::AppState;
-use arena_core::entities::{player_memory, projects, sessions};
+use arena_core::entities::{player_memory, projects};
 use axum::Json;
 use axum::extract::{Path, State};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
@@ -39,26 +39,9 @@ pub async fn get_player_memory(
     claims: AccessClaims,
 ) -> Result<Json<PlayerMemoryResponse>, PlayerError> {
     let user_id = claims.user_id().map_err(|_| PlayerError::Forbidden)?;
-
-    let session = sessions::Entity::find()
-        .filter(sessions::Column::JoinCode.eq(code.to_uppercase()))
-        .one(&state.db)
-        .await
-        .map_err(|e| PlayerError::Internal(e.to_string()))?
-        .ok_or(PlayerError::NotFound)?;
-
-    let player = super::find_player_by_param(&state.db, session.id, &player_param)
-        .await
-        .map_err(|e| PlayerError::Internal(e.to_string()))?
-        .ok_or(PlayerError::NotFound)?;
     // Owner-only, except admins may view any player's memory.
-    if player.user_id_fk != Some(user_id)
-        && !crate::auth::is_user_admin(&state.db, user_id)
-            .await
-            .map_err(|e| PlayerError::Internal(e.to_string()))?
-    {
-        return Err(PlayerError::Forbidden);
-    }
+    let (session, player) =
+        super::authorize_player_inspect(&state.db, &code, &player_param, user_id).await?;
 
     let memory_schema = projects::Entity::find_by_id(session.project_id_fk)
         .one(&state.db)

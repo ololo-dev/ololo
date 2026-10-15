@@ -31,6 +31,7 @@
   import PlayerJudgesTab from '$lib/components/sessions/PlayerJudgesTab.svelte'
   import PlayerStatsTab from '$lib/components/sessions/PlayerStatsTab.svelte'
   import PlayerMemoryTab from '$lib/components/sessions/PlayerMemoryTab.svelte'
+  import PlayerFilesView from '$lib/components/sessions/PlayerFilesView.svelte'
   import type { SectionTabId } from '$lib/sessions/player-tabs'
   import { getPlayerEventLog } from '$lib/api/sessions'
   import { getSessionReport } from '$lib/api'
@@ -666,14 +667,14 @@
   // The chat transcript vs the full record. A player mid-race follows the
   // conversation; someone reviewing a finished session wants everything.
   // The default follows the session's state. An explicit choice sticks.
-  type TaskView = 'report' | 'chat' | 'details'
+  type TaskView = 'report' | 'chat' | 'details' | 'files'
   // Per session: a choice is about the session you are looking at, not a
   // preference for life. A global key meant one old click on "Details" would
   // hide every future report behind a tab.
   // The player is fixed for this page's lifetime; capture the id once,
   // the same way the replay does with the session code.
   const VIEW_KEY = `player:task-view:${untrack(() => data.snapshot.player_id)}`
-  const VALID_VIEWS: readonly string[] = ['report', 'chat', 'details']
+  const VALID_VIEWS: readonly string[] = ['report', 'chat', 'details', 'files']
   function storedView(): TaskView | null {
     // Older builds also stored 'slides' — treat anything unknown as unset.
     const v = localStorage.getItem(VIEW_KEY)
@@ -703,8 +704,8 @@
   const taskView = $derived.by<TaskView>(() => {
     const chosen = viewChoice ?? defaultView
     // A remembered choice from someone's own run must not open another
-    // player's inspection view.
-    return chosen === 'details' && !canInspect ? defaultView : chosen
+    // player's inspection views (Details and Files).
+    return (chosen === 'details' || chosen === 'files') && !canInspect ? defaultView : chosen
   })
 
   // The report only makes sense once the session is over; while it runs the
@@ -713,7 +714,12 @@
     [
       ...(data.live ? [] : [{ id: 'report' as const, label: 'Report' }]),
       { id: 'chat' as const, label: 'Chat' },
-      ...(canInspect ? [{ id: 'details' as const, label: 'Details' }] : []),
+      ...(canInspect
+        ? [
+            { id: 'details' as const, label: 'Details' },
+            { id: 'files' as const, label: 'Files' },
+          ]
+        : []),
     ],
   )
 
@@ -1149,6 +1155,14 @@
         {sessionPaused}
         {agentConnected}
         {completionStatus}
+      />
+    {:else if taskView === 'files'}
+      <!-- The repo as the internal git server holds it: HEAD's tree, and
+           any file's text. Follows the history poll, so a push shows up. -->
+      <PlayerFilesView
+        {sessionCode}
+        playerId={data.snapshot.player_id}
+        revision={historyCommits[0]?.sha ?? null}
       />
     {:else}
 

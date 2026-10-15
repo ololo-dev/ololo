@@ -128,4 +128,26 @@ describe("the inspection boundary", () => {
     renderPage({ live: true, snapshot, token: "t", playerName: "p" });
     expect(screen.getByTestId("task-view-details")).not.toBeNull();
   });
+
+  it("Gives the owner a Files view of the repo", async () => {
+    renderPage({ live: true, snapshot, token: "t", playerName: "p" });
+    await fireEvent.click(screen.getByTestId("task-view-files"));
+    await tick();
+    expect(screen.getByTestId("player-files-view")).not.toBeNull();
+    expect(screen.queryByTestId("ptab-tasks")).toBeNull();
+  });
+
+  it("Keeps the source from a spectator, even with Files remembered", () => {
+    localStorage.setItem(`player:task-view:${snapshot.player_id}`, "files");
+    renderPage({
+      live: true,
+      snapshot,
+      token: "t",
+      playerName: "p",
+      inspectRestricted: true,
+    });
+    expect(screen.queryByTestId("task-view-files")).toBeNull();
+    expect(screen.queryByTestId("player-files-view")).toBeNull();
+    expect(screen.getByTestId("task-view-chat").getAttribute("aria-pressed")).toBe("true");
+  });
 });

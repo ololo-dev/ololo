@@ -134,8 +134,8 @@ version is [Playing safely](https://ololo.dev/documentation/playing-safely).
 
 ### Participant laptop
 
-- Task checks are shell commands written by the project author. The CLI runs
-  them under the participant's own account, without a sandbox.
+- Task checks are tests written by the project author. The CLI runs them
+  under the participant's own account.
 - Placeholder values in those commands are shell-escaped (`shlex::quote` on
   Unix, a strict character set on Windows) and executed without a shell.
   This is defense in depth, not a guarantee.

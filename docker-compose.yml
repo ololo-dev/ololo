@@ -199,9 +199,8 @@ services:
       retries: 3
 
   frontend:
-    # PUBLIC_WS_URL is baked into this image at release time (see
-    # .github/workflows/release.yml, default wss://ololo.dev). Rebuild/retag via
-    # the release workflow to change it — it cannot be overridden at run time.
+    # No deployment address is baked into this image: the browser derives its
+    # WebSocket URL from the page's own origin (frontend/src/lib/ws).
     image: "${IMAGE_REGISTRY:-ghcr.io/ololo-dev}/${IMAGE_PREFIX:-ololo}-frontend:${IMAGE_TAG:-latest}"
     pull_policy: always
     restart: unless-stopped

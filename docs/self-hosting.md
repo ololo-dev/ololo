@@ -185,13 +185,22 @@ score instead of running code; nothing else is affected.
 
 ## Installation
 
-Build the stack from a pinned, reviewed commit with
-[`docker-compose.source.yml`](../docker-compose.source.yml).
+Run the prebuilt open-source images with
+[`docker-compose.yml`](../docker-compose.yml), pinned to the reviewed commit.
+Every push to this repository's `main` builds `ghcr.io/ololo-dev/ololo-server`,
+`ololo-game-server` and `ololo-frontend` from this tree in GitHub Actions
+([`release.yml`](../.github/workflows/release.yml)) and tags them `latest`
+and `sha-<short commit>`. They contain only the open code in this
+repository; nothing in them points at ololo.dev.
 
-> **Do not use the prebuilt `docker-compose.yml` for a private deployment.**
-> The prebuilt frontend image has the ololo.dev WebSocket address baked in at
-> build time, and that compose file defaults `OLLAMA_URL` to a public host.
-> The source-built stack has neither problem.
+To build the images yourself instead, use
+[`docker-compose.source.yml`](../docker-compose.source.yml) with
+`docker compose -f docker-compose.source.yml up -d --build`; the steps are
+otherwise the same.
+
+> **Set `OLLAMA_URL` explicitly.** `docker-compose.yml` defaults it to
+> `https://ollama.ololo.dev`, the shared model host of the public demo; an
+> empty value falls back to that default too.
 
 ### Prerequisites
 
@@ -205,11 +214,11 @@ Build the stack from a pinned, reviewed commit with
 
 ### Steps
 
-1. Clone the repository and pin the reviewed commit:
+1. Clone the repository at the reviewed commit:
 
    ```bash
    git clone https://github.com/ololo-dev/ololo.git && cd ololo
-   git checkout <reviewed-commit-sha>
+   git checkout <reviewed-commit>
    ```
 
 2. Create the external Docker network the compose file expects:
@@ -227,16 +236,18 @@ Build the stack from a pinned, reviewed commit with
    JWT_SIGNING_KEY=<output of: openssl rand -hex 32>
    GAME_SERVER_ID=<output of: uuidgen | tr A-Z a-z>
    DATABASE_URL=postgresql://ololo:<password>@<db-host>:5432/ololo
-   OLLAMA_URL=   # only if the judges use an internal Ollama
+   IMAGE_TAG=sha-<first 7 characters of the reviewed commit>
+   # Internal Ollama, or http://localhost:11434 when judges use another provider
+   OLLAMA_URL=http://ollama.example.internal:11434
    ```
 
-4. In `docker-compose.source.yml`, remove `security_opt` and `cap_add` from
-   the `game-server` service (see [Server-side code execution](#server-side-code-execution)).
+4. In `docker-compose.yml`, remove `security_opt` and `cap_add` from the
+   `game-server` service (see [Server-side code execution](#server-side-code-execution)).
 
-5. Build and start:
+5. Pull and start:
 
    ```bash
-   docker compose -f docker-compose.source.yml up -d --build
+   docker compose up -d
    ```
 
 6. Route traffic through the reverse proxy:
@@ -327,7 +338,7 @@ rebuilt from the pinned commit.
 
 | Item | What to do |
 | --- | --- |
-| Upgrades | Review the diff between the pinned commit and the new one, update the checkout, re-run `docker compose -f docker-compose.source.yml up -d --build`. Both servers apply database migrations on start |
+| Upgrades | Review the diff between the pinned commit and the new one, update the checkout and `IMAGE_TAG`, re-run `docker compose up -d`. Both servers apply database migrations on start |
 | Backups | The database and the `git-repos`, `judge-logs` and `session-logs` volumes (plus `arena-data` when SQLite is used) |
 | Logs | Structured JSON on each container's stdout |
 | Health | `GET /health` on the server (8080) and the game server (8081); both containers have health checks |
@@ -339,7 +350,8 @@ rebuilt from the pinned commit.
 To validate:
 
 - [ ] Source review of the pinned commit, including `Cargo.lock` and `frontend/pnpm-lock.yaml`
-- [ ] Images built from that commit and scanned
+- [ ] Images for that commit's `sha-` tag (or built in-house from it) scanned
+- [ ] `OLLAMA_URL` set explicitly, not left at the public default
 - [ ] Game-server runs without `SYS_ADMIN` and with default seccomp and AppArmor
 - [ ] Only the web app and the game server are reachable through the proxy; port 6000 and the database are not
 - [ ] The deployment is reachable only from the company network or VPN

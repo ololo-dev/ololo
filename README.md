@@ -201,6 +201,11 @@ For local development, run the three app processes on the host as above and
 run Ollama locally if you want a judge model (`OLLAMA_URL` defaults to
 `http://localhost:11434`).
 
+Running ololo inside a company network, or handing it to a security team
+for review? [docs/self-hosting.md](docs/self-hosting.md) covers the
+architecture, data flows, trust model, a hardened install and a review
+checklist.
+
 ## Environment variables
 
 `.env.example` carries the full list with comments. The essentials:

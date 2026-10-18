@@ -1651,6 +1651,27 @@ fn an_artifact_request_still_leaves_the_brief_out() {
     assert!(!text.contains("A page of scenarios"), "{text}");
 }
 
+#[test]
+fn an_artifact_request_takes_its_folder_from_the_save_line_only() {
+    // The header carries the judge's prose, and prose says "under" too:
+    // "the shell visibly arcs under gravity;" once named `gravity` as the
+    // folder to save into.
+    let command = "# ARTIFACT REQUEST from correctness: Record a screencast: (1) Player 1 presses Space so the shell visibly arcs under gravity; (2) a crater is carved.\n\
+                   # Open for 362s more.\n\
+                   # Save the file(s) (up to 5) under .ololo/artifacts/5d0c1e2a/; the ololo CLI commits and pushes them automatically; do NOT run git.\n\
+                   # If an earlier delivered capture already shows exactly this, copying that file into this folder is a valid delivery.\n\
+                   test \"$(ls -A .ololo/artifacts/5d0c1e2a/ 2>/dev/null | wc -l | tr -d ' ')\" -ge 1 && echo delivered \
+                   || echo \"waiting-for-file: $(ls -A .ololo/artifacts/5d0c1e2a/ 2>/dev/null | wc -l | tr -d ' ') of 1 saved into .ololo/artifacts/5d0c1e2a/\"";
+    let text = crate::tui::app::probe_paste_text(&probe_result(
+        command,
+        "waiting-for-file: 0 of 1 saved into .ololo/artifacts/5d0c1e2a/",
+    ));
+    assert!(
+        text.contains("Where: save up to 5 files into .ololo/artifacts/5d0c1e2a/ —"),
+        "{text}"
+    );
+}
+
 // ── The chat's status row: what is happening now, what comes next ────────
 
 fn running(app: &mut TuiApp) {

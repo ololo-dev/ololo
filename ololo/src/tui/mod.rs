@@ -15,7 +15,7 @@ pub mod render;
 #[allow(unused_imports)]
 pub use agent_picker::{AgentSource, PickedAgent, PickerArgs, select_agent};
 #[allow(unused_imports)]
-pub use app::{InputFocus, TuiApp, run, run_headless};
+pub use app::{InputFocus, TuiApp, TuiRunOutcome, run, run_headless};
 #[allow(unused_imports)]
 pub use event::{
     BusSink, EventSink, EventSinkError, HeaderDelta, LogLevel, Origin, ProbeInfo, ProbeResultInfo,

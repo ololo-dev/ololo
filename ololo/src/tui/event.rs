@@ -193,6 +193,35 @@ pub struct ProbeResultInfo {
 }
 
 impl ProbeResultInfo {
+    /// The row a TestPush opens before any result: the probe's task and test
+    /// metadata copied over, nothing run yet. Result sites override the
+    /// stdout/exit/error fields with `..` syntax.
+    pub fn pending(p: &ProbeInfo) -> Self {
+        ProbeResultInfo {
+            probe_id: p.probe_id,
+            command: p.rendered_command.clone(),
+            stdout: String::new(),
+            exit_code: None,
+            duration_ms: 0,
+            error: None,
+            task_id: p.task_id,
+            task_ordinal: p.task_ordinal,
+            task_title: p.task_title.clone(),
+            task_description: p.task_description.clone(),
+            test_ordinal: p.test_ordinal,
+            test_total: p.test_total,
+            test_label: p.test_label.clone(),
+            test_description: p.test_description.clone(),
+            deadline_secs: Some(p.deadline_secs),
+            expected_answer: p.expected_answer.clone(),
+            answer_template: p.answer_template.clone(),
+            validation_kind: p.validation_kind,
+            outcome: None,
+            point_delta: None,
+            graded_expected: None,
+        }
+    }
+
     /// Synthetic probe used to surface a teammate joining the session.
     pub fn member_joined(name: &str) -> Self {
         ProbeResultInfo {

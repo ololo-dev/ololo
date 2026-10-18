@@ -8,7 +8,7 @@
 //! provides the `on_key`, `on_event`, and `on_session_started`
 //! entry points that the render loop calls per event.
 
-use crate::tui::event::{ProbeResultInfo, QuitReason, TuiEvent};
+use crate::tui::event::{LeaderboardEntry, ProbeInfo, ProbeResultInfo, QuitReason, TuiEvent};
 use crate::tui::header::HeaderState;
 use crate::tui::pty_host::PtyHost;
 use std::collections::{HashMap, VecDeque};
@@ -20,7 +20,7 @@ use vt100::Parser;
 mod keymap;
 mod run_loop;
 pub(crate) use run_loop::pty_inner_rect;
-pub use run_loop::{run, run_headless};
+pub use run_loop::{TuiRunOutcome, run, run_headless};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputFocus {
@@ -448,231 +448,14 @@ impl TuiApp {
 
     pub fn on_event(&mut self, ev: TuiEvent) {
         match ev {
-            TuiEvent::Header(d) => {
-                let was_complete = self.header.status == crate::tui::header::Status::Complete;
-                let was_tasks_done = self.header.status == crate::tui::header::Status::TasksDone;
-                self.header.apply(d);
-                // On transition to Complete, commit any tasks not yet committed.
-                if !was_complete && self.header.status == crate::tui::header::Status::Complete {
-                    self.commit_tasks(true);
-                    self.commit_tasks(false);
-                    self.report_task_stats(true);
-                    self.report_task_stats(false);
-                }
-                // Per-player all-tasks-done ack: the scheduler moved past
-                // this player's LAST task while the session keeps running.
-                // Commit every remaining task snapshot (and report stats)
-                // now — the judge pipeline waits for the last task's
-                // feat(<task_id>) commit and would stall until session end
-                // otherwise. Idempotent with the Complete path above.
-                if !was_tasks_done && self.header.status == crate::tui::header::Status::TasksDone {
-                    self.commit_tasks(true);
-                    self.commit_tasks(false);
-                    self.report_task_stats(true);
-                    self.report_task_stats(false);
-                }
-            }
-            TuiEvent::ProbeArrived(p) => {
-                // The probe the clock counted down to is here.
-                self.next_probe_due = None;
-                // An artifact request starts (or resets) its countdown the
-                // moment its dispatch lands.
-                self.note_request_deadline(p.probe_id, &p.rendered_command);
-                // Track the scheduler's current task position: the highest
-                // ordinal seen in any TestPush. Tasks below it are done.
-                // Ordinal 0 is a real task (projects number tasks from 0);
-                // the ordinal is only trustworthy when task_id is present
-                // (old game-servers omit both).
-                let prev_max = self.max_task_ordinal;
-                if p.task_id.is_some() {
-                    self.max_task_ordinal = Some(
-                        self.max_task_ordinal
-                            .map_or(p.task_ordinal, |m| m.max(p.task_ordinal)),
-                    );
-                }
-                if let Some(tid) = p.task_id {
-                    // Preserve first_seen_ms on repeat probes for the same task —
-                    // it anchors the stats collection window.
-                    self.known_tasks
-                        .entry(tid)
-                        .and_modify(|t| {
-                            t.ordinal = p.task_ordinal;
-                            t.title = p.task_title.clone();
-                        })
-                        .or_insert_with(|| TaskRecord {
-                            id: tid,
-                            ordinal: p.task_ordinal,
-                            title: p.task_title.clone(),
-                            first_seen_ms: now_ms(),
-                        });
-                    // Probes dispatch for the scheduler's active task — tell
-                    // the snapshot repo so auxiliary commits (artifacts,
-                    // flags, memory) address it in their message.
-                    if self.snapshot_current_task != Some(tid) {
-                        if let Some(snap) = self.snapshot.clone()
-                            && let Ok(guard) = snap.lock()
-                        {
-                            guard.set_current_task(Some((tid, &p.task_title)));
-                        }
-                        self.snapshot_current_task = Some(tid);
-                    }
-                }
-                if let Some(existing) = self.probes.iter_mut().find(|x| x.probe_id == p.probe_id) {
-                    existing.command = p.rendered_command.clone();
-                    existing.task_id = p.task_id.or(existing.task_id);
-                    existing.task_ordinal = if p.task_ordinal != 0 {
-                        p.task_ordinal
-                    } else {
-                        existing.task_ordinal
-                    };
-                    existing.task_title = p.task_title.clone();
-                    existing.task_description = p.task_description.clone();
-                    existing.test_ordinal = p.test_ordinal;
-                    existing.test_total = p.test_total;
-                    existing.test_label = p.test_label.clone();
-                    existing.test_description = p.test_description.clone();
-                    existing.deadline_secs = Some(p.deadline_secs);
-                    existing.expected_answer = p.expected_answer.clone();
-                    existing.answer_template = p.answer_template.clone();
-                    existing.validation_kind = p.validation_kind;
-                } else {
-                    self.probes.push_back(ProbeResultInfo {
-                        probe_id: p.probe_id,
-                        command: p.rendered_command.clone(),
-                        stdout: String::new(),
-                        exit_code: None,
-                        duration_ms: 0,
-                        error: None,
-                        task_id: p.task_id,
-                        task_ordinal: p.task_ordinal,
-                        task_title: p.task_title.clone(),
-                        task_description: p.task_description.clone(),
-                        test_ordinal: p.test_ordinal,
-                        test_total: p.test_total,
-                        test_label: p.test_label.clone(),
-                        test_description: p.test_description.clone(),
-                        deadline_secs: Some(p.deadline_secs),
-                        expected_answer: p.expected_answer.clone(),
-                        answer_template: p.answer_template.clone(),
-                        validation_kind: p.validation_kind,
-                        outcome: None,
-                        point_delta: None,
-                        graded_expected: None,
-                    });
-                }
-                // If the scheduler advanced past a task ordinal, commit
-                // all tasks with a lower ordinal that we haven't committed,
-                // and report their agent stats.
-                if self.max_task_ordinal > prev_max {
-                    self.commit_tasks(true);
-                    self.report_task_stats(true);
-                }
-            }
+            TuiEvent::Header(d) => self.on_header(d),
+            TuiEvent::ProbeArrived(p) => self.on_probe_arrived(p),
             TuiEvent::SnapshotRequested {
                 task_id,
                 task_title,
                 reason,
-            } => {
-                // Open-ended tasks: the server drives the commit cadence.
-                // Track the task first so the stats/final-commit paths know it.
-                self.known_tasks
-                    .entry(task_id)
-                    .or_insert_with(|| TaskRecord {
-                        id: task_id,
-                        ordinal: self.max_task_ordinal.unwrap_or(0),
-                        title: task_title.clone(),
-                        first_seen_ms: now_ms(),
-                    });
-                // A snapshot request names the task in play — keep the repo's
-                // current-task marker fresh for auxiliary commit messages.
-                if self.snapshot_current_task != Some(task_id) {
-                    if let Some(snap) = self.snapshot.clone()
-                        && let Ok(guard) = snap.lock()
-                    {
-                        guard.set_current_task(Some((task_id, &task_title)));
-                    }
-                    self.snapshot_current_task = Some(task_id);
-                }
-                if reason != "todo_progress" {
-                    self.judging = true;
-                }
-                let Some(snap) = self.snapshot.clone() else {
-                    return;
-                };
-                if reason == "todo_progress" {
-                    if let Ok(guard) = snap.lock()
-                        && guard.commit_wip(task_id).is_ok()
-                    {
-                        guard.request_push();
-                        tracing::info!("wip snapshot committed: wip({task_id})");
-                    }
-                } else if !self.committed_tasks.contains_key(&task_id) {
-                    let title = self
-                        .known_tasks
-                        .get(&task_id)
-                        .map(|t| t.title.clone())
-                        .unwrap_or(task_title);
-                    // The server names why the task closed: `todo_complete`
-                    // is the player's own declaration, `deadline` the clock.
-                    let outcome = if reason == arena_core::protocol::SNAPSHOT_REASON_DEADLINE {
-                        arena_core::snapshot_message::OUTCOME_DEADLINE
-                    } else {
-                        arena_core::snapshot_message::OUTCOME_COMPLETED
-                    };
-                    if let Ok(guard) = snap.lock()
-                        && guard.commit_task(task_id, &title, outcome).is_ok()
-                    {
-                        self.committed_tasks.insert(task_id, ());
-                        guard.request_push();
-                        tracing::info!(
-                            "final snapshot committed ({reason}): feat({task_id}): {title}"
-                        );
-                    }
-                    self.report_task_stats(false);
-                }
-            }
-            TuiEvent::ProbeResult(r) => {
-                // A fresh probe means the phase moved on.
-                self.judging = false;
-                self.note_request_deadline(r.probe_id, &r.command);
-                if let Some(existing) = self.probes.iter_mut().find(|x| x.probe_id == r.probe_id) {
-                    // Preserve task metadata if the result omits it (defensive — player_ws
-                    // now always sends task_title/description, but synthetic paths may not).
-                    let mut merged = r;
-                    if merged.task_title.is_empty() {
-                        merged.task_title = existing.task_title.clone();
-                    }
-                    if merged.task_description.is_empty() {
-                        merged.task_description = existing.task_description.clone();
-                    }
-                    // Preserve an earlier server grade if the new ProbeResult
-                    // arrives after grading (reconnect race).
-                    merged.outcome = merged.outcome.or(existing.outcome);
-                    merged.point_delta = merged.point_delta.or(existing.point_delta);
-                    // Preserve task_id/ordinal if the result omits them.
-                    merged.task_id = merged.task_id.or(existing.task_id);
-                    if merged.task_ordinal == 0 {
-                        merged.task_ordinal = existing.task_ordinal;
-                    }
-                    if merged.test_total == 0 {
-                        merged.test_ordinal = existing.test_ordinal;
-                        merged.test_total = existing.test_total;
-                    }
-                    if merged.test_label.is_empty() {
-                        merged.test_label = existing.test_label.clone();
-                    }
-                    if merged.test_description.is_empty() {
-                        merged.test_description = existing.test_description.clone();
-                    }
-                    merged.graded_expected = merged
-                        .graded_expected
-                        .take()
-                        .or(existing.graded_expected.take());
-                    *existing = merged;
-                } else {
-                    self.probes.push_back(r);
-                }
-            }
+            } => self.on_snapshot_requested(task_id, task_title, &reason),
+            TuiEvent::ProbeResult(r) => self.on_probe_result(r),
             TuiEvent::ProbeGraded {
                 probe_id,
                 outcome,
@@ -686,20 +469,7 @@ impl TuiApp {
                         std::time::Instant::now() + std::time::Duration::from_secs(u64::from(secs)),
                     );
                 }
-                if let Some(p) = self.probes.iter_mut().find(|x| x.probe_id == probe_id) {
-                    p.outcome = Some(outcome);
-                    p.point_delta = Some(point_delta);
-                    // ProbeGraded.expected carries the assertEqual-resolved
-                    // value (e.g. "42"), not the raw template. Keep it in
-                    // graded_expected — expected_answer still holds the
-                    // TestPush template for local grading.
-                    if expected.is_some() {
-                        p.graded_expected = expected;
-                    }
-                    if let Some(act) = &actual {
-                        p.stdout = act.clone();
-                    }
-                }
+                self.on_probe_graded(probe_id, outcome, point_delta, expected, actual);
             }
             TuiEvent::CountdownDone => {
                 self.header.countdown_secs = None;
@@ -742,78 +512,17 @@ impl TuiApp {
                 self.tokens_dirty = true;
                 self.pty_resize_pending = true;
             }
-            TuiEvent::LeaderboardUpdate { entries } => {
-                let sorted = Self::rank_entries(entries);
-                let viewer = self.viewer_player_id.and_then(|vid| {
-                    sorted
-                        .iter()
-                        .enumerate()
-                        .find(|(_, e)| e.player_id == vid)
-                        .map(|(i, e)| (i + 1, e.total_points))
-                });
-                match viewer {
-                    Some((rank, score)) => {
-                        self.rank = Some(rank);
-                        self.score = Some(score);
-                    }
-                    None => {
-                        self.rank = None;
-                        self.score = None;
-                    }
-                }
-            }
+            TuiEvent::LeaderboardUpdate { entries } => self.on_leaderboard_update(entries),
             TuiEvent::JudgeScored {
                 task_id,
                 judge_name,
                 point_delta,
                 feedback,
-            } => {
-                // The frame names its task on current servers; otherwise
-                // pin to the scheduler's current task, and when even that
-                // is unknown (reconnect raced the TestPush) fall back to
-                // the highest ordinal already stored — the task being judged.
-                let task_ordinal = task_id
-                    .and_then(|id| self.task_ordinal_of(id))
-                    .or(self.max_task_ordinal)
-                    .or_else(|| {
-                        self.probes
-                            .iter()
-                            .filter(|p| p.task_id.is_some())
-                            .map(|p| p.task_ordinal)
-                            .max()
-                    });
-                self.settle_judge_run(task_id, &judge_name, JudgeRunState::Scored);
-                self.judge_verdicts.push(JudgeVerdict {
-                    judge_name,
-                    point_delta,
-                    feedback,
-                    task_ordinal,
-                });
-            }
+            } => self.on_judge_scored(task_id, judge_name, point_delta, feedback),
             TuiEvent::JudgeStarted {
                 task_id,
                 judge_name,
-            } => {
-                let task_ordinal = task_id
-                    .and_then(|id| self.task_ordinal_of(id))
-                    .or(self.max_task_ordinal);
-                // A retried run re-announces the same judge on the same task
-                // — one row per (task, judge), back to reviewing.
-                if let Some(run) = self
-                    .judge_runs
-                    .iter_mut()
-                    .find(|r| r.task_id == task_id && r.judge_name == judge_name)
-                {
-                    run.state = JudgeRunState::Reviewing;
-                } else {
-                    self.judge_runs.push(JudgeRun {
-                        judge_name,
-                        task_id,
-                        task_ordinal,
-                        state: JudgeRunState::Reviewing,
-                    });
-                }
-            }
+            } => self.on_judge_started(task_id, judge_name),
             TuiEvent::JudgeFailed {
                 task_id,
                 judge_name,
@@ -821,19 +530,7 @@ impl TuiApp {
                 self.settle_judge_run(task_id, &judge_name, JudgeRunState::Failed);
             }
             TuiEvent::CompletionFlagPublished { path, text } => {
-                // Pin to the scheduler's current task, same as verdicts.
-                let task_ordinal = self.max_task_ordinal.or_else(|| {
-                    self.probes
-                        .iter()
-                        .filter(|p| p.task_id.is_some())
-                        .map(|p| p.task_ordinal)
-                        .max()
-                });
-                self.done_notes.push(DoneNote {
-                    path,
-                    text,
-                    task_ordinal,
-                });
+                self.on_completion_flag_published(path, text);
             }
             TuiEvent::PlayerProgress { attempt, status } => {
                 self.progress_attempt = Some(attempt);
@@ -868,6 +565,331 @@ impl TuiApp {
             }
         }
         self.evict_oldest();
+    }
+
+    /// Status transitions that close out tasks: on Complete, and on the
+    /// per-player all-tasks-done ack, commit every uncommitted task snapshot
+    /// and report its stats. Idempotent between the two.
+    fn on_header(&mut self, d: crate::tui::event::HeaderDelta) {
+        let was_complete = self.header.status == crate::tui::header::Status::Complete;
+        let was_tasks_done = self.header.status == crate::tui::header::Status::TasksDone;
+        self.header.apply(d);
+        // On transition to Complete, commit any tasks not yet committed.
+        if !was_complete && self.header.status == crate::tui::header::Status::Complete {
+            self.commit_tasks(true);
+            self.commit_tasks(false);
+            self.report_task_stats(true);
+            self.report_task_stats(false);
+        }
+        // Per-player all-tasks-done ack: the scheduler moved past
+        // this player's LAST task while the session keeps running.
+        // Commit every remaining task snapshot (and report stats)
+        // now — the judge pipeline waits for the last task's
+        // feat(<task_id>) commit and would stall until session end
+        // otherwise. Idempotent with the Complete path above.
+        if !was_tasks_done && self.header.status == crate::tui::header::Status::TasksDone {
+            self.commit_tasks(true);
+            self.commit_tasks(false);
+            self.report_task_stats(true);
+            self.report_task_stats(false);
+        }
+    }
+
+    /// A TestPush landed: track its task, upsert the probe row, and commit
+    /// the tasks the scheduler moved past.
+    fn on_probe_arrived(&mut self, p: ProbeInfo) {
+        // The probe the clock counted down to is here.
+        self.next_probe_due = None;
+        // An artifact request starts (or resets) its countdown the
+        // moment its dispatch lands.
+        self.note_request_deadline(p.probe_id, &p.rendered_command);
+        // Track the scheduler's current task position: the highest
+        // ordinal seen in any TestPush. Tasks below it are done.
+        // Ordinal 0 is a real task (projects number tasks from 0);
+        // the ordinal is only trustworthy when task_id is present
+        // (old game-servers omit both).
+        let prev_max = self.max_task_ordinal;
+        if p.task_id.is_some() {
+            self.max_task_ordinal = Some(
+                self.max_task_ordinal
+                    .map_or(p.task_ordinal, |m| m.max(p.task_ordinal)),
+            );
+        }
+        if let Some(tid) = p.task_id {
+            // Preserve first_seen_ms on repeat probes for the same task —
+            // it anchors the stats collection window.
+            self.known_tasks
+                .entry(tid)
+                .and_modify(|t| {
+                    t.ordinal = p.task_ordinal;
+                    t.title = p.task_title.clone();
+                })
+                .or_insert_with(|| TaskRecord {
+                    id: tid,
+                    ordinal: p.task_ordinal,
+                    title: p.task_title.clone(),
+                    first_seen_ms: now_ms(),
+                });
+            // Probes dispatch for the scheduler's active task — tell
+            // the snapshot repo so auxiliary commits (artifacts,
+            // flags, memory) address it in their message.
+            self.mark_snapshot_task(tid, &p.task_title);
+        }
+        if let Some(existing) = self.probes.iter_mut().find(|x| x.probe_id == p.probe_id) {
+            existing.command = p.rendered_command.clone();
+            existing.task_id = p.task_id.or(existing.task_id);
+            existing.task_ordinal = if p.task_ordinal != 0 {
+                p.task_ordinal
+            } else {
+                existing.task_ordinal
+            };
+            existing.task_title = p.task_title.clone();
+            existing.task_description = p.task_description.clone();
+            existing.test_ordinal = p.test_ordinal;
+            existing.test_total = p.test_total;
+            existing.test_label = p.test_label.clone();
+            existing.test_description = p.test_description.clone();
+            existing.deadline_secs = Some(p.deadline_secs);
+            existing.expected_answer = p.expected_answer.clone();
+            existing.answer_template = p.answer_template.clone();
+            existing.validation_kind = p.validation_kind;
+        } else {
+            self.probes.push_back(ProbeResultInfo::pending(&p));
+        }
+        // If the scheduler advanced past a task ordinal, commit
+        // all tasks with a lower ordinal that we haven't committed,
+        // and report their agent stats.
+        if self.max_task_ordinal > prev_max {
+            self.commit_tasks(true);
+            self.report_task_stats(true);
+        }
+    }
+
+    /// The server asked for a snapshot of an open-ended task: a WIP commit
+    /// on `todo_progress`, otherwise the task's final commit.
+    fn on_snapshot_requested(&mut self, task_id: Uuid, task_title: String, reason: &str) {
+        // Open-ended tasks: the server drives the commit cadence.
+        // Track the task first so the stats/final-commit paths know it.
+        self.known_tasks
+            .entry(task_id)
+            .or_insert_with(|| TaskRecord {
+                id: task_id,
+                ordinal: self.max_task_ordinal.unwrap_or(0),
+                title: task_title.clone(),
+                first_seen_ms: now_ms(),
+            });
+        // A snapshot request names the task in play — keep the repo's
+        // current-task marker fresh for auxiliary commit messages.
+        self.mark_snapshot_task(task_id, &task_title);
+        if reason != "todo_progress" {
+            self.judging = true;
+        }
+        let Some(snap) = self.snapshot.clone() else {
+            return;
+        };
+        if reason == "todo_progress" {
+            if let Ok(guard) = snap.lock()
+                && guard.commit_wip(task_id).is_ok()
+            {
+                guard.request_push();
+                tracing::info!("wip snapshot committed: wip({task_id})");
+            }
+        } else if !self.committed_tasks.contains_key(&task_id) {
+            let title = self
+                .known_tasks
+                .get(&task_id)
+                .map(|t| t.title.clone())
+                .unwrap_or(task_title);
+            // The server names why the task closed: `todo_complete`
+            // is the player's own declaration, `deadline` the clock.
+            let outcome = if reason == arena_core::protocol::SNAPSHOT_REASON_DEADLINE {
+                arena_core::snapshot_message::OUTCOME_DEADLINE
+            } else {
+                arena_core::snapshot_message::OUTCOME_COMPLETED
+            };
+            if let Ok(guard) = snap.lock()
+                && guard.commit_task(task_id, &title, outcome).is_ok()
+            {
+                self.committed_tasks.insert(task_id, ());
+                guard.request_push();
+                tracing::info!("final snapshot committed ({reason}): feat({task_id}): {title}");
+            }
+            self.report_task_stats(false);
+        }
+    }
+
+    /// Merge a probe's result into its row, keeping whatever the result
+    /// omits (task metadata, an earlier grade) from the TestPush.
+    fn on_probe_result(&mut self, r: ProbeResultInfo) {
+        // A fresh probe means the phase moved on.
+        self.judging = false;
+        self.note_request_deadline(r.probe_id, &r.command);
+        if let Some(existing) = self.probes.iter_mut().find(|x| x.probe_id == r.probe_id) {
+            // Preserve task metadata if the result omits it (defensive — player_ws
+            // now always sends task_title/description, but synthetic paths may not).
+            let mut merged = r;
+            if merged.task_title.is_empty() {
+                merged.task_title = existing.task_title.clone();
+            }
+            if merged.task_description.is_empty() {
+                merged.task_description = existing.task_description.clone();
+            }
+            // Preserve an earlier server grade if the new ProbeResult
+            // arrives after grading (reconnect race).
+            merged.outcome = merged.outcome.or(existing.outcome);
+            merged.point_delta = merged.point_delta.or(existing.point_delta);
+            // Preserve task_id/ordinal if the result omits them.
+            merged.task_id = merged.task_id.or(existing.task_id);
+            if merged.task_ordinal == 0 {
+                merged.task_ordinal = existing.task_ordinal;
+            }
+            if merged.test_total == 0 {
+                merged.test_ordinal = existing.test_ordinal;
+                merged.test_total = existing.test_total;
+            }
+            if merged.test_label.is_empty() {
+                merged.test_label = existing.test_label.clone();
+            }
+            if merged.test_description.is_empty() {
+                merged.test_description = existing.test_description.clone();
+            }
+            merged.graded_expected = merged
+                .graded_expected
+                .take()
+                .or(existing.graded_expected.take());
+            *existing = merged;
+        } else {
+            self.probes.push_back(r);
+        }
+    }
+
+    fn on_probe_graded(
+        &mut self,
+        probe_id: Uuid,
+        outcome: arena_core::protocol::ProbeOutcome,
+        point_delta: i32,
+        expected: Option<String>,
+        actual: Option<String>,
+    ) {
+        if let Some(p) = self.probes.iter_mut().find(|x| x.probe_id == probe_id) {
+            p.outcome = Some(outcome);
+            p.point_delta = Some(point_delta);
+            // ProbeGraded.expected carries the assertEqual-resolved
+            // value (e.g. "42"), not the raw template. Keep it in
+            // graded_expected — expected_answer still holds the
+            // TestPush template for local grading.
+            if expected.is_some() {
+                p.graded_expected = expected;
+            }
+            if let Some(act) = &actual {
+                p.stdout = act.clone();
+            }
+        }
+    }
+
+    /// The viewer's own rank and score, read off the ranked board.
+    fn on_leaderboard_update(&mut self, entries: Vec<LeaderboardEntry>) {
+        let sorted = Self::rank_entries(entries);
+        let viewer = self.viewer_player_id.and_then(|vid| {
+            sorted
+                .iter()
+                .enumerate()
+                .find(|(_, e)| e.player_id == vid)
+                .map(|(i, e)| (i + 1, e.total_points))
+        });
+        match viewer {
+            Some((rank, score)) => {
+                self.rank = Some(rank);
+                self.score = Some(score);
+            }
+            None => {
+                self.rank = None;
+                self.score = None;
+            }
+        }
+    }
+
+    fn on_judge_scored(
+        &mut self,
+        task_id: Option<Uuid>,
+        judge_name: String,
+        point_delta: i32,
+        feedback: String,
+    ) {
+        // The frame names its task on current servers; otherwise
+        // pin to the scheduler's current task, and when even that
+        // is unknown (reconnect raced the TestPush) fall back to
+        // the highest ordinal already stored — the task being judged.
+        let task_ordinal = task_id
+            .and_then(|id| self.task_ordinal_of(id))
+            .or(self.max_task_ordinal)
+            .or_else(|| self.highest_probe_task_ordinal());
+        self.settle_judge_run(task_id, &judge_name, JudgeRunState::Scored);
+        self.judge_verdicts.push(JudgeVerdict {
+            judge_name,
+            point_delta,
+            feedback,
+            task_ordinal,
+        });
+    }
+
+    fn on_judge_started(&mut self, task_id: Option<Uuid>, judge_name: String) {
+        let task_ordinal = task_id
+            .and_then(|id| self.task_ordinal_of(id))
+            .or(self.max_task_ordinal);
+        // A retried run re-announces the same judge on the same task
+        // — one row per (task, judge), back to reviewing.
+        if let Some(run) = self
+            .judge_runs
+            .iter_mut()
+            .find(|r| r.task_id == task_id && r.judge_name == judge_name)
+        {
+            run.state = JudgeRunState::Reviewing;
+        } else {
+            self.judge_runs.push(JudgeRun {
+                judge_name,
+                task_id,
+                task_ordinal,
+                state: JudgeRunState::Reviewing,
+            });
+        }
+    }
+
+    fn on_completion_flag_published(&mut self, path: String, text: String) {
+        // Pin to the scheduler's current task, same as verdicts.
+        let task_ordinal = self
+            .max_task_ordinal
+            .or_else(|| self.highest_probe_task_ordinal());
+        self.done_notes.push(DoneNote {
+            path,
+            text,
+            task_ordinal,
+        });
+    }
+
+    /// The highest task ordinal any probe has named — the task being judged
+    /// when the scheduler position itself is unknown (reconnect raced the
+    /// TestPush).
+    fn highest_probe_task_ordinal(&self) -> Option<i32> {
+        self.probes
+            .iter()
+            .filter(|p| p.task_id.is_some())
+            .map(|p| p.task_ordinal)
+            .max()
+    }
+
+    /// Tell the snapshot repo which task is in play, so auxiliary commits
+    /// (artifacts, flags, memory) address it in their message.
+    fn mark_snapshot_task(&mut self, task_id: Uuid, title: &str) {
+        if self.snapshot_current_task == Some(task_id) {
+            return;
+        }
+        if let Some(snap) = self.snapshot.clone()
+            && let Ok(guard) = snap.lock()
+        {
+            guard.set_current_task(Some((task_id, title)));
+        }
+        self.snapshot_current_task = Some(task_id);
     }
 
     /// Answer the pending permission prompt and close its popup. Persisting
@@ -2334,8 +2356,11 @@ fn parse_artifact_request(command: &str) -> Option<ArtifactRequest<'_>> {
         .strip_prefix("# ARTIFACT REQUEST from ")?;
     let (judge, instruction) = header.split_once(": ")?;
     // "# Save the file(s) (up to 5) under <path>; the ololo CLI commits …"
+    // Only that line names the folder: the header is the judge's prose, and
+    // "the shell arcs under gravity;" is no folder.
     let path = command
         .lines()
+        .filter(|l| l.starts_with("# Save "))
         .find_map(|l| l.split_once(" under ").map(|(_, rest)| rest))
         .and_then(|rest| rest.split(';').next())
         .unwrap_or("")

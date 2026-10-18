@@ -104,6 +104,30 @@ const HEADLESS_PTY_ROWS: u16 = 48;
 /// hosted in an invisible PTY and driven through the control channel
 /// (autonomous play — a parent agent writes message files, reads
 /// `screen.txt`).
+/// Say why the session loop ended, in the terminal the player is now
+/// looking at: finished, cancelled, or the game server went away.
+fn explain_quit(outcome: &crate::tui::TuiRunOutcome, join_code: &str) {
+    use crate::tui::QuitReason;
+    use crate::tui::Status;
+    match (&outcome.quit_reason, outcome.final_status) {
+        (Some(QuitReason::SessionComplete), Status::Cancelled) => {
+            crate::ui::warn("Session cancelled — no more probes will run.");
+            crate::ui::field("session", join_code);
+        }
+        (Some(QuitReason::SessionComplete), _) => {
+            crate::ui::success("Session finished — results are on the session page.");
+            crate::ui::field("session", join_code);
+        }
+        (Some(QuitReason::WsClosed), _) => {
+            crate::ui::warn("Connection to the game server was lost.");
+            crate::ui::hint(format!(
+                "If the session is still running, reconnect with: ololo join {join_code}"
+            ));
+        }
+        _ => {}
+    }
+}
+
 pub async fn run_headless_start(
     profile: &str,
     cfg: &crate::config::Config,
@@ -222,27 +246,7 @@ pub async fn run_headless_start(
 
     let outcome = crate::tui::run_headless(app, rx, maybe_pty, pty_rx_opt, control).await;
 
-    {
-        use crate::tui::QuitReason;
-        use crate::tui::Status;
-        match (&outcome.quit_reason, outcome.final_status) {
-            (Some(QuitReason::SessionComplete), Status::Cancelled) => {
-                crate::ui::warn("Session cancelled — no more probes will run.");
-                crate::ui::field("session", &join_code);
-            }
-            (Some(QuitReason::SessionComplete), _) => {
-                crate::ui::success("Session finished — results are on the session page.");
-                crate::ui::field("session", &join_code);
-            }
-            (Some(QuitReason::WsClosed), _) => {
-                crate::ui::warn("Connection to the game server was lost.");
-                crate::ui::hint(format!(
-                    "If the session is still running, reconnect with: ololo join {join_code}"
-                ));
-            }
-            _ => {}
-        }
-    }
+    explain_quit(&outcome, &join_code);
 
     // Final snapshot commit (best-effort, 5s timeout).
     if let Some(snap_arc) = maybe_snapshot {
@@ -508,27 +512,7 @@ pub async fn run_tui_start(
 
     // The alternate screen just vanished with everything on it. Say why the
     // TUI closed, in the terminal the player is now looking at.
-    {
-        use crate::tui::QuitReason;
-        use crate::tui::Status;
-        match (&outcome.quit_reason, outcome.final_status) {
-            (Some(QuitReason::SessionComplete), Status::Cancelled) => {
-                crate::ui::warn("Session cancelled — no more probes will run.");
-                crate::ui::field("session", &join_code);
-            }
-            (Some(QuitReason::SessionComplete), _) => {
-                crate::ui::success("Session finished — results are on the session page.");
-                crate::ui::field("session", &join_code);
-            }
-            (Some(QuitReason::WsClosed), _) => {
-                crate::ui::warn("Connection to the game server was lost.");
-                crate::ui::hint(format!(
-                    "If the session is still running, reconnect with: ololo join {join_code}"
-                ));
-            }
-            _ => {}
-        }
-    }
+    explain_quit(&outcome, &join_code);
 
     // Abort the git diff task before commit_final to prevent concurrent stage_all.
     if let Some(h) = _git_diff_task {

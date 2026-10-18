@@ -34,7 +34,7 @@ mod test_util;
 
 use anyhow::{Result, anyhow};
 use clap::Parser;
-use cli::{Cli, Commands, ProfileCommands};
+use cli::{Cli, Commands, PlayFlags, ProfileCommands};
 use config::resolve_server_url;
 use std::io::IsTerminal;
 
@@ -123,6 +123,21 @@ pub(crate) fn prepare_probe_permissions(tui: bool, allow_all: bool) {
     }
 }
 
+/// The TUI needs a terminal; a `--tui` without one is fatal rather than a
+/// silent fall-back to the text loop.
+fn unpack_play(play: PlayFlags) -> (bool, Option<String>, commands::StartFlags) {
+    let tui = play.tui();
+    if tui && !std::io::stdout().is_terminal() {
+        ui::fatal("--tui requires a TTY on stdout; re-run interactively or drop --tui");
+    }
+    let flags = commands::StartFlags {
+        allow_all: play.allow_all,
+        fresh: play.fresh,
+        yes: play.yes,
+    };
+    (tui, play.agent, flags)
+}
+
 #[tokio::main]
 async fn main() {
     // The dependency graph enables both rustls crypto providers (ring via our
@@ -138,18 +153,10 @@ async fn main() {
     //   the TTY guard passes. set_global_default is Once-bound,
     //   so we MUST NOT install the stderr subscriber when --tui is
     //   set (it would shadow the file writer the TUI needs).
-    let tui_active = matches!(
-        cli.command,
-        Commands::Start {
-            tui: true,
-            no_tui: false,
-            ..
-        } | Commands::Join {
-            tui: true,
-            no_tui: false,
-            ..
-        }
-    );
+    let tui_active = match &cli.command {
+        Commands::Start { play, .. } | Commands::Join { play, .. } => play.tui(),
+        _ => false,
+    };
     if !tui_active {
         tracing_subscriber::fmt()
             .with_env_filter(
@@ -182,17 +189,9 @@ async fn main() {
             slug,
             name,
             frontend,
-            tui,
-            no_tui,
-            agent,
-            allow_all,
-            fresh,
-            yes,
+            play,
         } => {
-            let tui = tui && !no_tui;
-            if tui && !std::io::stdout().is_terminal() {
-                ui::fatal("--tui requires a TTY on stdout; re-run interactively or drop --tui");
-            }
+            let (tui, agent, flags) = unpack_play(play);
             commands::run_start(
                 &cli.profile,
                 slug,
@@ -201,42 +200,13 @@ async fn main() {
                 cli.debug,
                 tui,
                 agent,
-                commands::StartFlags {
-                    allow_all,
-                    fresh,
-                    yes,
-                },
+                flags,
             )
             .await
         }
-        Commands::Join {
-            code,
-            launch,
-            tui,
-            no_tui,
-            agent,
-            allow_all,
-            fresh,
-            yes,
-        } => {
-            let tui = tui && !no_tui;
-            if tui && !std::io::stdout().is_terminal() {
-                ui::fatal("--tui requires a TTY on stdout; re-run interactively or drop --tui");
-            }
-            commands::run_join(
-                &cli.profile,
-                code,
-                launch,
-                cli.debug,
-                tui,
-                agent,
-                commands::StartFlags {
-                    allow_all,
-                    fresh,
-                    yes,
-                },
-            )
-            .await
+        Commands::Join { code, launch, play } => {
+            let (tui, agent, flags) = unpack_play(play);
+            commands::run_join(&cli.profile, code, launch, cli.debug, tui, agent, flags).await
         }
         Commands::Whoami => commands::run_whoami(&cli.profile).await,
         Commands::Session(args) => {

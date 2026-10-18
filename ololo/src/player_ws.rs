@@ -6,10 +6,12 @@
 //!
 //! Before connecting, calls the resolve endpoint to discover the game server URL.
 //!
-//! When called with a `Some(sink)` argument, every `ui::*` call has a
-//! parallel `sink.send(Origin::Network, TuiEvent::…)` emission. The
-//! text-mode path (no sink) is byte-for-byte identical; the TUI path
-//! consumes the events on the render side.
+//! HEIST: ololo-tui — when called with a `Some(sink)` argument, every
+//! `ui::*` call has a parallel `sink.send(Origin::Network, TuiEvent::…)`
+//! emission. The text-mode path (no sink) is byte-for-byte identical to
+//! the pre-heist behavior; the TUI path consumes the events via the
+//! bus. See `docs/gangsta/ololo-tui/specs/2026-06-03-contract.md`
+//! Annex A for the per-site call list.
 
 use crate::util;
 use anyhow::{Context, Result};
@@ -585,25 +587,23 @@ async fn connect_once(
                             crate::ui::field("command", &rendered_command);
                             crate::ui::field("deadline", format!("{}s", deadline_secs));
                         });
-                        emit(
-                            sink.clone(),
-                            TuiEvent::ProbeArrived(ProbeInfo {
-                                probe_id,
-                                rendered_command: rendered_command.clone(),
-                                deadline_secs,
-                                task_id,
-                                task_ordinal,
-                                task_title: task_title.clone(),
-                                task_description: task_description.clone(),
-                                test_ordinal,
-                                test_total,
-                                test_label: test_label.clone(),
-                                test_description: test_description.clone(),
-                                expected_answer: expected_answer.clone(),
-                                answer_template: answer_template.clone(),
-                                validation_kind,
-                            }),
-                        );
+                        let probe = ProbeInfo {
+                            probe_id,
+                            rendered_command: rendered_command.clone(),
+                            deadline_secs,
+                            task_id,
+                            task_ordinal,
+                            task_title: task_title.clone(),
+                            task_description: task_description.clone(),
+                            test_ordinal,
+                            test_total,
+                            test_label: test_label.clone(),
+                            test_description: test_description.clone(),
+                            expected_answer: expected_answer.clone(),
+                            answer_template: answer_template.clone(),
+                            validation_kind,
+                        };
+                        emit(sink.clone(), TuiEvent::ProbeArrived(probe.clone()));
                         let deadline = Duration::from_secs(deadline_secs.max(1) as u64);
                         // Permission gate: a probe is a platform-authored
                         // shell command about to run on the player's
@@ -673,27 +673,11 @@ async fn connect_once(
                             emit(
                                 sink.clone(),
                                 TuiEvent::ProbeResult(ProbeResultInfo {
-                                    probe_id,
-                                    command: rendered_command.clone(),
                                     stdout: String::new(),
                                     exit_code: Some(-1),
                                     duration_ms: 0,
                                     error: Some("declined by player".into()),
-                                    task_id,
-                                    task_ordinal,
-                                    task_title: task_title.clone(),
-                                    task_description: task_description.clone(),
-                                    test_ordinal,
-                                    test_total,
-                                    test_label: test_label.clone(),
-                                    test_description: test_description.clone(),
-                                    deadline_secs: Some(deadline_secs),
-                                    expected_answer: expected_answer.clone(),
-                                    answer_template: answer_template.clone(),
-                                    validation_kind,
-                                    outcome: None,
-                                    point_delta: None,
-                                    graded_expected: None,
+                                    ..ProbeResultInfo::pending(&probe)
                                 }),
                             );
                             let reply = wire::PlayerAgentClientFrame::TestResult {
@@ -716,27 +700,11 @@ async fn connect_once(
                             Ok((stdout, ec, dur)) => {
                                 let trimmed = stdout.trim_end();
                                 let probe_info = ProbeResultInfo {
-                                    probe_id,
-                                    command: rendered_command.clone(),
                                     stdout: stdout.clone(),
                                     exit_code: Some(ec),
                                     duration_ms: dur,
                                     error: None,
-                                    task_id,
-                                    task_ordinal,
-                                    task_title: task_title.clone(),
-                                    task_description: task_description.clone(),
-                                    test_ordinal,
-                                    test_total,
-                                    test_label: test_label.clone(),
-                                    test_description: test_description.clone(),
-                                    deadline_secs: Some(deadline_secs),
-                                    expected_answer: expected_answer.clone(),
-                                    answer_template: answer_template.clone(),
-                                    validation_kind,
-                                    outcome: None,
-                                    point_delta: None,
-                                    graded_expected: None,
+                                    ..ProbeResultInfo::pending(&probe)
                                 };
                                 // ponytail: server is sole grader now; show
                                 // neutral SENT until ProbeGraded arrives.
@@ -764,27 +732,11 @@ async fn connect_once(
                                 emit(
                                     sink.clone(),
                                     TuiEvent::ProbeResult(ProbeResultInfo {
-                                        probe_id,
-                                        command: rendered_command.clone(),
                                         stdout: String::new(),
                                         exit_code: None,
                                         duration_ms: 0,
                                         error: Some(format!("{e}")),
-                                        task_id,
-                                        task_ordinal,
-                                        task_title: task_title.clone(),
-                                        task_description: task_description.clone(),
-                                        test_ordinal,
-                                        test_total,
-                                        test_label: test_label.clone(),
-                                        test_description: test_description.clone(),
-                                        deadline_secs: Some(deadline_secs),
-                                        expected_answer: expected_answer.clone(),
-                                        answer_template: answer_template.clone(),
-                                        validation_kind,
-                                        outcome: None,
-                                        point_delta: None,
-                                        graded_expected: None,
+                                        ..ProbeResultInfo::pending(&probe)
                                     }),
                                 );
                                 wire::PlayerAgentClientFrame::TestResult {

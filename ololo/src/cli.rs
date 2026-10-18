@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
 
 /// Arena AI agent CLI
@@ -30,6 +30,51 @@ pub struct Cli {
     pub command: Commands,
 }
 
+/// Flags `start` and `join` share: how the session is rendered, which agent
+/// runs inside it, and the unattended-play confirmations.
+#[derive(Args, Clone, Debug)]
+pub struct PlayFlags {
+    /// Render in full-screen TUI mode (ratatui). Requires a TTY on
+    /// stdout. Logs are written to ~/.config/ololo/<profile>.tui.log.
+    /// Enabled by default; pass --no-tui to disable.
+    #[arg(long, default_value_t = true)]
+    tui: bool,
+    /// Disable TUI mode and use the plain text loop instead.
+    #[arg(long, default_value_t = false)]
+    pub no_tui: bool,
+    /// Agent to run inside the TUI window: a binary name or a full
+    /// command line, e.g. --agent "claude --model glm-5.2:cloud".
+    /// Detected agents are shown interactively when --tui is used
+    /// without --agent.
+    #[arg(long)]
+    pub agent: Option<String>,
+    /// Pre-approve every probe command: writes
+    /// {"permissions":{"allow":["*"]}} to .ololo/settings.json in this
+    /// workspace. Probes are shell commands sent by the platform, so this
+    /// opts the whole directory into running them unattended — intended
+    /// for headless/automated play where nobody can answer the prompt.
+    #[arg(long, default_value_t = false)]
+    pub allow_all: bool,
+    /// Start a campaign part with an empty workspace instead of importing
+    /// your previous part's results. Only affects parts after the first;
+    /// an already-populated folder is never overwritten either way.
+    #[arg(long, default_value_t = false)]
+    pub fresh: bool,
+    /// Confirm the upload of this folder without asking. A personal
+    /// project — your own work, played in your own repository — shows
+    /// what it will upload and asks first; without a terminal to ask
+    /// on, it needs this flag.
+    #[arg(long, short = 'y', default_value_t = false)]
+    pub yes: bool,
+}
+
+impl PlayFlags {
+    /// `--tui` unless `--no-tui` overrides it.
+    pub fn tui(&self) -> bool {
+        self.tui && !self.no_tui
+    }
+}
+
 #[derive(Subcommand)]
 pub enum Commands {
     /// Log in to an Arena server and store your credentials
@@ -55,38 +100,8 @@ pub enum Commands {
         /// production); override for split dev setups.
         #[arg(long)]
         frontend: Option<String>,
-        /// Render in full-screen TUI mode (ratatui). Requires a TTY on
-        /// stdout. Logs are written to ~/.config/ololo/<profile>.tui.log.
-        /// Enabled by default; pass --no-tui to disable.
-        #[arg(long, default_value_t = true)]
-        tui: bool,
-        /// Disable TUI mode and use the plain text loop instead.
-        #[arg(long, default_value_t = false)]
-        no_tui: bool,
-        /// Agent to run inside the TUI window: a binary name or a full
-        /// command line, e.g. --agent "claude --model glm-5.2:cloud".
-        /// Detected agents are shown interactively when --tui is used
-        /// without --agent.
-        #[arg(long)]
-        agent: Option<String>,
-        /// Pre-approve every probe command: writes
-        /// {"permissions":{"allow":["*"]}} to .ololo/settings.json in this
-        /// workspace. Probes are shell commands sent by the platform, so this
-        /// opts the whole directory into running them unattended — intended
-        /// for headless/automated play where nobody can answer the prompt.
-        #[arg(long, default_value_t = false)]
-        allow_all: bool,
-        /// Start a campaign part with an empty workspace instead of importing
-        /// your previous part's results. Only affects parts after the first;
-        /// an already-populated folder is never overwritten either way.
-        #[arg(long, default_value_t = false)]
-        fresh: bool,
-        /// Confirm the upload of this folder without asking. A personal
-        /// project — your own work, played in your own repository — shows
-        /// what it will upload and asks first; without a terminal to ask
-        /// on, it needs this flag.
-        #[arg(long, short = 'y', default_value_t = false)]
-        yes: bool,
+        #[command(flatten)]
+        play: PlayFlags,
     },
 
     /// Join a session by its join code
@@ -99,38 +114,8 @@ pub enum Commands {
         /// or when the agent process is managed externally).
         #[arg(long)]
         launch: Option<String>,
-        /// Render in full-screen TUI mode (ratatui). Requires a TTY on
-        /// stdout. Logs are written to ~/.config/ololo/<profile>.tui.log.
-        /// Enabled by default; pass --no-tui to disable.
-        #[arg(long, default_value_t = true)]
-        tui: bool,
-        /// Disable TUI mode and use the plain text loop instead.
-        #[arg(long, default_value_t = false)]
-        no_tui: bool,
-        /// Agent to run inside the TUI window: a binary name or a full
-        /// command line, e.g. --agent "claude --model glm-5.2:cloud".
-        /// Detected agents are shown interactively when --tui is used
-        /// without --agent.
-        #[arg(long)]
-        agent: Option<String>,
-        /// Pre-approve every probe command: writes
-        /// {"permissions":{"allow":["*"]}} to .ololo/settings.json in this
-        /// workspace. Probes are shell commands sent by the platform, so this
-        /// opts the whole directory into running them unattended — intended
-        /// for headless/automated play where nobody can answer the prompt.
-        #[arg(long, default_value_t = false)]
-        allow_all: bool,
-        /// Start a campaign part with an empty workspace instead of importing
-        /// your previous part's results. Only affects parts after the first;
-        /// an already-populated folder is never overwritten either way.
-        #[arg(long, default_value_t = false)]
-        fresh: bool,
-        /// Confirm the upload of this folder without asking. A personal
-        /// project — your own work, played in your own repository — shows
-        /// what it will upload and asks first; without a terminal to ask
-        /// on, it needs this flag.
-        #[arg(long, short = 'y', default_value_t = false)]
-        yes: bool,
+        #[command(flatten)]
+        play: PlayFlags,
     },
 
     /// Show the active profile's server and token fingerprint
@@ -246,8 +231,8 @@ mod tests {
             "claude --model glm-5.2:cloud",
         ])
         .unwrap();
-        if let Commands::Join { agent, .. } = cli.command {
-            assert_eq!(agent.as_deref(), Some("claude --model glm-5.2:cloud"));
+        if let Commands::Join { play, .. } = cli.command {
+            assert_eq!(play.agent.as_deref(), Some("claude --model glm-5.2:cloud"));
         } else {
             panic!("expected Join");
         }
@@ -261,7 +246,10 @@ mod tests {
         assert!(matches!(
             cli.command,
             Commands::Start {
-                allow_all: true,
+                play: PlayFlags {
+                    allow_all: true,
+                    ..
+                },
                 ..
             }
         ));
@@ -269,7 +257,10 @@ mod tests {
         assert!(matches!(
             cli.command,
             Commands::Join {
-                allow_all: true,
+                play: PlayFlags {
+                    allow_all: true,
+                    ..
+                },
                 ..
             }
         ));
@@ -278,7 +269,10 @@ mod tests {
         assert!(matches!(
             cli.command,
             Commands::Start {
-                allow_all: false,
+                play: PlayFlags {
+                    allow_all: false,
+                    ..
+                },
                 ..
             }
         ));
@@ -289,15 +283,15 @@ mod tests {
         use clap::Parser;
         // TUI is now the default; --tui is a no-op kept for muscle memory.
         let cli = Cli::try_parse_from(["ololo", "start", "my-slug"]).unwrap();
-        if let Commands::Start { tui, no_tui, .. } = cli.command {
-            assert!(tui);
-            assert!(!no_tui);
+        if let Commands::Start { play, .. } = cli.command {
+            assert!(play.tui);
+            assert!(!play.no_tui);
         } else {
             panic!("expected Start");
         }
         let cli = Cli::try_parse_from(["ololo", "start", "my-slug", "--no-tui"]).unwrap();
-        if let Commands::Start { no_tui, .. } = cli.command {
-            assert!(no_tui);
+        if let Commands::Start { play, .. } = cli.command {
+            assert!(play.no_tui);
         } else {
             panic!("expected Start");
         }
@@ -307,15 +301,15 @@ mod tests {
     fn join_tui_flag_parses() {
         use clap::Parser;
         let cli = Cli::try_parse_from(["ololo", "join", "ABC"]).unwrap();
-        if let Commands::Join { tui, no_tui, .. } = cli.command {
-            assert!(tui);
-            assert!(!no_tui);
+        if let Commands::Join { play, .. } = cli.command {
+            assert!(play.tui);
+            assert!(!play.no_tui);
         } else {
             panic!("expected Join");
         }
         let cli = Cli::try_parse_from(["ololo", "join", "ABC", "--no-tui"]).unwrap();
-        if let Commands::Join { no_tui, .. } = cli.command {
-            assert!(no_tui);
+        if let Commands::Join { play, .. } = cli.command {
+            assert!(play.no_tui);
         } else {
             panic!("expected Join");
         }

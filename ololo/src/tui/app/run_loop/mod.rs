@@ -419,11 +419,12 @@ pub async fn run(
                         apply_pty_layout(&mut app, pty.as_deref_mut(), c, r);
                     }
                     Some(Ok(crossterm::event::Event::Mouse(m))) => {
-                        // Header link click: open the session dashboard in the
-                        // browser. Only the link's own column range is hit-tested;
-                        // clicks elsewhere in the header fall through to the pty
-                        // handler below (which ignores them, since the header is
-                        // outside the pty block).
+                        // Header clicks: the session link opens the session
+                        // dashboard in the browser, the Help/Exit buttons do
+                        // what F1/F10 do. Only their own column ranges are
+                        // hit-tested; clicks elsewhere in the header fall
+                        // through to the pty handler below (which ignores
+                        // them, since the header is outside the pty block).
                         if m.row == 0
                             && matches!(
                                 m.kind,
@@ -432,28 +433,26 @@ pub async fn run(
                                 )
                             )
                         {
-                            let (session_range, project_range) =
-                                crate::tui::render::header::header_link_ranges(
-                                    &app.header.session_url,
-                                    &app.header.project_url,
-                                );
-                            let clicked = if let Some((s, e)) = session_range
-                                && m.column >= s
-                                && m.column < e
-                            {
-                                Some(app.header.session_url.clone())
-                            } else if let Some((s, e)) = project_range
-                                && m.column >= s
-                                && m.column < e
-                            {
-                                Some(app.header.project_url.clone())
-                            } else {
-                                None
+                            use crate::tui::render::header::{
+                                HeaderButton, header_button_at, header_link_range,
                             };
-                            if let Some(url) = clicked {
-                                tokio::spawn(async move {
-                                    let _ = open::that(url);
-                                });
+                            let (term_cols, _) = crossterm::terminal::size().unwrap_or((80, 24));
+                            match header_button_at(term_cols, m.column) {
+                                Some(HeaderButton::Help) => app.toggle_help(),
+                                Some(HeaderButton::Exit) => {
+                                    app.should_quit = Some(QuitReason::UserRequested);
+                                }
+                                None => {
+                                    if let Some((s, e)) = header_link_range(&app.header.session_url)
+                                        && m.column >= s
+                                        && m.column < e
+                                    {
+                                        let url = app.header.session_url.clone();
+                                        tokio::spawn(async move {
+                                            let _ = open::that(url);
+                                        });
+                                    }
+                                }
                             }
                         }
                         // The chat sidebar is a mouse surface of its own —

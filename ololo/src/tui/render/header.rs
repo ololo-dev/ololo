@@ -8,7 +8,72 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
+/// The header's right-hand buttons, each a label and the hotkey it stands
+/// for. Clicking one does what its key does.
+const BUTTONS: [&str; 2] = ["[Help - F1]", "[Exit - F10]"];
+
+/// A clickable header button.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HeaderButton {
+    Help,
+    Exit,
+}
+
+/// Columns the right-aligned buttons take, trailing space included.
+fn buttons_width() -> u16 {
+    BUTTONS
+        .iter()
+        .map(|b| Span::raw(*b).width() as u16 + 1)
+        .sum()
+}
+
+/// The buttons only show when the session link still fits beside them.
+const MIN_LEFT_WIDTH: u16 = 20;
+
+/// The button under `column` on a header row `width` columns wide, if any.
+/// Mirrors the right-aligned layout in `render_header`.
+pub(crate) fn header_button_at(width: u16, column: u16) -> Option<HeaderButton> {
+    let total = buttons_width();
+    if width < total + MIN_LEFT_WIDTH {
+        return None;
+    }
+    let mut col = width - total;
+    for (label, button) in BUTTONS.iter().zip([HeaderButton::Help, HeaderButton::Exit]) {
+        let w = Span::raw(*label).width() as u16;
+        if column >= col && column < col + w {
+            return Some(button);
+        }
+        col += w + 1;
+    }
+    None
+}
+
 pub(crate) fn render_header(f: &mut Frame, area: Rect, app: &TuiApp) {
+    let (area, buttons_area) = if area.width >= buttons_width() + MIN_LEFT_WIDTH {
+        let w = buttons_width();
+        (
+            Rect {
+                width: area.width - w,
+                ..area
+            },
+            Some(Rect {
+                x: area.x + area.width - w,
+                width: w,
+                ..area
+            }),
+        )
+    } else {
+        (area, None)
+    };
+    if let Some(buttons_area) = buttons_area {
+        let style = Style::default().add_modifier(Modifier::BOLD);
+        let mut spans = vec![];
+        for label in BUTTONS {
+            spans.push(Span::styled(label, style));
+            spans.push(Span::raw(" "));
+        }
+        f.render_widget(Paragraph::new(Line::from(spans)), buttons_area);
+    }
     let h = &app.header;
     let (status_emoji, status_label) = match h.status {
         Status::Connecting => ("🔌", "Connecting".to_string()),
@@ -64,13 +129,6 @@ pub(crate) fn render_header(f: &mut Frame, area: Rect, app: &TuiApp) {
         spans.push(Span::styled(h.session_url.clone(), link_style));
         spans.push(Span::raw(" "));
     }
-    if h.project_url.is_empty() {
-        spans.push(Span::raw(format!(" project={} ", h.project)));
-    } else {
-        spans.push(Span::raw(" 📦 "));
-        spans.push(Span::styled(h.project_url.clone(), link_style));
-        spans.push(Span::raw(" "));
-    }
     spans.push(Span::raw(format!(" {status_emoji} {status_label} ")));
     spans.push(Span::raw(format!(" score={score_str} ")));
     spans.push(Span::raw(format!(" rank={rank_str} ")));
@@ -110,31 +168,15 @@ pub(crate) fn render_header(f: &mut Frame, area: Rect, app: &TuiApp) {
     f.render_widget(p, area);
 }
 
-/// 0-based, half-open `[start, end)` column ranges of the session and
-/// project links within the header row, or `None` for a link that isn't
-/// rendered. Used to hit-test mouse clicks so only the link (not the
-/// whole header) opens the browser. Mirrors the prefix layout in
-/// `render_header`.
-pub(crate) fn header_link_ranges(
-    session_url: &str,
-    project_url: &str,
-) -> (Option<(u16, u16)>, Option<(u16, u16)>) {
-    let mut col: u16 = 0;
-    let session_range = if session_url.is_empty() {
-        None
-    } else {
-        col += Span::raw(" 🔗 ").width() as u16;
-        let w = Span::raw(session_url).width() as u16;
-        let r = Some((col, col + w));
-        col += w + Span::raw(" ").width() as u16;
-        r
-    };
-    let project_range = if project_url.is_empty() {
-        None
-    } else {
-        col += Span::raw(" 📦 ").width() as u16;
-        let w = Span::raw(project_url).width() as u16;
-        Some((col, col + w))
-    };
-    (session_range, project_range)
+/// 0-based, half-open `[start, end)` column range of the session link
+/// within the header row, or `None` when it isn't rendered. Used to
+/// hit-test mouse clicks so only the link (not the whole header) opens the
+/// browser. Mirrors the prefix layout in `render_header`.
+pub(crate) fn header_link_range(session_url: &str) -> Option<(u16, u16)> {
+    if session_url.is_empty() {
+        return None;
+    }
+    let col = Span::raw(" 🔗 ").width() as u16;
+    let w = Span::raw(session_url).width() as u16;
+    Some((col, col + w))
 }

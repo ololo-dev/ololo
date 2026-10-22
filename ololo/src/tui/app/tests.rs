@@ -741,13 +741,44 @@ fn last_failed_probe_picks_newest_failure_skipping_passes() {
         p_new_fail,
         arena_core::protocol::ProbeOutcome::Error,
     );
-    let p_pass = arrive(&mut app, tid, 0, "Trivia");
-    grade(&mut app, p_pass, arena_core::protocol::ProbeOutcome::Pass);
+    let other = arrive(&mut app, Uuid::new_v4(), 1, "Addition");
+    grade(&mut app, other, arena_core::protocol::ProbeOutcome::Pass);
     assert_eq!(
         app.last_failed_probe().map(|p| p.probe_id),
         Some(p_new_fail),
-        "newest failure wins; a newer pass is skipped"
+        "newest failure wins; a newer pass of another check is skipped"
     );
+}
+
+#[test]
+fn a_later_pass_of_the_same_check_clears_its_failure() {
+    let mut app = fresh_app();
+    let tid = Uuid::new_v4();
+    let fail = arrive(&mut app, tid, 0, "Setup");
+    grade(&mut app, fail, arena_core::protocol::ProbeOutcome::Error);
+    let pass = arrive(&mut app, tid, 0, "Setup");
+    grade(&mut app, pass, arena_core::protocol::ProbeOutcome::Pass);
+    // The session moves on; later tasks pass.
+    let next = arrive(&mut app, Uuid::new_v4(), 1, "Warmup");
+    grade(&mut app, next, arena_core::protocol::ProbeOutcome::Pass);
+    assert_eq!(app.last_failed_probe().map(|p| p.probe_id), None);
+    app.has_pty = true;
+    assert!(
+        app.paste_items()
+            .iter()
+            .all(|i| i.kind != crate::tui::app::PasteKind::FailedCheck),
+        "F3 offers no failed check once it passed"
+    );
+}
+
+#[test]
+fn a_pending_retry_keeps_the_failure_until_it_is_graded() {
+    let mut app = fresh_app();
+    let tid = Uuid::new_v4();
+    let fail = arrive(&mut app, tid, 0, "Setup");
+    grade(&mut app, fail, arena_core::protocol::ProbeOutcome::Error);
+    let _retry = arrive(&mut app, tid, 0, "Setup");
+    assert_eq!(app.last_failed_probe().map(|p| p.probe_id), Some(fail));
 }
 
 #[test]

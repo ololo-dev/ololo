@@ -1391,19 +1391,39 @@ impl TuiApp {
         self.chat_scroll = self.chat_scroll.saturating_add_signed(delta).min(cap);
     }
 
-    /// The most recent probe that failed: local error, timeout, or a
-    /// server grade of Error/NoResponse. A later re-grade to Pass takes
-    /// the probe out of the running.
+    /// The most recent check that is still failing: its newest settled
+    /// result is a local error, a timeout, or a server grade of
+    /// Error/NoResponse. A server Pass outranks a local failure, and a
+    /// later pass of the same check (same task and test) clears it — a
+    /// setup check that failed before AGENTS.md existed is not "the last
+    /// failure" for the rest of the session.
     pub fn last_failed_probe(&self) -> Option<&ProbeResultInfo> {
         use arena_core::protocol::ProbeOutcome;
-        self.probes.iter().rev().find(|p| {
-            p.error.is_some()
-                || p.exit_code == Some(-1)
-                || matches!(
-                    p.outcome,
-                    Some(ProbeOutcome::Error | ProbeOutcome::NoResponse)
-                )
-        })
+        let failed = |p: &ProbeResultInfo| match p.outcome {
+            Some(ProbeOutcome::Pass) => false,
+            Some(ProbeOutcome::Error | ProbeOutcome::NoResponse) => true,
+            None => p.error.is_some() || p.exit_code == Some(-1),
+        };
+        // A probe still waiting for its result says nothing about its check.
+        let settled =
+            |p: &ProbeResultInfo| p.outcome.is_some() || p.exit_code.is_some() || p.error.is_some();
+        let mut checked: Vec<(Option<Uuid>, i32, i32, &str)> = Vec::new();
+        for p in self.probes.iter().rev().filter(|p| settled(p)) {
+            let check = (
+                p.task_id,
+                p.task_ordinal,
+                p.test_ordinal,
+                p.test_label.as_str(),
+            );
+            if checked.contains(&check) {
+                continue;
+            }
+            if failed(p) {
+                return Some(p);
+            }
+            checked.push(check);
+        }
+        None
     }
 
     /// F1 / `?`: toggle the hotkey-help overlay. Opening from Pty focus

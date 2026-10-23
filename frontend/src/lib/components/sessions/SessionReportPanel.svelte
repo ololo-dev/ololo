@@ -156,12 +156,39 @@
     );
   });
 
+  /** The fair-play judge. It only ever takes points back, so a clean verdict
+   *  is the same sentence on every task — "nothing to withdraw". V2LZPE's
+   *  report stacked seventeen of them above the three judges that reviewed
+   *  the work. A clean run is one line; a penalty keeps its card. */
+  const ANTI_CHEAT = "task-anti-cheat";
+
+  function clearedAntiCheat(v: PlayerJudgeScoredPayload): boolean {
+    return v.judge_slug === ANTI_CHEAT && v.point_delta >= 0;
+  }
+
+  const antiCheat = $derived.by(() => {
+    const runs = orderedVerdicts.filter((e) => e.v.judge_slug === ANTI_CHEAT);
+    const cleared = runs.filter((e) => clearedAntiCheat(e.v)).length;
+    return { cleared, flagged: runs.length - cleared };
+  });
+
+  const antiCheatTitle = $derived(antiCheat.flagged > 0 ? "Anti-cheat checked." : "Anti-cheat passed.");
+  const antiCheatLine = $derived(
+    antiCheat.flagged > 0
+      ? `${antiCheat.cleared} of ${antiCheat.cleared + antiCheat.flagged} tasks clean; the ${
+          antiCheat.flagged === 1 ? "penalty is" : "penalties are"
+        } below.`
+      : `${antiCheat.cleared} ${antiCheat.cleared === 1 ? "task" : "tasks"} checked, nothing found.`,
+  );
+
   /** Judge verdicts grouped under the task they scored.
    *
    *  The reporter's notes are matched by judge name, in order: a judge that
    *  ran on two tasks gets two entries in the document, and the first belongs
    *  to the first task it scored. Names it invented — or judges it skipped —
-   *  simply leave the summary lines off that card. */
+   *  simply leave the summary lines off that card. A cleared anti-cheat run
+   *  still takes its note off the queue, so a penalty later in the session
+   *  gets the note written about it, and then gets no card. */
   const panelGroups = $derived.by(() => {
     const queues = new Map<string, { good: string; improve?: string | null }[]>();
     for (const n of doc?.judges ?? []) {
@@ -172,6 +199,8 @@
     }
     const byTask = new Map<string, PanelGroup>();
     for (const { ordinal, task_id, v } of orderedVerdicts) {
+      const note = queues.get(v.judge_name.trim().toLowerCase())?.shift() ?? null;
+      if (clearedAntiCheat(v)) continue;
       const group = byTask.get(task_id) ?? {
         task_id,
         ordinal,
@@ -183,7 +212,7 @@
       group.verdicts.push({
         key: `${task_id}:${v.judge_slug}:${v.created_at}`,
         verdict: v,
-        note: queues.get(v.judge_name.trim().toLowerCase())?.shift() ?? null,
+        note,
       });
       byTask.set(task_id, group);
     }
@@ -209,8 +238,10 @@
     return out.sort((a, b) => a.ordinal - b.ordinal || a.name.localeCompare(b.name));
   });
 
-  const verdictCount = $derived(orderedVerdicts.length);
-  const judgeCount = $derived(new Set(orderedVerdicts.map((e) => e.v.judge_slug)).size);
+  /** What the cards show: the reviews, and anti-cheat only where it struck. */
+  const shownVerdicts = $derived(orderedVerdicts.filter((e) => !clearedAntiCheat(e.v)));
+  const verdictCount = $derived(shownVerdicts.length);
+  const judgeCount = $derived(new Set(shownVerdicts.map((e) => e.v.judge_slug)).size);
 
   /** The criteria sheet, summarised for the scorecard: ONE row per criterion
    *  for the whole session.
@@ -364,8 +395,9 @@
   }
 </script>
 
-<!-- The session debrief: what you built, where it fought back, what each judge
-     thought, and how to score higher. Laid out in the documentation's blocks —
+<!-- The session debrief: the scorecard and how to score higher first — the
+     part a player comes back for — then what you built, where it fought back,
+     and what each judge thought. Laid out in the documentation's blocks —
      same type scale, same callout, same table, same counted list — because it
      is the one page here that is read rather than scanned. Deliberately not a
      verdict card: no rating, no points of its own. -->
@@ -392,169 +424,6 @@
       </ul>
 
       {#if doc}
-        <section data-testid="report-built">
-          <h3>What you built</h3>
-          <p>{doc.built.brief}</p>
-
-          {#if completed.length > 0}
-            <ul class="doc-list">
-              {#each completed as t (t.task_id)}
-                <li data-testid="report-built-task-{t.ordinal}">
-                  <b>{t.title}</b>{#if noteByOrdinal.get(t.ordinal)}{" — "}{noteByOrdinal.get(
-                      t.ordinal,
-                    )}{/if}
-                </li>
-              {/each}
-            </ul>
-          {/if}
-
-          {#if shots.length > 0}
-            <div class="shots" data-testid="report-artifacts">
-              {#each shots as shot (shot.key)}
-                {#if shot.content_type.startsWith("image/")}
-                  <figure>
-                    <button
-                      type="button"
-                      class="thumb"
-                      title="{shot.label} — click to enlarge"
-                      data-testid="report-artifact-{shot.key}"
-                      onclick={() => openLightbox(shot.key)}
-                    >
-                      <img src={shot.src} alt={shot.label} loading="lazy" />
-                    </button>
-                    <figcaption>{shot.label}</figcaption>
-                  </figure>
-                {:else if shot.content_type.startsWith("video/")}
-                  <figure>
-                    <!-- svelte-ignore a11y_media_has_caption -->
-                    <video src={shot.src} controls preload="metadata" title={shot.label}></video>
-                    <figcaption>{shot.label}</figcaption>
-                  </figure>
-                {:else}
-                  <a class="file" href={shot.src} target="_blank" rel="noreferrer">{shot.label}</a>
-                {/if}
-              {/each}
-            </div>
-          {/if}
-        </section>
-
-        {#if (doc.friction ?? []).length > 0}
-          <section data-testid="report-friction">
-            <h3>Where it fought back</h3>
-            <!-- Index keys on purpose: this is the model's own list, and it
-                 may legitimately name the same task twice (BZU2NI reported
-                 two rough patches on task 1 — keyed by ordinal, the page
-                 threw each_key_duplicate and never opened). The list is
-                 render-once content; it never reorders. -->
-            {#each doc.friction ?? [] as f, i (i)}
-              <blockquote>
-                <b>{taskLabel(f.ordinal)}</b>
-                <p>{f.what_happened}</p>
-                {#if f.why}<p>{f.why}</p>{/if}
-              </blockquote>
-            {/each}
-          </section>
-        {/if}
-
-        {#if panelGroups.length > 0}
-          <!-- One card per verdict, under the task it scored: the judge, what
-               it moved, the reporter's two lines, and the verdict itself.
-               The table this replaced showed the two lines alone — praise
-               beside a score the player could not account for. -->
-          <section data-testid="report-judges">
-            <h3>Judges</h3>
-            <p>
-              {verdictCount}
-              {verdictCount === 1 ? "evaluation" : "evaluations"} from {judgeCount}
-              {judgeCount === 1 ? "judge" : "judges"}, worth
-              <b class={pointsTone(summary.judgePoints)}>{pointsChip(summary.judgePoints)}</b>
-              points of your score.
-            </p>
-
-            {#each panelGroups as g (g.task_id)}
-              <div class="panel-task" data-testid="report-judges-task-{g.ordinal}">
-                <div class="panel-task-head">
-                  <b>{g.label}</b>
-                  <span class="pts {pointsTone(g.points)}">{pointsChip(g.points)} pts</span>
-                </div>
-
-                {#each g.verdicts as row (row.key)}
-                  <article class="verdict" data-testid="report-verdict-{row.verdict.judge_slug}">
-                    <header>
-                      {#if judgeAvatars[row.verdict.judge_slug]}
-                        <img
-                          src={ikAvatar(judgeAvatars[row.verdict.judge_slug], 28)}
-                          alt=""
-                          class="who-avatar"
-                        />
-                      {:else}
-                        <span class="who-avatar fallback" aria-hidden="true">⚖️</span>
-                      {/if}
-                      <b class="who">{row.verdict.judge_name}</b>
-                      <span class="pts {pointsTone(row.verdict.point_delta)}">
-                        {pointsChip(row.verdict.point_delta)} pts
-                      </span>
-                    </header>
-
-                    {#if row.note}
-                      <dl class="brief">
-                        <dt>Liked</dt>
-                        <dd>{row.note.good}</dd>
-                        <dt>Wants better</dt>
-                        <dd>{row.note.improve ?? "Nothing this time."}</dd>
-                      </dl>
-                    {/if}
-
-                    {#if row.verdict.feedback}
-                      <div class="verdict-text" data-testid="report-verdict-text">
-                        <MarkdownContent
-                          value={markdownSafe(row.verdict.feedback)}
-                          class="text-[15px]"
-                        />
-                      </div>
-                    {/if}
-                  </article>
-                {/each}
-              </div>
-            {/each}
-
-            {#if unscoredJudges.length > 0}
-              <p class="muted" data-testid="report-judges-unscored">
-                No verdict from {#each unscoredJudges as u, i (u.key)}{i > 0
-                    ? ", "
-                    : ""}{u.name} (Task #{u.ordinal} — {u.reason}){/each}.
-              </p>
-            {/if}
-          </section>
-        {:else if (doc.judges ?? []).length > 0}
-          <!-- No verdicts reached this page — an older snapshot, or a report
-               that outlived the runs behind it. The reporter's two lines are
-               still worth showing on their own. -->
-          <section data-testid="report-judges">
-            <h3>Judges</h3>
-            <div class="table-scroll">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Judge</th>
-                    <th>What was good</th>
-                    <th>What should be improved</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {#each doc.judges ?? [] as j, i (i)}
-                    <tr>
-                      <td class="who">{j.judge}</td>
-                      <td>{j.good}</td>
-                      <td>{j.improve ?? "Nothing this time."}</td>
-                    </tr>
-                  {/each}
-                </tbody>
-              </table>
-            </div>
-          </section>
-        {/if}
-
         {#if scorecard.length > 0}
           <!-- The criteria sheet the open-ended judges filled in: the only
                numbers on this page that compare between judges, each with the
@@ -658,6 +527,178 @@
             </ol>
           </section>
         {/if}
+        <section data-testid="report-built">
+          <h3>What you built</h3>
+          <p>{doc.built.brief}</p>
+
+          {#if completed.length > 0}
+            <ul class="doc-list">
+              {#each completed as t (t.task_id)}
+                <li data-testid="report-built-task-{t.ordinal}">
+                  <b>{t.title}</b>{#if noteByOrdinal.get(t.ordinal)}{" — "}{noteByOrdinal.get(
+                      t.ordinal,
+                    )}{/if}
+                </li>
+              {/each}
+            </ul>
+          {/if}
+
+          {#if shots.length > 0}
+            <div class="shots" data-testid="report-artifacts">
+              {#each shots as shot (shot.key)}
+                {#if shot.content_type.startsWith("image/")}
+                  <figure>
+                    <button
+                      type="button"
+                      class="thumb"
+                      title="{shot.label} — click to enlarge"
+                      data-testid="report-artifact-{shot.key}"
+                      onclick={() => openLightbox(shot.key)}
+                    >
+                      <img src={shot.src} alt={shot.label} loading="lazy" />
+                    </button>
+                    <figcaption>{shot.label}</figcaption>
+                  </figure>
+                {:else if shot.content_type.startsWith("video/")}
+                  <figure>
+                    <!-- svelte-ignore a11y_media_has_caption -->
+                    <video src={shot.src} controls preload="metadata" title={shot.label}></video>
+                    <figcaption>{shot.label}</figcaption>
+                  </figure>
+                {:else}
+                  <a class="file" href={shot.src} target="_blank" rel="noreferrer">{shot.label}</a>
+                {/if}
+              {/each}
+            </div>
+          {/if}
+        </section>
+
+        {#if (doc.friction ?? []).length > 0}
+          <section data-testid="report-friction">
+            <h3>Where it fought back</h3>
+            <!-- Index keys on purpose: this is the model's own list, and it
+                 may legitimately name the same task twice (BZU2NI reported
+                 two rough patches on task 1 — keyed by ordinal, the page
+                 threw each_key_duplicate and never opened). The list is
+                 render-once content; it never reorders. -->
+            {#each doc.friction ?? [] as f, i (i)}
+              <blockquote>
+                <b>{taskLabel(f.ordinal)}</b>
+                <p>{f.what_happened}</p>
+                {#if f.why}<p>{f.why}</p>{/if}
+              </blockquote>
+            {/each}
+          </section>
+        {/if}
+
+        {#if panelGroups.length > 0 || antiCheat.cleared > 0}
+          <!-- One card per verdict, under the task it scored: the judge, what
+               it moved, the reporter's two lines, and the verdict itself.
+               The table this replaced showed the two lines alone — praise
+               beside a score the player could not account for. -->
+          <section data-testid="report-judges">
+            <h3>Judges</h3>
+            {#if verdictCount > 0}
+              <p>
+                {verdictCount}
+                {verdictCount === 1 ? "evaluation" : "evaluations"} from {judgeCount}
+                {judgeCount === 1 ? "judge" : "judges"}, worth
+                <b class={pointsTone(summary.judgePoints)}>{pointsChip(summary.judgePoints)}</b>
+                points of your score.
+              </p>
+            {/if}
+
+            {#if antiCheat.cleared > 0}
+              <p class="fair-play" data-testid="report-anti-cheat-clear">
+                <span class="fair-play-mark" aria-hidden="true">✓</span>
+                <span><b>{antiCheatTitle}</b> {antiCheatLine}</span>
+              </p>
+            {/if}
+
+            {#each panelGroups as g (g.task_id)}
+              <div class="panel-task" data-testid="report-judges-task-{g.ordinal}">
+                <div class="panel-task-head">
+                  <b>{g.label}</b>
+                  <span class="pts {pointsTone(g.points)}">{pointsChip(g.points)} pts</span>
+                </div>
+
+                {#each g.verdicts as row (row.key)}
+                  <article class="verdict" data-testid="report-verdict-{row.verdict.judge_slug}">
+                    <header>
+                      {#if judgeAvatars[row.verdict.judge_slug]}
+                        <img
+                          src={ikAvatar(judgeAvatars[row.verdict.judge_slug], 28)}
+                          alt=""
+                          class="who-avatar"
+                        />
+                      {:else}
+                        <span class="who-avatar fallback" aria-hidden="true">⚖️</span>
+                      {/if}
+                      <b class="who">{row.verdict.judge_name}</b>
+                      <span class="pts {pointsTone(row.verdict.point_delta)}">
+                        {pointsChip(row.verdict.point_delta)} pts
+                      </span>
+                    </header>
+
+                    {#if row.note}
+                      <dl class="brief">
+                        <dt>Liked</dt>
+                        <dd>{row.note.good}</dd>
+                        <dt>Wants better</dt>
+                        <dd>{row.note.improve ?? "Nothing this time."}</dd>
+                      </dl>
+                    {/if}
+
+                    {#if row.verdict.feedback}
+                      <div class="verdict-text" data-testid="report-verdict-text">
+                        <MarkdownContent
+                          value={markdownSafe(row.verdict.feedback)}
+                          class="text-[15px]"
+                        />
+                      </div>
+                    {/if}
+                  </article>
+                {/each}
+              </div>
+            {/each}
+
+            {#if unscoredJudges.length > 0}
+              <p class="muted" data-testid="report-judges-unscored">
+                No verdict from {#each unscoredJudges as u, i (u.key)}{i > 0
+                    ? ", "
+                    : ""}{u.name} (Task #{u.ordinal} — {u.reason}){/each}.
+              </p>
+            {/if}
+          </section>
+        {:else if (doc.judges ?? []).length > 0}
+          <!-- No verdicts reached this page — an older snapshot, or a report
+               that outlived the runs behind it. The reporter's two lines are
+               still worth showing on their own. -->
+          <section data-testid="report-judges">
+            <h3>Judges</h3>
+            <div class="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Judge</th>
+                    <th>What was good</th>
+                    <th>What should be improved</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each doc.judges ?? [] as j, i (i)}
+                    <tr>
+                      <td class="who">{j.judge}</td>
+                      <td>{j.good}</td>
+                      <td>{j.improve ?? "Nothing this time."}</td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        {/if}
+
       {:else}
         <!-- The model answered in prose instead of the document: render what
              it wrote rather than dropping the report. -->
@@ -913,6 +954,23 @@
 
   .panel-task-head .pts {
     margin-left: 0;
+  }
+
+  /* A clean anti-cheat run: one line, not a card per task. */
+  .doc .fair-play {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    background: #ecfdf3;
+    color: #166534;
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin: 16px 0;
+  }
+
+  .fair-play-mark {
+    font-weight: 700;
+    color: #15803d;
   }
 
   .pos {

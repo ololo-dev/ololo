@@ -112,7 +112,7 @@ describe("SessionReportPanel", () => {
     expect(within(judges).getByText("Nothing this time.")).not.toBeNull();
   });
 
-  it("closes with how to improve results", () => {
+  it("has how to improve results", () => {
     render(SessionReportPanel, base);
     expect(screen.getByRole("heading", { name: "How to improve results" })).not.toBeNull();
     expect(screen.getByText(/Write a test per operator/)).not.toBeNull();
@@ -543,6 +543,98 @@ describe("SessionReportPanel", () => {
       render(SessionReportPanel, withVerdicts);
       const judges = screen.getByTestId("report-judges");
       expect(within(judges).queryByRole("columnheader", { name: "What was good" })).toBeNull();
+    });
+
+    it("opens with the scorecard and how to improve, ahead of the story", () => {
+      const evaluationsByTask = new Map<string, PlayerTaskEvaluation>([
+        [
+          "t1",
+          {
+            task_id: "t1",
+            criteria: [
+              {
+                key: "product",
+                title: "Product",
+                weight: 0.25,
+                scores: [{ judge_slug: "architecture", score: 8, rationale: "works" }],
+              },
+            ],
+          } as PlayerTaskEvaluation,
+        ],
+      ]);
+      render(SessionReportPanel, { ...withVerdicts, evaluationsByTask });
+      const order = ["scorecard", "improve", "built", "friction", "judges"].map((id) =>
+        screen.getByTestId(`report-${id}`),
+      );
+      for (let i = 1; i < order.length; i++) {
+        expect(
+          order[i - 1].compareDocumentPosition(order[i]) & Node.DOCUMENT_POSITION_FOLLOWING,
+        ).toBeTruthy();
+      }
+    });
+
+    // V2LZPE: seventeen "nothing to withdraw" cards from the anti-cheat judge
+    // buried the three judges that actually reviewed the work.
+    const antiCheat = (task_id: string, point_delta: number, feedback: string) =>
+      verdict({
+        task_id,
+        judge_slug: "task-anti-cheat",
+        judge_name: "Task Anti-Cheat",
+        rating: point_delta,
+        point_delta,
+        feedback,
+      });
+
+    it("folds a clean anti-cheat run into one line instead of a card per task", () => {
+      const clean = new Map(judgeResultsByTask);
+      clean.set("t1", [
+        ...judgeResultsByTask.get("t1")!,
+        antiCheat("t1", 0, "nothing to withdraw"),
+      ]);
+      clean.set("t3", [
+        ...judgeResultsByTask.get("t3")!,
+        antiCheat("t3", 0, "nothing to withdraw"),
+      ]);
+      render(SessionReportPanel, { ...base, judgeResultsByTask: clean });
+      const judges = screen.getByTestId("report-judges");
+      expect(within(judges).queryByTestId("report-verdict-task-anti-cheat")).toBeNull();
+      expect(within(judges).queryByText(/nothing to withdraw/)).toBeNull();
+      const line = screen.getByTestId("report-anti-cheat-clear");
+      expect(line.textContent).toContain("Anti-cheat passed.");
+      expect(line.textContent).toContain("2 tasks checked, nothing found.");
+      // The count covers the reviews only.
+      expect(judges.textContent?.replace(/\s+/g, " ")).toContain("3 evaluations from 2 judges");
+    });
+
+    it("keeps the card when anti-cheat took points back", () => {
+      const mixed = new Map(judgeResultsByTask);
+      mixed.set("t1", [
+        ...judgeResultsByTask.get("t1")!,
+        antiCheat("t1", 0, "nothing to withdraw"),
+      ]);
+      mixed.set("t3", [
+        ...judgeResultsByTask.get("t3")!,
+        antiCheat("t3", -20, "The solution was committed before the session started."),
+      ]);
+      render(SessionReportPanel, { ...base, judgeResultsByTask: mixed });
+      const flagged = within(screen.getByTestId("report-judges-task-3")).getByTestId(
+        "report-verdict-task-anti-cheat",
+      );
+      expect(flagged.textContent).toContain("committed before the session started");
+      expect(flagged.textContent).toContain("-20 pts");
+      expect(screen.getByTestId("report-anti-cheat-clear").textContent).toContain(
+        "1 of 2 tasks clean; the penalty is below.",
+      );
+    });
+
+    it("shows the judges section when anti-cheat is the only judge, and it passed", () => {
+      const only = new Map([["t1", [antiCheat("t1", 0, "nothing to withdraw")]]]);
+      render(SessionReportPanel, { ...base, judgeResultsByTask: only });
+      expect(screen.getByTestId("report-anti-cheat-clear")).not.toBeNull();
+      // Not the reporter's fallback table, and no "0 evaluations" line.
+      const judges = screen.getByTestId("report-judges");
+      expect(within(judges).queryByRole("columnheader", { name: "What was good" })).toBeNull();
+      expect(judges.textContent).not.toContain("evaluations from");
     });
   });
 

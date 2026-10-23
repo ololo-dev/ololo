@@ -271,6 +271,13 @@
     }
   }
 
+  /** Whether the viewer switched participant `i`'s line off in the legend:
+   * uPlot hides the line, and the hooks must drop its markers with it. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function hidden(u: any, i: number): boolean {
+    return u.series[1 + i]?.show === false;
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   function drawZeroLine(u: any) {
     const y0 = u.valToPos(0, "y", true);
@@ -298,6 +305,7 @@
     const ctx: CanvasRenderingContext2D = u.ctx;
     ctx.save();
     members.forEach((m, i) => {
+      if (hidden(u, i)) return;
       const ranges = hookHealth?.players[m.player_id]?.task_ranges ?? [];
       ctx.strokeStyle = seriesColor(i);
       ctx.globalAlpha = 0.55;
@@ -427,6 +435,7 @@
     ctx.save();
     ctx.font = `bold ${9 * dpr}px sans-serif`;
     for (let i = 0; i < members.length; i++) {
+      if (hidden(u, i)) continue;
       const data: (number | null)[] = u.data[1 + i] ?? [];
       const color = seriesColor(i);
       // The right edge of the last pill on each row (above / below the
@@ -662,6 +671,7 @@
     // The point(s) at this x, one per participant at most.
     const lines: { label: string; value: string; tone?: string }[] = [];
     for (let i = 0; i < members.length; i++) {
+      if (hidden(u, i)) continue;
       const meta = hookMeta.get(`${i}:${idx}`);
       if (!meta) continue;
       const cp = meta.checkpoint;

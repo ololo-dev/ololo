@@ -426,6 +426,36 @@ describe("ScoreChart with health", () => {
     localStorage.removeItem("ololo.chart.healthLabels");
   });
 
+  // A crowded chart is read by switching lines off in the legend. uPlot hid
+  // the line, but the markers and pills the hook draws stayed behind.
+  it("a line switched off in the legend takes its markers with it", async () => {
+    const { ctx, calls } = recordingContext();
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(() => ctx);
+    const { container } = render(ScoreChart, {
+      phase: "active",
+      leaderboard: [ALICE_ENTRY],
+      reportMembers: [],
+      scoreHistory: [
+        { t: 0, scores: { p1: 0 } },
+        { t: 10, scores: { p1: 5 }, changes: [{ player_id: "p1", delta: 5, kind: "probe" }] },
+      ],
+      health: HEALTH,
+    });
+    await vi.waitFor(() => {
+      expect(calls.filter((c) => c.name === "arc").length).toBeGreaterThanOrEqual(3);
+    });
+
+    calls.length = 0;
+    const alice = container.querySelectorAll<HTMLElement>(".u-legend .u-series th")[1];
+    alice.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    // The plot redraws without Alice: no discs, no pills.
+    await vi.waitFor(() => {
+      expect(calls.some((c) => c.name === "clearRect")).toBe(true);
+    });
+    expect(calls.filter((c) => c.name === "arc")).toEqual([]);
+    expect(calls.some((c) => c.name === "fillText" && c.args[0] === "80.0")).toBe(false);
+  });
+
   it("health points alone (no scores yet) still draw the chart", async () => {
     const { ctx } = recordingContext();
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(() => ctx);

@@ -75,8 +75,10 @@ pub struct PermissionPrompt {
     pub command: String,
     /// Rule that "Always allow" persists to `.ololo/settings.json`.
     pub always_rule: String,
-    /// Probe deadline — the prompt declines itself when it passes.
-    pub deadline_secs: i64,
+    /// How long the prompt waits for an answer before declining itself:
+    /// the server's permission window, or the probe deadline on a server
+    /// that offers none.
+    pub wait_secs: u64,
     pub responder: Arc<Mutex<Option<tokio::sync::oneshot::Sender<crate::permissions::Decision>>>>,
 }
 

@@ -820,6 +820,7 @@ pub async fn handle_player_agent_socket(
             },
             probe_seq,
             health,
+            permission_wait_secs: Some(arena_core::protocol::PROBE_PERMISSION_WAIT_SECS),
         };
         let push_json = serde_json::to_string(&push_frame).unwrap_or_default();
         if socket.send(Message::Text(push_json)).await.is_err() {
@@ -832,7 +833,13 @@ pub async fn handle_player_agent_socket(
         // is in flight — the post-grading sleep is skipped so the completion
         // probe dispatches right after the current probe settles.
         let mut completion_flag_nudge = false;
-        let result = tokio::time::timeout(deadline_duration, async {
+        // The deadline is the command's run time. While the agent asks the
+        // player whether the command may run, the clock is the player's:
+        // the wait grows once by the permission window.
+        let mut wait_until = tokio::time::Instant::now() + deadline_duration;
+        let mut permission_extended = false;
+        let result = loop {
+            let step = tokio::time::timeout_at(wait_until, async {
             loop {
                 tokio::select! {
                     msg = socket.recv() => {
@@ -891,10 +898,16 @@ pub async fn handle_player_agent_socket(
                                         completion_flag_nudge = true;
                                         continue;
                                     }
-                                    return Some(frame);
+                                    if let PlayerAgentClientFrame::ProbePermissionPending { probe_id: asked } = frame {
+                                        if asked == probe_id && !permission_extended {
+                                            return ProbeWait::PermissionPending;
+                                        }
+                                        continue;
+                                    }
+                                    return ProbeWait::Frame(Some(frame));
                                 }
                             }
-                            Some(Ok(Message::Close(_))) | None => return None,
+                            Some(Ok(Message::Close(_))) | None => return ProbeWait::Frame(None),
                             _ => {}
                         }
                     }
@@ -903,7 +916,7 @@ pub async fn handle_player_agent_socket(
                             if let PlayerAgentFrame::SessionComplete { .. } = &f {
                                 let json = serde_json::to_string(&f).unwrap_or_default();
                                 let _ = socket.send(Message::Text(json)).await;
-                                return None;
+                                return ProbeWait::Frame(None);
                             }
                             let json = serde_json::to_string(&f).unwrap_or_default();
                             let _ = socket.send(Message::Text(json)).await;
@@ -936,8 +949,22 @@ pub async fn handle_player_agent_socket(
                     }
                 }
             }
-        })
-        .await;
+            })
+            .await;
+            match step {
+                Ok(ProbeWait::PermissionPending) => {
+                    permission_extended = true;
+                    let window = std::time::Duration::from_secs(u64::from(
+                        arena_core::protocol::PROBE_PERMISSION_WAIT_SECS,
+                    ));
+                    wait_until = tokio::time::Instant::now() + window + deadline_duration;
+                    tracing::debug!(session_id = %session_id, %probe_id, "player_agent: player is approving the probe; deadline extended");
+                    extend_probe_deadline(&state, probe_id, window + deadline_duration).await;
+                }
+                Ok(ProbeWait::Frame(frame)) => break Ok(frame),
+                Err(elapsed) => break Err(elapsed),
+            }
+        };
 
         // ponytail: on pass, skip the inter-probe backoff and re-dispatch after
         // only PASS_REDISPATCH_FLOOR_SECS. Failures still use
@@ -1020,6 +1047,35 @@ pub async fn handle_player_agent_socket(
     }
 
     tracing::info!(session_id = %session_id, join_code = %join_code, "player_agent: WS disconnected");
+}
+
+/// What ended one stretch of waiting for a probe's answer.
+enum ProbeWait {
+    /// The answer (or `None`: the socket closed / the session ended).
+    Frame(Option<PlayerAgentClientFrame>),
+    /// The agent is asking the player whether the probe may run.
+    PermissionPending,
+}
+
+/// Move the probe row's recorded deadline along with an extended wait, so
+/// anything reading `deadline_at` sees the time the loop actually waits.
+async fn extend_probe_deadline(
+    state: &GameServerState,
+    probe_id: Uuid,
+    from_now: std::time::Duration,
+) {
+    let Ok(extra) = chrono::Duration::from_std(from_now) else {
+        return;
+    };
+    let _ = probes::Entity::update_many()
+        .col_expr(
+            probes::Column::DeadlineAt,
+            sea_orm::prelude::Expr::value(Utc::now() + extra),
+        )
+        .filter(probes::Column::Id.eq(probe_id))
+        .filter(probes::Column::Outcome.is_null())
+        .exec(&state.db)
+        .await;
 }
 
 /// Fetch a task's attached judges (ordinal order) and spawn the bounded

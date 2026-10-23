@@ -41,6 +41,12 @@ pub enum PlayerAgentFrame {
         /// probe, score it, report. Absent: behave as before the feature.
         #[serde(default)]
         health: Option<arena_core::protocol::HealthProbeConfig>,
+        /// How long the server holds the probe open while the player
+        /// answers a permission prompt — announce the prompt with
+        /// `ProbePermissionPending` first. Absent from pre-upgrade servers:
+        /// the prompt then has to fit inside `deadline_secs`.
+        #[serde(default)]
+        permission_wait_secs: Option<u32>,
     },
     SessionComplete {
         #[allow(dead_code)]
@@ -189,6 +195,9 @@ pub enum PlayerAgentClientFrame {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         commit: Option<String>,
     },
+    /// The player is being asked whether this probe may run. Only sent to a
+    /// server whose push carried `permission_wait_secs`.
+    ProbePermissionPending { probe_id: Uuid },
 }
 
 #[derive(Debug, Deserialize)]

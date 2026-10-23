@@ -379,6 +379,53 @@ describe("ScoreChart with health", () => {
     localStorage.removeItem("ololo.chart.pointLabels");
   });
 
+  it("a crowded session starts with the labels off, no separators, and a taller plot", async () => {
+    const { ctx, calls } = recordingContext();
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(() => ctx);
+    // Sixteen players, the first one with the usual health history.
+    const roster: LeaderboardEntry[] = Array.from({ length: 16 }, (_, i) => ({
+      ...ALICE_ENTRY,
+      player_id: `p${i + 1}`,
+      display_name: `Player ${i + 1}`,
+    }));
+    const { container } = render(ScoreChart, {
+      phase: "active",
+      leaderboard: roster,
+      reportMembers: [],
+      scoreHistory: [{ t: 0, scores: { p1: 0 } }],
+      health: HEALTH,
+    });
+    await vi.waitFor(() => {
+      // The probe markers are drawn…
+      expect(calls.filter((c) => c.name === "arc").length).toBeGreaterThanOrEqual(3);
+    });
+    // …without their pills, and without the dotted task separators.
+    expect(calls.some((c) => c.name === "fillText" && c.args[0] === "80.0")).toBe(false);
+    expect(
+      calls.some(
+        (c) =>
+          c.name === "setLineDash" &&
+          Array.isArray(c.args[0]) &&
+          (c.args[0] as number[])[0] === 2 &&
+          (c.args[0] as number[])[1] === 3,
+      ),
+    ).toBe(false);
+    expect(screen.getByTestId("health-labels-toggle").getAttribute("aria-pressed")).toBe("false");
+    expect(screen.getByTestId("point-labels-toggle").getAttribute("aria-pressed")).toBe("false");
+    // The frame reserves more than a duel's 240px.
+    const frame = container.querySelector<HTMLElement>("div.relative");
+    expect(parseInt(frame?.style.minHeight ?? "0", 10)).toBeGreaterThan(240);
+
+    // The viewer can still turn the labels on.
+    calls.length = 0;
+    screen.getByTestId("health-labels-toggle").click();
+    await vi.waitFor(() => {
+      expect(calls.some((c) => c.name === "fillText" && c.args[0] === "80.0")).toBe(true);
+    });
+    expect(localStorage.getItem("ololo.chart.healthLabels")).toBe("on");
+    localStorage.removeItem("ololo.chart.healthLabels");
+  });
+
   it("health points alone (no scores yet) still draw the chart", async () => {
     const { ctx } = recordingContext();
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(() => ctx);

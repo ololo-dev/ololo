@@ -145,7 +145,7 @@ pub struct AppState {
     pub refresh_ttl: Duration,
     /// Cap on live players per session, enforced on both the agent-register
     /// and join-by-code paths. Loaded from `ARENA_MAX_AGENTS_PER_SESSION`
-    /// (default 16).
+    /// (default 64 — a workshop room; 16 turned people away at the door).
     pub max_players_per_session: u32,
     /// Rate limiter for the join-code endpoint (FR-JC-011/012/013).
     /// Injected via trait so tests can swap in `NoOpRateLimiter`.
@@ -318,7 +318,7 @@ impl AuthConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .filter(|n: &u32| *n > 0)
-                .unwrap_or(16),
+                .unwrap_or(64),
         })
     }
 }

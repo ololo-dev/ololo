@@ -6,28 +6,19 @@ use tokio::io::AsyncReadExt;
 
 use super::STDOUT_TAIL_MAX_BYTES;
 
-/// Execute `command` via a system shell with a wall-clock `deadline`.
+/// Execute `command` via the POSIX shell with a wall-clock `deadline`.
 ///
 /// Returns `(trimmed_stdout, exit_code, duration_ms)`.
 /// On timeout the child is killed and `exit_code = -1` is returned.
 pub async fn run_probe(command: &str, deadline: Duration) -> Result<(String, i32, u64)> {
     let start = Instant::now();
 
-    #[cfg(unix)]
-    let mut child = tokio::process::Command::new("sh")
-        .args(["-c", command])
+    // `sh` everywhere — Git Bash's on Windows (see `posix_shell`).
+    let mut child = crate::posix_shell::command(command)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .spawn()
-        .context("spawning sh -c")?;
-
-    #[cfg(windows)]
-    let mut child = tokio::process::Command::new("cmd.exe")
-        .args(["/C", command])
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .context("spawning cmd.exe /C")?;
+        .context("spawning the probe shell")?;
 
     // Take the stdout pipe out of `child` so we can still access `child` for
     // kill / wait after a timeout without moving the whole `Child` into the

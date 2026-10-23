@@ -987,7 +987,7 @@ fn permission_prompt(
             probe_id,
             command: "sh answer.sh -q \"5 plus 3\"".into(),
             always_rule: "sh answer.sh *".into(),
-            deadline_secs: 60,
+            wait_secs: 60,
             responder: Arc::new(std::sync::Mutex::new(Some(tx))),
         },
         rx,

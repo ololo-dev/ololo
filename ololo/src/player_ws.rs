@@ -263,6 +263,16 @@ async fn connect_once(
             msg: "Connected to probe loop. Waiting for probes…".into(),
         },
     );
+    if let Some(warning) = crate::posix_shell::missing_warning() {
+        crate::ui::warn(warning);
+        emit(
+            sink.clone(),
+            TuiEvent::Log {
+                level: LogLevel::Warn,
+                msg: warning.into(),
+            },
+        );
+    }
 
     let (mut write, mut read) = ws_stream.split();
 
@@ -521,6 +531,7 @@ async fn connect_once(
                         validation_kind,
                         probe_seq,
                         health,
+                        permission_wait_secs,
                     } => {
                         // A probe is the one regular heartbeat we get, so it
                         // doubles as the moment to notice edited memory
@@ -617,6 +628,32 @@ async fn connect_once(
                             }
                             permissions::Verdict::Ask => {
                                 let rule = permissions::always_rule(&rendered_command);
+                                // A server that offers a permission window
+                                // holds the probe open while the player
+                                // reads; tell it we are asking. Otherwise
+                                // the prompt has to fit in the deadline —
+                                // which for a 2-second probe is no prompt
+                                // at all.
+                                let wait = match permission_wait_secs.filter(|w| *w > 0) {
+                                    Some(w) => {
+                                        let pending =
+                                            wire::PlayerAgentClientFrame::ProbePermissionPending {
+                                                probe_id,
+                                            };
+                                        let json = serde_json::to_string(&pending)
+                                            .context("serialising ProbePermissionPending")?;
+                                        match write.send(Message::Text(json)).await {
+                                            Ok(()) => Duration::from_secs(u64::from(w)),
+                                            Err(e) => {
+                                                tracing::warn!(
+                                                    "telling the server we are asking failed: {e}"
+                                                );
+                                                deadline
+                                            }
+                                        }
+                                    }
+                                    None => deadline,
+                                };
                                 let d = if sink.is_some() {
                                     let (tx, rx) = tokio::sync::oneshot::channel();
                                     emit(
@@ -625,25 +662,21 @@ async fn connect_once(
                                             probe_id,
                                             command: rendered_command.clone(),
                                             always_rule: rule.clone(),
-                                            deadline_secs,
+                                            wait_secs: wait.as_secs(),
                                             responder: Arc::new(std::sync::Mutex::new(Some(tx))),
                                         }),
                                     );
-                                    let d = match tokio::time::timeout(deadline, rx).await {
+                                    let d = match tokio::time::timeout(wait, rx).await {
                                         Ok(Ok(d)) => d,
-                                        // Answerer gone or deadline passed.
+                                        // Answerer gone or the wait ran out.
                                         _ => permissions::Decision::Decline,
                                     };
                                     emit(sink.clone(), TuiEvent::PermissionResolved { probe_id });
                                     d
                                 } else {
                                     // Plain text mode: ask on the terminal.
-                                    permissions::prompt_via_stdin(
-                                        &rendered_command,
-                                        &rule,
-                                        deadline,
-                                    )
-                                    .await
+                                    permissions::prompt_via_stdin(&rendered_command, &rule, wait)
+                                        .await
                                 };
                                 // The single application point for the two
                                 // sticky answers, whichever surface answered —

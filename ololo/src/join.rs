@@ -36,6 +36,19 @@ pub fn handle_patch_response(status: u16) -> Result<()> {
     }
 }
 
+/// A join refusal the player can act on, said in words instead of the raw
+/// JSON body — `None` for anything else.
+fn join_refusal_message(body: &str) -> Option<&'static str> {
+    let err: serde_json::Value = serde_json::from_str(body).ok()?;
+    match err["error"].as_str()? {
+        "session_full" => Some(
+            "this session is full: it already has the most players it takes. \
+             Ask the host for another session (or to raise the server's player cap)",
+        ),
+        _ => None,
+    }
+}
+
 /// Run the three-step player onboarding: POST join → probe → PATCH metadata.
 /// Returns the `JoinOutcome` (session_id, player_id, git_remote_path) if
 /// onboarding succeeded or PATCH failed non-409.
@@ -88,6 +101,9 @@ pub async fn run_join_subroutine(
                     format!(" ({project})")
                 }
             ));
+        }
+        if let Some(msg) = join_refusal_message(&body) {
+            return Err(anyhow!(msg));
         }
         return Err(anyhow!("join failed (HTTP {status}): {body}"));
     }
@@ -198,6 +214,14 @@ mod tests {
                 .to_string()
                 .contains("fingerprint conflict")
         );
+    }
+
+    #[test]
+    fn a_full_session_is_said_in_words() {
+        let msg = join_refusal_message(r#"{"error":"session_full","message":"x"}"#).unwrap();
+        assert!(msg.contains("session is full"), "{msg}");
+        assert!(join_refusal_message(r#"{"error":"something_else"}"#).is_none());
+        assert!(join_refusal_message("<html>").is_none());
     }
 
     #[test]

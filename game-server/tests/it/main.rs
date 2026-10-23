@@ -19,6 +19,7 @@ mod player_agent_tests;
 mod player_agent_ws_auth_tests;
 mod presence_tests;
 mod probe_exec_tests;
+mod probe_permission_wait_tests;
 mod probe_scheduler_tests;
 mod recovery_integration_tests;
 mod recovery_tests;

@@ -1709,7 +1709,7 @@ impl TuiApp {
                 "probe_id": p.probe_id,
                 "command": p.command,
                 "always_rule": p.always_rule,
-                "deadline_secs": p.deadline_secs,
+                "wait_secs": p.wait_secs,
             })
         });
         let current_brief = self

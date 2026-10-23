@@ -355,3 +355,41 @@ async fn a_server_that_keeps_counting_down_keeps_the_connection() {
     .expect("the session end arrives");
     assert!(matches!(outcome, Ok(true)), "{outcome:?}");
 }
+
+#[test]
+fn a_push_offering_a_permission_window_is_read_and_older_ones_still_parse() {
+    let id = Uuid::new_v4();
+    let with = format!(
+        r#"{{"type":"test_push","probe_id":"{id}","rendered_command":"echo","deadline_secs":2,"permission_wait_secs":120}}"#
+    );
+    match serde_json::from_str::<PlayerAgentFrame>(&with).unwrap() {
+        PlayerAgentFrame::TestPush {
+            permission_wait_secs,
+            ..
+        } => assert_eq!(permission_wait_secs, Some(120)),
+        other => panic!("not a push: {other:?}"),
+    }
+    let without = format!(
+        r#"{{"type":"test_push","probe_id":"{id}","rendered_command":"echo","deadline_secs":2}}"#
+    );
+    match serde_json::from_str::<PlayerAgentFrame>(&without).unwrap() {
+        PlayerAgentFrame::TestPush {
+            permission_wait_secs,
+            ..
+        } => assert_eq!(permission_wait_secs, None),
+        other => panic!("not a push: {other:?}"),
+    }
+}
+
+#[test]
+fn the_permission_pending_frame_is_what_the_server_parses() {
+    let probe_id = Uuid::new_v4();
+    let json =
+        serde_json::to_string(&wire::PlayerAgentClientFrame::ProbePermissionPending { probe_id })
+            .unwrap();
+    let server: arena_core::protocol::PlayerAgentClientFrame = serde_json::from_str(&json).unwrap();
+    assert_eq!(
+        server,
+        arena_core::protocol::PlayerAgentClientFrame::ProbePermissionPending { probe_id }
+    );
+}

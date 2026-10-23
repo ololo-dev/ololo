@@ -19,6 +19,7 @@ mod join;
 mod memory_sync;
 mod permissions;
 mod player_ws;
+mod posix_shell;
 mod probe;
 mod project_repo;
 mod snapshot;

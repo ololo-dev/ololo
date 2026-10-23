@@ -55,18 +55,33 @@
   let hookCut: number | null = null;
   let hookShowHealthLabels = true;
   let hookShowPointLabels = true;
+  let hookCrowded = false;
+
+  /** Past this many participants a chart drawn like a duel turns to mush:
+   * every probe's pill and every task's separator times sixteen. A crowded
+   * chart gets more height, drops the separators, and starts with the
+   * labels off (the markers and the tooltip still say everything). */
+  const CROWDED_PLAYERS = 6;
+  const BASE_HEIGHT = 240;
+  const MAX_HEIGHT = 420;
+  function chartHeight(players: number): number {
+    return Math.min(BASE_HEIGHT + Math.max(0, players - CROWDED_PLAYERS) * 18, MAX_HEIGHT);
+  }
 
   /** Whether the labels are drawn — the checks' grade pills and the points
    * pills on judge verdicts — per-viewer conveniences remembered in this
    * browser; the markers and the tooltip stay either way. */
   const HEALTH_LABELS_KEY = "ololo.chart.healthLabels";
   const POINT_LABELS_KEY = "ololo.chart.pointLabels";
-  function readLabelSetting(key: string): boolean {
+  /** The viewer's explicit choice, or `null` when they never made one —
+   * then the chart's own default applies (on, off when crowded). */
+  function readLabelSetting(key: string): boolean | null {
     try {
-      return localStorage.getItem(key) !== "off";
+      const v = localStorage.getItem(key);
+      return v === "on" ? true : v === "off" ? false : null;
     } catch {
-      // Storage unavailable (private window, blocked site data): default on.
-      return true;
+      // Storage unavailable (private window, blocked site data): no choice.
+      return null;
     }
   }
   function writeLabelSetting(key: string, on: boolean) {
@@ -76,19 +91,23 @@
       // Ignore: the choice just does not survive this page.
     }
   }
-  let showHealthLabels = $state(browser ? readLabelSetting(HEALTH_LABELS_KEY) : true);
-  let showPointLabels = $state(browser ? readLabelSetting(POINT_LABELS_KEY) : true);
+  let healthLabelsChoice = $state(browser ? readLabelSetting(HEALTH_LABELS_KEY) : null);
+  let pointLabelsChoice = $state(browser ? readLabelSetting(POINT_LABELS_KEY) : null);
+  const crowded = $derived(membersOf().length > CROWDED_PLAYERS);
+  const showHealthLabels = $derived(healthLabelsChoice ?? !crowded);
+  const showPointLabels = $derived(pointLabelsChoice ?? !crowded);
   function toggleHealthLabels() {
-    showHealthLabels = !showHealthLabels;
-    writeLabelSetting(HEALTH_LABELS_KEY, showHealthLabels);
+    healthLabelsChoice = !showHealthLabels;
+    writeLabelSetting(HEALTH_LABELS_KEY, healthLabelsChoice);
   }
   function togglePointLabels() {
-    showPointLabels = !showPointLabels;
-    writeLabelSetting(POINT_LABELS_KEY, showPointLabels);
+    pointLabelsChoice = !showPointLabels;
+    writeLabelSetting(POINT_LABELS_KEY, pointLabelsChoice);
   }
   $effect(() => {
     hookShowHealthLabels = showHealthLabels;
     hookShowPointLabels = showPointLabels;
+    hookCrowded = crowded;
     uplotInstance?.redraw();
   });
 
@@ -225,7 +244,7 @@
       uplotInstance = new uPlot(
         {
           width,
-          height: 240,
+          height: chartHeight(members.length),
           series,
           scales,
           hooks: {
@@ -270,10 +289,11 @@
   }
 
   /** Vertical dotted separators where each participant's tasks start,
-   * tinted with the participant's colour. The tooltip names the task. */
+   * tinted with the participant's colour. The tooltip names the task.
+   * Left out on a crowded chart, where they would hatch the whole plot. */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   function drawTaskSeparators(u: any, members: ChartMember[]) {
-    if (!hookHealth) return;
+    if (!hookHealth || hookCrowded) return;
     const { left, width: w, top, height: h } = u.bbox;
     const ctx: CanvasRenderingContext2D = u.ctx;
     ctx.save();
@@ -735,11 +755,11 @@
 </script>
 
 <!-- min-height matches the uPlot canvas height so the card doesn't render
-     collapsed and then jump ~240px once the chart mounts (or, in the empty
+     collapsed and then jump once the chart mounts (or, in the empty
      state, never gain height at all — the absolute overlay contributed none).
      Audit UI-M4: blank/shifting areas on the session page. -->
 {#if browser}
-  <div class="relative min-h-[240px]">
+  <div class="relative" style="min-height: {chartHeight(membersOf().length)}px;">
     {#if health}
       <div class="absolute right-0 top-[-28px] z-10 flex items-center gap-[6px]">
         {#each [{ label: "Health labels", on: showHealthLabels, toggle: toggleHealthLabels, id: "health-labels-toggle" }, { label: "Points labels", on: showPointLabels, toggle: togglePointLabels, id: "point-labels-toggle" }] as t (t.id)}

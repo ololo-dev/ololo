@@ -535,18 +535,8 @@ async fn run_suite(command: &str, workdir: &Path, timeout: Duration) -> Run {
     }
 }
 
-#[cfg(unix)]
 fn shell(command: &str) -> tokio::process::Command {
-    let mut cmd = tokio::process::Command::new("sh");
-    cmd.args(["-c", command]);
-    cmd
-}
-
-#[cfg(windows)]
-fn shell(command: &str) -> tokio::process::Command {
-    let mut cmd = tokio::process::Command::new("cmd.exe");
-    cmd.args(["/C", command]);
-    cmd
+    crate::posix_shell::command(command)
 }
 
 /// A test suite spawns workers, servers, browsers: end the whole group,

@@ -222,8 +222,9 @@ fn load_lists(path: &Path) -> (Vec<String>, Vec<String>) {
 /// Prompt on the controlling terminal — the plain-text and headless paths.
 /// A non-TTY stdin declines immediately: an unattended run cannot consent
 /// (seed `.ololo/settings.json` with `{"permissions":{"allow":["*"]}}` for
-/// automation). Times out to Decline when the probe deadline passes.
-pub async fn prompt_via_stdin(command: &str, rule: &str, deadline: Duration) -> Decision {
+/// automation). Times out to Decline when `wait` passes — the server's
+/// permission window, or the probe deadline when it offers none.
+pub async fn prompt_via_stdin(command: &str, rule: &str, wait: Duration) -> Decision {
     use std::io::IsTerminal;
     if !std::io::stdin().is_terminal() {
         crate::ui::warn(
@@ -255,10 +256,10 @@ pub async fn prompt_via_stdin(command: &str, rule: &str, deadline: Duration) -> 
             _ => Decision::Decline,
         }
     });
-    match tokio::time::timeout(deadline, read).await {
+    match tokio::time::timeout(wait, read).await {
         Ok(Ok(decision)) => decision,
         // Timeout leaves the blocking read holding stdin until the next
-        // newline — a cosmetic leak; the probe deadline has passed anyway.
+        // newline — a cosmetic leak; the wait has run out anyway.
         _ => {
             crate::ui::warn("permission prompt timed out — probe declined");
             Decision::Decline
@@ -270,8 +271,8 @@ pub async fn prompt_via_stdin(command: &str, rule: &str, deadline: Duration) -> 
 /// stdin, then answer through the request's channel. Persisting an
 /// always-allow rule is the `player_ws` gate's job when the answer arrives.
 pub async fn respond_from_stdin(prompt: crate::tui::event::PermissionPrompt) {
-    let deadline = Duration::from_secs(prompt.deadline_secs.max(1) as u64);
-    let decision = prompt_via_stdin(&prompt.command, &prompt.always_rule, deadline).await;
+    let wait = Duration::from_secs(prompt.wait_secs.max(1));
+    let decision = prompt_via_stdin(&prompt.command, &prompt.always_rule, wait).await;
     if let Ok(mut guard) = prompt.responder.lock()
         && let Some(tx) = guard.take()
     {

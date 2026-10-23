@@ -68,6 +68,7 @@ services:
       ARENA_ACCESS_TOKEN_TTL_SECONDS: "${ARENA_ACCESS_TOKEN_TTL_SECONDS:-900}"
       ARENA_REFRESH_TOKEN_TTL_DAYS: "${ARENA_REFRESH_TOKEN_TTL_DAYS:-30}"
       ARENA_PROFILE_RATE_LIMIT_RPS: "${ARENA_PROFILE_RATE_LIMIT_RPS:-20}"
+      ARENA_MAX_AGENTS_PER_SESSION: "${ARENA_MAX_AGENTS_PER_SESSION:-64}"
       # Shared Ollama (see ollama.ololo.dev on the dev host). Each stack sets
       # OLLAMA_URL in its Dokploy environment: prod/chat use the HTTPS domain,
       # the dev stack (co-located) uses the internal http://ollama-shared:11434.

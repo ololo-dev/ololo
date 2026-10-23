@@ -60,8 +60,8 @@ pub(crate) fn render_permission_popup(f: &mut Frame, app: &TuiApp) {
     lines.push(Line::default());
     lines.push(Line::from(Span::styled(
         format!(
-            "unanswered past the {}s probe deadline = declined",
-            prompt.deadline_secs.max(1)
+            "the check waits for your answer — unanswered for {}s = declined",
+            prompt.wait_secs.max(1)
         ),
         dim,
     )));

@@ -607,7 +607,7 @@
       <div class="mb-[20px] flex flex-col gap-[16px] lg:flex-row">
 
         <!-- Score over time chart (flex-grow) -->
-        <div class="min-w-0 flex-grow overflow-hidden rounded-[8px] bg-white px-[24px] py-[20px]">
+        <div class="min-w-0 flex-grow overflow-hidden rounded-[8px] bg-white px-[24px] py-[20px] lg:self-start">
           <h2 class="mb-[16px] font-heading text-[16px] font-bold" style="color: #363636;">Score over time</h2>
           <ScoreChart {phase} {leaderboard} {reportMembers} scoreHistory={effectiveScoreHistory} {health} />
         </div>
@@ -615,14 +615,18 @@
         <!-- Leaderboard (fixed 300px on large screens) -->
         <div class="w-full overflow-hidden rounded-[8px] bg-white px-[16px] py-[20px] lg:w-[300px] lg:shrink-0 lg:self-start">
           <h2 class="mb-[16px] px-[8px] font-heading text-[16px] font-bold" style="color: #363636;">Leaderboard</h2>
-          <LeaderboardList
-            entries={mergedLeaderboardWithInfo}
-            joinCode={data.session.join_code}
-            {userPlayers}
-            {isAdmin}
-            {canViewRuns}
-            emptyMessage="Waiting for first results…"
-          />
+          <!-- A long roster scrolls inside the card instead of towering over
+               the chart beside it. -->
+          <div class="lg:max-h-[560px] lg:overflow-y-auto">
+              <LeaderboardList
+              entries={mergedLeaderboardWithInfo}
+              joinCode={data.session.join_code}
+              {userPlayers}
+              {isAdmin}
+              {canViewRuns}
+              emptyMessage="Waiting for first results…"
+            />
+          </div>
         </div>
 
       </div>
@@ -699,7 +703,7 @@
       <div class="mb-[20px] flex flex-col gap-[16px] lg:flex-row">
 
         <!-- Score over time chart -->
-        <div class="min-w-0 flex-grow overflow-hidden rounded-[8px] bg-white px-[24px] py-[20px]">
+        <div class="min-w-0 flex-grow overflow-hidden rounded-[8px] bg-white px-[24px] py-[20px] lg:self-start">
           <h2 class="mb-[16px] font-heading text-[16px] font-bold" style="color: #363636;">Score over time</h2>
           <ScoreChart {phase} {leaderboard} {reportMembers} scoreHistory={effectiveScoreHistory} {health} revealUntil={replay.revealUntil} />
         </div>
@@ -710,15 +714,19 @@
           <p class="mb-[16px] px-[8px] text-sm" style="color: #8fb4ec;" data-testid="result-summary">
             {resultSummary ?? "Session complete."}
           </p>
-          <LeaderboardList
-            entries={reportLeaderboard}
-            joinCode={data.session.join_code}
-            userPlayers={effectiveUserPlayers}
-            {isAdmin}
-            {canViewRuns}
-            detailLabel="Report"
-            emptyMessage="No results recorded."
-          />
+          <!-- A long roster scrolls inside the card instead of towering over
+               the chart beside it. -->
+          <div class="lg:max-h-[560px] lg:overflow-y-auto">
+              <LeaderboardList
+              entries={reportLeaderboard}
+              joinCode={data.session.join_code}
+              userPlayers={effectiveUserPlayers}
+              {isAdmin}
+              {canViewRuns}
+              detailLabel="Report"
+              emptyMessage="No results recorded."
+            />
+          </div>
         </div>
 
       </div>

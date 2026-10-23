@@ -113,6 +113,17 @@ pub enum PlayerAgentFrame {
         /// `TestResult.commit`, which a pre-upgrade server would reject.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         health: Option<super::HealthProbeConfig>,
+        /// How long this server waits for the player to approve the probe
+        /// command, on top of `deadline_secs`, once the agent says it is
+        /// asking (`PlayerAgentClientFrame::ProbePermissionPending`). The
+        /// deadline is the command's run time; reading and answering a
+        /// permission prompt is not, and a 2-second deadline closed the
+        /// prompt before anyone could read it. Absent from pre-upgrade
+        /// servers: the agent then keeps its prompt inside the deadline.
+        /// (Fielded agents ignore the unknown field — their mirror of this
+        /// frame does not deny unknown fields.)
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        permission_wait_secs: Option<u32>,
     },
     /// Session has ended — or, for one specific reason, this player is done
     /// while the session keeps running. `reason` values:
@@ -249,6 +260,10 @@ pub enum ValidationKind {
 /// way, so the grader still has to recognise the string itself.
 pub const PROBE_DECLINED_STDOUT: &str = "[ololo] probe command declined by player";
 
+/// How long a game server waits for a player to answer a probe permission
+/// prompt (see `PlayerAgentFrame::TestPush::permission_wait_secs`).
+pub const PROBE_PERMISSION_WAIT_SECS: u32 = 120;
+
 /// ololo → server frames.
 /// Sent by the player agent after executing a probe.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -317,4 +332,9 @@ pub enum PlayerAgentClientFrame {
         #[serde(default)]
         path: String,
     },
+    /// The agent is asking the player whether the probe may run. Sent only
+    /// to a server whose `TestPush` carried `permission_wait_secs`; that
+    /// server then waits up to that long, plus the probe's deadline, for
+    /// the `TestResult`. Once per probe.
+    ProbePermissionPending { probe_id: uuid::Uuid },
 }

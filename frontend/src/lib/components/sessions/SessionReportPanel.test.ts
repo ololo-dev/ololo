@@ -599,7 +599,7 @@ describe("SessionReportPanel", () => {
       const judges = screen.getByTestId("report-judges");
       expect(within(judges).queryByTestId("report-verdict-task-anti-cheat")).toBeNull();
       expect(within(judges).queryByText(/nothing to withdraw/)).toBeNull();
-      const line = screen.getByTestId("report-anti-cheat-clear");
+      const line = screen.getByTestId("report-fair-play-task-anti-cheat");
       expect(line.textContent).toContain("Anti-cheat passed.");
       expect(line.textContent).toContain("2 tasks checked, nothing found.");
       // The count covers the reviews only.
@@ -622,7 +622,7 @@ describe("SessionReportPanel", () => {
       );
       expect(flagged.textContent).toContain("committed before the session started");
       expect(flagged.textContent).toContain("-20 pts");
-      expect(screen.getByTestId("report-anti-cheat-clear").textContent).toContain(
+      expect(screen.getByTestId("report-fair-play-task-anti-cheat").textContent).toContain(
         "1 of 2 tasks clean; the penalty is below.",
       );
     });
@@ -630,11 +630,55 @@ describe("SessionReportPanel", () => {
     it("shows the judges section when anti-cheat is the only judge, and it passed", () => {
       const only = new Map([["t1", [antiCheat("t1", 0, "nothing to withdraw")]]]);
       render(SessionReportPanel, { ...base, judgeResultsByTask: only });
-      expect(screen.getByTestId("report-anti-cheat-clear")).not.toBeNull();
+      expect(screen.getByTestId("report-fair-play-task-anti-cheat")).not.toBeNull();
       // Not the reporter's fallback table, and no "0 evaluations" line.
       const judges = screen.getByTestId("report-judges");
       expect(within(judges).queryByRole("columnheader", { name: "What was good" })).toBeNull();
       expect(judges.textContent).not.toContain("evaluations from");
+    });
+
+    it("folds golf verify and from scratch the same way, a line per judge", () => {
+      const fair = (task_id: string, judge_slug: string, judge_name: string, point_delta: number) =>
+        verdict({
+          task_id,
+          judge_slug,
+          judge_name,
+          rating: point_delta,
+          point_delta,
+          feedback: `${judge_name} on ${task_id}`,
+        });
+      const all = new Map([
+        [
+          "t1",
+          [
+            fair("t1", "task-anti-cheat", "Task Anti-Cheat", 0),
+            fair("t1", "golf-verify", "Golf Verify", 0),
+            fair("t1", "from-scratch", "From Scratch", 0),
+          ],
+        ],
+        [
+          "t3",
+          [
+            fair("t3", "golf-verify", "Golf Verify", 0),
+            fair("t3", "from-scratch", "From Scratch", -30),
+          ],
+        ],
+      ]);
+      render(SessionReportPanel, { ...base, judgeResultsByTask: all });
+      const lines = [...screen.getByTestId("report-judges").querySelectorAll(".fair-play")].map(
+        (p) => p.textContent?.replace(/\s+/g, " ").trim(),
+      );
+      expect(lines).toEqual([
+        "✓ Anti-cheat passed. 1 task checked, nothing found.",
+        "✓ Golf verify passed. 2 tasks checked, every pass held up on a re-run.",
+        "✓ From scratch checked. 1 of 2 tasks clean; the penalty is below.",
+      ]);
+      // Only the penalty is a card.
+      const cards = [...document.querySelectorAll("article.verdict")].map((a) =>
+        a.getAttribute("data-testid"),
+      );
+      expect(cards).toEqual(["report-verdict-from-scratch"]);
+      expect(screen.queryByText("Golf Verify on t1")).toBeNull();
     });
   });
 

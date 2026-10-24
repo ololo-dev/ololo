@@ -156,29 +156,42 @@
     );
   });
 
-  /** The fair-play judge. It only ever takes points back, so a clean verdict
-   *  is the same sentence on every task — "nothing to withdraw". V2LZPE's
-   *  report stacked seventeen of them above the three judges that reviewed
-   *  the work. A clean run is one line; a penalty keeps its card. */
-  const ANTI_CHEAT = "task-anti-cheat";
+  /** The fair-play judges. Their scales top out at zero — they only ever
+   *  take points back — so a clean verdict is the same sentence on every
+   *  task: "nothing to withdraw". V2LZPE's report stacked seventeen anti-cheat
+   *  cards above the three judges that reviewed the work. A clean run is one
+   *  line per judge; a penalty keeps its card. `clean` is what the line says
+   *  when nothing was taken back. */
+  const FAIR_PLAY: { slug: string; label: string; clean: string }[] = [
+    { slug: "task-anti-cheat", label: "Anti-cheat", clean: "nothing found" },
+    { slug: "golf-verify", label: "Golf verify", clean: "every pass held up on a re-run" },
+    { slug: "from-scratch", label: "From scratch", clean: "no delegation to the real tool" },
+  ];
+  const FAIR_PLAY_SLUGS = new Set(FAIR_PLAY.map((f) => f.slug));
 
-  function clearedAntiCheat(v: PlayerJudgeScoredPayload): boolean {
-    return v.judge_slug === ANTI_CHEAT && v.point_delta >= 0;
+  function clearedFairPlay(v: PlayerJudgeScoredPayload): boolean {
+    return FAIR_PLAY_SLUGS.has(v.judge_slug) && v.point_delta >= 0;
   }
 
-  const antiCheat = $derived.by(() => {
-    const runs = orderedVerdicts.filter((e) => e.v.judge_slug === ANTI_CHEAT);
-    const cleared = runs.filter((e) => clearedAntiCheat(e.v)).length;
-    return { cleared, flagged: runs.length - cleared };
-  });
-
-  const antiCheatTitle = $derived(antiCheat.flagged > 0 ? "Anti-cheat checked." : "Anti-cheat passed.");
-  const antiCheatLine = $derived(
-    antiCheat.flagged > 0
-      ? `${antiCheat.cleared} of ${antiCheat.cleared + antiCheat.flagged} tasks clean; the ${
-          antiCheat.flagged === 1 ? "penalty is" : "penalties are"
-        } below.`
-      : `${antiCheat.cleared} ${antiCheat.cleared === 1 ? "task" : "tasks"} checked, nothing found.`,
+  /** One line per fair-play judge that cleared at least one task. */
+  const fairPlay = $derived(
+    FAIR_PLAY.map((f) => {
+      const runs = orderedVerdicts.filter((e) => e.v.judge_slug === f.slug);
+      const cleared = runs.filter((e) => clearedFairPlay(e.v)).length;
+      const flagged = runs.length - cleared;
+      const tasks = (n: number) => `${n} ${n === 1 ? "task" : "tasks"}`;
+      return {
+        slug: f.slug,
+        cleared,
+        title: `${f.label} ${flagged > 0 ? "checked" : "passed"}.`,
+        line:
+          flagged > 0
+            ? `${cleared} of ${tasks(runs.length)} clean; the ${
+                flagged === 1 ? "penalty is" : "penalties are"
+              } below.`
+            : `${tasks(cleared)} checked, ${f.clean}.`,
+      };
+    }).filter((f) => f.cleared > 0),
   );
 
   /** Judge verdicts grouped under the task they scored.
@@ -186,7 +199,7 @@
    *  The reporter's notes are matched by judge name, in order: a judge that
    *  ran on two tasks gets two entries in the document, and the first belongs
    *  to the first task it scored. Names it invented — or judges it skipped —
-   *  simply leave the summary lines off that card. A cleared anti-cheat run
+   *  simply leave the summary lines off that card. A cleared fair-play run
    *  still takes its note off the queue, so a penalty later in the session
    *  gets the note written about it, and then gets no card. */
   const panelGroups = $derived.by(() => {
@@ -200,7 +213,7 @@
     const byTask = new Map<string, PanelGroup>();
     for (const { ordinal, task_id, v } of orderedVerdicts) {
       const note = queues.get(v.judge_name.trim().toLowerCase())?.shift() ?? null;
-      if (clearedAntiCheat(v)) continue;
+      if (clearedFairPlay(v)) continue;
       const group = byTask.get(task_id) ?? {
         task_id,
         ordinal,
@@ -238,8 +251,8 @@
     return out.sort((a, b) => a.ordinal - b.ordinal || a.name.localeCompare(b.name));
   });
 
-  /** What the cards show: the reviews, and anti-cheat only where it struck. */
-  const shownVerdicts = $derived(orderedVerdicts.filter((e) => !clearedAntiCheat(e.v)));
+  /** What the cards show: the reviews, and a fair-play judge only where it struck. */
+  const shownVerdicts = $derived(orderedVerdicts.filter((e) => !clearedFairPlay(e.v)));
   const verdictCount = $derived(shownVerdicts.length);
   const judgeCount = $derived(new Set(shownVerdicts.map((e) => e.v.judge_slug)).size);
 
@@ -591,7 +604,7 @@
           </section>
         {/if}
 
-        {#if panelGroups.length > 0 || antiCheat.cleared > 0}
+        {#if panelGroups.length > 0 || fairPlay.length > 0}
           <!-- One card per verdict, under the task it scored: the judge, what
                it moved, the reporter's two lines, and the verdict itself.
                The table this replaced showed the two lines alone — praise
@@ -608,12 +621,12 @@
               </p>
             {/if}
 
-            {#if antiCheat.cleared > 0}
-              <p class="fair-play" data-testid="report-anti-cheat-clear">
+            {#each fairPlay as f (f.slug)}
+              <p class="fair-play" data-testid="report-fair-play-{f.slug}">
                 <span class="fair-play-mark" aria-hidden="true">✓</span>
-                <span><b>{antiCheatTitle}</b> {antiCheatLine}</span>
+                <span><b>{f.title}</b> {f.line}</span>
               </p>
-            {/if}
+            {/each}
 
             {#each panelGroups as g (g.task_id)}
               <div class="panel-task" data-testid="report-judges-task-{g.ordinal}">
@@ -956,7 +969,7 @@
     margin-left: 0;
   }
 
-  /* A clean anti-cheat run: one line, not a card per task. */
+  /* A clean fair-play run: one line, not a card per task. */
   .doc .fair-play {
     display: flex;
     align-items: baseline;

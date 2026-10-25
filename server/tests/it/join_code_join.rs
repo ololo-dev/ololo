@@ -106,7 +106,16 @@ async fn create_session(
     let (ps, pb) = create_project(app, cookie, &format!("proj-for-{name}")).await;
     assert_eq!(ps, StatusCode::CREATED, "implicit project: {pb}");
     let project_id = pb["id"].as_str().expect("project id").to_string();
+    create_session_on(app, cookie, name, &project_id).await
+}
 
+/// Create a session of an existing project.
+async fn create_session_on(
+    app: &axum::Router,
+    cookie: &str,
+    name: &str,
+    project_id: &str,
+) -> (StatusCode, serde_json::Value) {
     let resp = app
         .clone()
         .oneshot(req(
@@ -531,17 +540,30 @@ async fn test_second_live_session_is_refused_until_the_first_ends() {
 #[tokio::test]
 async fn test_create_is_refused_while_playing() {
     let state = test_state_noop().await;
-    let app = build_router(state);
-    let (_, cookie_a) = register_and_login(app.clone(), "owner@x.test", "password-12345").await;
+    let app = build_router(state.clone());
+    // The first registrant is the admin, and admins are exempt (see the
+    // next test): the admin makes the projects and hands them to an
+    // ordinary player, who is the one under test.
+    let (_, admin) = register_and_login(app.clone(), "admin@x.test", "password-12345").await;
+    let (owner_id, cookie_a) =
+        register_and_login(app.clone(), "owner@x.test", "password-12345").await;
+    let mut projects = Vec::new();
+    for name in ["proj-one", "proj-two"] {
+        let (ps, pb) = create_project(&app, &admin, name).await;
+        assert_eq!(ps, StatusCode::CREATED, "project: {pb}");
+        let id = pb["id"].as_str().expect("project id").to_string();
+        give_project(&state, &id, owner_id).await;
+        projects.push(id);
+    }
 
-    let (_, s1) = create_session(&app, &cookie_a, "Playing").await;
+    let (_, s1) = create_session_on(&app, &cookie_a, "Playing", &projects[0]).await;
     let code1 = s1["join_code"].as_str().expect("join_code");
     let s1_id = s1["id"].as_str().expect("id");
     // The owner joins their own session — now they are a live player.
     let (st, _) = join(&app, &cookie_a, code1).await;
     assert_eq!(st, StatusCode::CREATED);
 
-    let (sc, body) = create_session(&app, &cookie_a, "Second").await;
+    let (sc, body) = create_session_on(&app, &cookie_a, "Second", &projects[1]).await;
     assert_eq!(sc, StatusCode::CONFLICT, "body={body}");
     assert_eq!(body["error"], "active_session_exists");
     assert_eq!(body["active_join_code"], serde_json::json!(code1));
@@ -549,6 +571,30 @@ async fn test_create_is_refused_while_playing() {
     // Ending the live session restores the ability to start a new one.
     let s = patch_status(&app, &cookie_a, s1_id, "cancelled").await;
     assert_eq!(s, StatusCode::OK);
-    let (sc, _) = create_session(&app, &cookie_a, "Second").await;
+    let (sc, _) = create_session_on(&app, &cookie_a, "Second", &projects[1]).await;
     assert_eq!(sc, StatusCode::CREATED);
+}
+
+/// An admin hosts several sessions at once from the web, even while
+/// playing one — but joining a second one to PLAY is still refused.
+#[tokio::test]
+async fn test_admin_creates_sessions_while_playing() {
+    let state = test_state_noop().await;
+    let app = build_router(state);
+    let (_, cookie_admin) = register_and_login(app.clone(), "admin@x.test", "password-12345").await;
+
+    let (_, s1) = create_session(&app, &cookie_admin, "Playing").await;
+    let code1 = s1["join_code"].as_str().expect("join_code");
+    let (st, _) = join(&app, &cookie_admin, code1).await;
+    assert_eq!(st, StatusCode::CREATED);
+
+    let (sc, s2) = create_session(&app, &cookie_admin, "Workshop A").await;
+    assert_eq!(sc, StatusCode::CREATED, "body={s2}");
+    let (sc, s3) = create_session(&app, &cookie_admin, "Workshop B").await;
+    assert_eq!(sc, StatusCode::CREATED, "body={s3}");
+
+    let code2 = s2["join_code"].as_str().expect("join_code");
+    let (st, body) = join(&app, &cookie_admin, code2).await;
+    assert_eq!(st, StatusCode::CONFLICT, "body={body}");
+    assert_eq!(body["error"], "active_session_exists");
 }

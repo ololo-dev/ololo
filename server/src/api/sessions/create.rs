@@ -50,7 +50,12 @@ pub async fn post_create(
     // One live session per user: creating a session leads straight to
     // playing it (`ololo start` auto-joins), so refusing here — before the
     // row exists — beats refusing the join and stranding an orphan lobby.
-    ensure_single_active_session(&state.db, user_id, None).await?;
+    // An admin is exempt: they host several sessions at once from the web
+    // (a workshop, a cohort), and hosting holds no player row — the join
+    // guard still keeps them to one session they PLAY.
+    if !crate::auth::is_user_admin(&state.db, user_id).await? {
+        ensure_single_active_session(&state.db, user_id, None).await?;
+    }
 
     // Campaign rules: a parent hosts no sessions, and a part waits for its
     // predecessor. Checked after the live-session guard so the more

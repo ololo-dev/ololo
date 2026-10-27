@@ -151,7 +151,7 @@ pub async fn run_headless_start(
     } else {
         (80, 24)
     };
-    let parser = vt100::Parser::new(pty_rows, pty_cols, 0);
+    let parser = crate::tui::pty_host::agent_parser(pty_rows, pty_cols, 0);
     let mut app = TuiApp::new_for_test(header, parser, dropped, pty_cols, pty_rows);
     app.header.session_url = format!("{http_base}/s/{join_code}");
     app.header.project_url = format!("{http_base}/projects/{project_slug}");
@@ -320,7 +320,7 @@ pub async fn run_tui_start(
     // wrap their output past the visible edge until the first relayout.
     let initial_rect = crate::tui::app::pty_inner_rect(term_cols, term_rows, true, false, true);
     let (pty_cols, pty_rows) = (initial_rect.width, initial_rect.height);
-    let parser = vt100::Parser::new(pty_rows, pty_cols, PTY_SCROLLBACK_LINES);
+    let parser = crate::tui::pty_host::agent_parser(pty_rows, pty_cols, PTY_SCROLLBACK_LINES);
     let mut app = TuiApp::new_for_test(header, parser, dropped, pty_cols, pty_rows);
 
     // Session page link for the header (clickable in OSC 8 terminals).

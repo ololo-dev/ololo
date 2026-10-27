@@ -105,7 +105,7 @@ pub async fn run_headless(
                     None => std::future::pending().await,
                 }
             } => {
-                app.pty_parser.process(&data);
+                feed_agent_output(&mut app, pty.as_mut(), &data);
             }
             Some(text) = async {
                 match control.as_mut() {
@@ -175,6 +175,20 @@ pub async fn run_headless(
         exit_code: outcome.0,
         quit_reason: outcome.1,
         final_status: app.header.status,
+    }
+}
+
+/// Feed agent output to the pane's terminal and send back whatever it
+/// answered: an unanswered cursor-position query leaves a Windows agent
+/// blank (see `pty_host::TermReplies`).
+fn feed_agent_output(app: &mut TuiApp, pty: Option<&mut PtyHost>, data: &[u8]) {
+    app.pty_parser.process(data);
+    let replies = app.pty_parser.callbacks_mut().take();
+    if let Some(pty) = pty
+        && !replies.is_empty()
+        && let Err(e) = pty.write_input(&replies)
+    {
+        tracing::warn!("terminal reply to the agent failed: {e}");
     }
 }
 
@@ -345,7 +359,7 @@ pub async fn run(
                     None => std::future::pending().await,
                 }
             } => {
-                app.pty_parser.process(&data);
+                feed_agent_output(&mut app, pty.as_deref_mut(), &data);
                 app.on_event(TuiEvent::Tick);
             }
             Some(text) = async {

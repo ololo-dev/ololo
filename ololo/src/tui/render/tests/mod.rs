@@ -10,11 +10,10 @@ use crate::tui::header::HeaderState;
 use ratatui::backend::TestBackend;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
-use vt100::Parser;
 
 fn fresh_app(cols: u16, rows: u16) -> TuiApp {
     let header = HeaderState::new("ABC", "proj");
-    let parser = Parser::new(rows, cols, 0);
+    let parser = crate::tui::pty_host::agent_parser(rows, cols, 0);
     let dropped = Arc::new(AtomicU64::new(0));
     TuiApp::new_for_test(header, parser, dropped, cols, rows)
 }

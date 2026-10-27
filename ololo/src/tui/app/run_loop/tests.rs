@@ -53,7 +53,7 @@ mod apply_pty_layout_tests {
 
     fn app_at(cols: u16, rows: u16) -> TuiApp {
         let header = HeaderState::new("s", "p");
-        let parser = vt100::Parser::new(rows, cols, 0);
+        let parser = crate::tui::pty_host::agent_parser(rows, cols, 0);
         TuiApp::new_for_test(header, parser, Arc::new(AtomicU64::new(0)), cols, rows)
     }
 

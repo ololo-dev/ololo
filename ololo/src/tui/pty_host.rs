@@ -70,6 +70,57 @@ fn from_vt_cell(c: &VtCell) -> Cell {
     }
 }
 
+/// The agent pane's terminal: a vt100 parser that also answers the status
+/// queries a real terminal answers (see [`TermReplies`]).
+pub type AgentParser = Parser<TermReplies>;
+
+pub fn agent_parser(rows: u16, cols: u16, scrollback: usize) -> AgentParser {
+    Parser::new_with_callbacks(rows, cols, scrollback, TermReplies::default())
+}
+
+/// Replies to the terminal queries a hosted program can block on. The
+/// one that matters is Windows: portable-pty opens every pseudo console
+/// with `PSEUDOCONSOLE_INHERIT_CURSOR`, so conhost first asks its host for
+/// the cursor position (`ESC[6n`) and neither draws nor reads input until
+/// it is answered — the agent pane stayed blank and deaf on Windows.
+/// The run loop drains [`TermReplies::take`] into the PTY after every
+/// chunk it feeds the parser.
+#[derive(Debug, Default)]
+pub struct TermReplies {
+    pending: Vec<u8>,
+}
+
+impl TermReplies {
+    pub fn take(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.pending)
+    }
+}
+
+impl vt100::Callbacks for TermReplies {
+    fn unhandled_csi(
+        &mut self,
+        screen: &mut Screen,
+        i1: Option<u8>,
+        _i2: Option<u8>,
+        params: &[&[u16]],
+        c: char,
+    ) {
+        let first = params.first().and_then(|p| p.first()).copied().unwrap_or(0);
+        match (i1, c, first) {
+            // DSR 6: cursor position report, 1-based.
+            (None, 'n', 6) => {
+                let (row, col) = screen.cursor_position();
+                let _ = write!(self.pending, "\x1b[{};{}R", row + 1, col + 1);
+            }
+            // DSR 5: operating status — ready.
+            (None, 'n', 5) => self.pending.extend_from_slice(b"\x1b[0n"),
+            // DA1: a VT100 with advanced video options, as xterm answers.
+            (None, 'c', 0) => self.pending.extend_from_slice(b"\x1b[?1;2c"),
+            _ => {}
+        }
+    }
+}
+
 /// vt100 is 0-indexed; ratatui is 0-indexed — explicit adapter with
 /// no hidden offset. Pads/truncates to `area` exactly.
 ///
@@ -78,7 +129,7 @@ fn from_vt_cell(c: &VtCell) -> Cell {
 /// shows up as a solid block in the ratatui render — the agent's own
 /// cursor escape sequences are consumed by the vt100 parser and never
 /// reach the real terminal, so without this the cursor is invisible.
-pub fn grid_to_ratatui(parser: &Parser, area: Rect) -> Vec<Vec<Cell>> {
+pub fn grid_to_ratatui<CB: vt100::Callbacks>(parser: &Parser<CB>, area: Rect) -> Vec<Vec<Cell>> {
     let rows = area.height as usize;
     let cols = area.width as usize;
     let screen: &Screen = parser.screen();
@@ -290,6 +341,27 @@ mod tests {
             !cells[cur_row as usize][cur_col as usize].reverse,
             "cell at cursor position must NOT be reverse-video when cursor is hidden"
         );
+    }
+
+    #[test]
+    fn agent_parser_answers_cursor_position_and_device_queries() {
+        let mut parser = agent_parser(24, 80, 0);
+        // What conhost sends first under PSEUDOCONSOLE_INHERIT_CURSOR.
+        parser.process(b"\x1b[6n");
+        assert_eq!(parser.callbacks_mut().take(), b"\x1b[1;1R");
+        // Reported where the cursor is at the query, 1-based.
+        parser.process(b"\x1b[3;5Hab\x1b[6n");
+        assert_eq!(parser.callbacks_mut().take(), b"\x1b[3;7R");
+        parser.process(b"\x1b[5n\x1b[c");
+        assert_eq!(parser.callbacks_mut().take(), b"\x1b[0n\x1b[?1;2c");
+        // A query split across reads is still answered once whole.
+        parser.process(b"\x1b[");
+        assert!(parser.callbacks_mut().take().is_empty());
+        parser.process(b"6n");
+        assert_eq!(parser.callbacks_mut().take(), b"\x1b[3;7R");
+        // Others (DA2, DECXCPR) stay unanswered.
+        parser.process(b"\x1b[>c\x1b[?6n");
+        assert!(parser.callbacks_mut().take().is_empty());
     }
 
     #[test]

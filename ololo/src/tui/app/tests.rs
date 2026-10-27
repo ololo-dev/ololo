@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 fn fresh_app() -> TuiApp {
     let header = HeaderState::new("s", "p");
-    let parser = Parser::new(24, 80, 0);
+    let parser = crate::tui::pty_host::agent_parser(24, 80, 0);
     TuiApp::new_for_test(header, parser, Arc::new(AtomicU64::new(0)), 80, 24)
 }
 

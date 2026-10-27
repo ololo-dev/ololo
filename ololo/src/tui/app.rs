@@ -10,12 +10,12 @@
 
 use crate::tui::event::{LeaderboardEntry, ProbeInfo, ProbeResultInfo, QuitReason, TuiEvent};
 use crate::tui::header::HeaderState;
+use crate::tui::pty_host::AgentParser;
 use crate::tui::pty_host::PtyHost;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use uuid::Uuid;
-use vt100::Parser;
 
 mod keymap;
 mod run_loop;
@@ -266,7 +266,7 @@ pub struct TuiApp {
     pub header: HeaderState,
     pub agent_label: String,
     pub pty: Option<PtyHost>,
-    pub pty_parser: Parser,
+    pub pty_parser: AgentParser,
     pub pty_cols: u16,
     pub pty_rows: u16,
     pub has_pty: bool,
@@ -385,7 +385,7 @@ impl TuiApp {
     #[allow(dead_code)]
     pub fn new_for_test(
         header: HeaderState,
-        pty_parser: Parser,
+        pty_parser: AgentParser,
         dropped_count: Arc<AtomicU64>,
         cols: u16,
         rows: u16,

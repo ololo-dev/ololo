@@ -76,6 +76,21 @@ pub fn spawn_reporter(
                     task.window_end_ms,
                     cwd.clone(),
                 );
+                // An empty report is a finding, not a non-event: every
+                // player of two workshops uploaded zeros for a month
+                // before anyone looked, because the scan named a folder
+                // Claude Code never writes to. Say what was looked at.
+                if agents.is_empty() {
+                    tracing::warn!(
+                        "task stats: no agent activity found for task {} in {} (scanned {} sessions with tokens, {} with messages)",
+                        task.ordinal,
+                        cwd.as_deref()
+                            .map(|p| p.display().to_string())
+                            .unwrap_or_default(),
+                        raw.0.len(),
+                        raw.1.len()
+                    );
+                }
                 let report = TaskStatsReport {
                     task_id: Some(task.task_id),
                     task_ordinal: task.ordinal,

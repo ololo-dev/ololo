@@ -132,7 +132,15 @@ async fn push_with_retry(
                 // Push the resynced line right away.
                 continue;
             }
-            PushOutcome::Failed { .. } | PushOutcome::Timeout { .. } => {
+            // Killed at the deadline: the pack is too big for this link
+            // (or the link is gone). Retrying at once would upload the same
+            // pack again for another minute, five times over, and starve
+            // the agent's own traffic — the next commit asks again anyway.
+            PushOutcome::Timeout { .. } => {
+                tracing::warn!("snapshot push killed at the deadline; waiting for the next commit");
+                return outcome;
+            }
+            PushOutcome::Failed { .. } => {
                 if attempt >= BACKOFF_SECS.len() {
                     tracing::warn!(
                         "snapshot push still failing after {attempt} retries; waiting for the next commit"

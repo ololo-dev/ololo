@@ -49,6 +49,139 @@ fn claude_extractor_parses_fixture() {
     std::env::set_current_dir("/").unwrap();
 }
 
+/// One Claude Code reply arrives as several `assistant` lines — a text
+/// block, then a tool call — each repeating the message's usage under the
+/// same `message.id`. The tokens count once; the tool call still counts.
+fn streamed_reply(session: &str, msg: &str, ts: &str, cwd: &str, input: u64) -> String {
+    // Built as JSON, not text: a Windows cwd has backslashes in it.
+    let usage = serde_json::json!({
+        "input_tokens": input, "output_tokens": 7,
+        "cache_creation_input_tokens": 3, "cache_read_input_tokens": 1,
+    });
+    let line = |content: serde_json::Value| {
+        serde_json::json!({
+            "type": "assistant",
+            "message": {
+                "id": msg, "role": "assistant", "model": "claude-fable-5",
+                "content": [content], "usage": usage,
+            },
+            "sessionId": session, "timestamp": ts, "cwd": cwd,
+        })
+        .to_string()
+    };
+    [
+        line(serde_json::json!({"type": "text", "text": "on it"})),
+        line(serde_json::json!({
+            "type": "tool_use", "id": "tu_1", "name": "Bash", "input": {"command": "ls"},
+        })),
+    ]
+    .join("\n")
+}
+
+/// The working directory has a dot and an underscore in its name: Claude
+/// Code's project folder turns both into `-`. A second session's transcript
+/// sits under a folder whose name does not match the directory at all
+/// (another escaping rule) — its lines still say where they were written,
+/// and that is what finds them once a window is given.
+#[test]
+fn claude_transcripts_are_found_by_folder_and_by_recorded_cwd() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    let cwd = home.join("my_app.v2");
+    fs::create_dir_all(&cwd).unwrap();
+    std::env::set_current_dir(&cwd).unwrap();
+    let cwd = std::env::current_dir().unwrap();
+    let cwd_str = cwd.to_string_lossy().to_string();
+
+    let projects = home.join(".claude/projects");
+    let own = projects.join(agent_tokens::paths::escape_cwd(&cwd));
+    assert!(
+        !own.to_string_lossy().contains("my_app.v2"),
+        "the folder name follows Claude Code's escaping: {}",
+        own.display()
+    );
+    fs::create_dir_all(&own).unwrap();
+    fs::write(
+        own.join("here.jsonl"),
+        streamed_reply("s-here", "msg_1", "2026-10-22T15:45:00Z", &cwd_str, 100),
+    )
+    .unwrap();
+
+    // Named by some other rule — nothing like the directory; written in
+    // this cwd. (A fixed name: deriving one from the path would, on
+    // Windows, hand `join` an absolute `C:\…` and leave the sandbox.)
+    let legacy = projects.join("-named-by-another-rule");
+    fs::create_dir_all(&legacy).unwrap();
+    fs::write(
+        legacy.join("legacy.jsonl"),
+        streamed_reply("s-legacy", "msg_2", "2026-10-22T15:50:00Z", &cwd_str, 200),
+    )
+    .unwrap();
+    // Another project's transcript, written elsewhere: never ours.
+    let other = projects.join("-somewhere-else");
+    fs::create_dir_all(&other).unwrap();
+    fs::write(
+        other.join("other.jsonl"),
+        streamed_reply(
+            "s-other",
+            "msg_3",
+            "2026-10-22T15:55:00Z",
+            "/somewhere/else",
+            400,
+        ),
+    )
+    .unwrap();
+
+    // SAFETY: process-per-test under nextest.
+    unsafe { std::env::set_var("AGENT_TOKENS_HOME", home) };
+
+    let claude = Claude;
+    assert!(claude.detect());
+
+    // Without a window only the folder named after the cwd is read.
+    let mut sessions = claude.extract(None);
+    sessions.sort_by(|a, b| a.session_id.cmp(&b.session_id));
+    assert_eq!(
+        sessions
+            .iter()
+            .map(|s| s.session_id.as_str())
+            .collect::<Vec<_>>(),
+        ["s-here"]
+    );
+    assert_eq!(
+        sessions[0].counts.input, 100,
+        "two lines of one reply count once"
+    );
+    assert_eq!(sessions[0].counts.output, 7);
+
+    // With one, every recently written transcript is read, admitting the
+    // lines written here.
+    let since = 1_700_000_000_000; // long before the fixtures
+    let mut sessions = claude.extract(Some(since));
+    sessions.sort_by(|a, b| a.session_id.cmp(&b.session_id));
+    assert_eq!(
+        sessions
+            .iter()
+            .map(|s| s.session_id.as_str())
+            .collect::<Vec<_>>(),
+        ["s-here", "s-legacy"]
+    );
+    assert_eq!(sessions[1].counts.input, 200);
+
+    let mut stats = claude.stats(Some(since));
+    stats.sort_by(|a, b| a.session_id.cmp(&b.session_id));
+    assert_eq!(stats.len(), 2);
+    assert_eq!(
+        stats[0].assistant_messages, 1,
+        "one reply, not one per line"
+    );
+    assert_eq!(stats[0].tool_calls, 1);
+    assert_eq!(stats[0].tools.get("Bash"), Some(&1));
+
+    unsafe { std::env::remove_var("AGENT_TOKENS_HOME") };
+    std::env::set_current_dir("/").unwrap();
+}
+
 #[test]
 fn opencode_extractor_parses_db() {
     let tmp = tempfile::tempdir().unwrap();

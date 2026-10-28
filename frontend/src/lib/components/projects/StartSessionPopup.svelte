@@ -10,36 +10,61 @@
     getProjectBySlug,
     listProjectSessions,
     patchSession,
+    type Project,
     type Session,
   } from "$lib/api";
 
+  type Mode = "console" | "browser";
   let {
     slug,
     open = $bindable(),
+    startOn = "console",
+    project: given = null,
   }: {
     slug: string;
     open: boolean;
+    /** The tab an opening lands on. A personal project's page shows the
+     *  console line itself, so its popup opens on hosting. */
+    startOn?: Mode;
+    /** The project behind `slug`, when the caller already holds it: whether
+     *  hosting is offered depends on what it is and whose it is, and the
+     *  first paint should know. Without it an admin's popup reads it by slug. */
+    project?: Project | null;
   } = $props();
 
   // An admin may host several sessions at once straight from here — the
-  // server lets them, and hosting holds no player row. Everybody else
-  // starts (and plays) one session from the console.
+  // server lets them, and hosting holds no player row. So may the owner of
+  // a personal project: a free-form project is what a workshop runs on,
+  // one session per group. Everybody else starts (and plays) one session
+  // from the console.
   const isAdmin = $derived(page.data?.isAdmin === true);
   const myId = $derived((page.data?.user as { id?: string } | null | undefined)?.id ?? null);
+  let loadedProject = $state<Project | null>(null);
+  const project = $derived(given ?? loadedProject);
+  const ownsPersonal = $derived(
+    project?.kind === "personal" && myId !== null && project.owner_user_id === myId,
+  );
+  const canHost = $derived(isAdmin || ownsPersonal);
 
   // Playing from the console is how a session starts, for admins too; the
-  // browser tab is the admin's extra for running several at once. Every
-  // opening starts on the console.
-  type Mode = "console" | "browser";
+  // browser tab is the extra for running several at once. Every opening
+  // lands on `startOn`.
   let mode = $state<Mode>("console");
   $effect(() => {
-    if (open) untrack(() => (mode = "console"));
+    if (!open) return;
+    untrack(() => {
+      mode = startOn;
+      // What the last opening left behind is not this one's.
+      error = null;
+      fresh = null;
+      confirming = null;
+    });
   });
-  const hosting = $derived(isAdmin && mode === "browser");
+  const hosting = $derived(canHost && mode === "browser");
 
   const LIVE = new Set(["lobby", "running", "paused"]);
-  let projectId = $state<string | null>(null);
-  let projectName = $state("");
+  const projectId = $derived(project?.id ?? null);
+  const projectName = $derived(project?.name ?? "");
   // The admin's own live sessions of this project, oldest first — read
   // from the server, so the list survives closing the popup or a reload.
   let live = $state<Session[]>([]);
@@ -56,6 +81,7 @@
     project_archived: "The project is archived.",
     personal_project: "Only the owner of a personal project starts its sessions.",
     project_forbidden: "This project is private.",
+    too_many_hosted_sessions: "You already host as many live sessions as one account can. End one to create another.",
   };
   function describe(err: unknown, what: string): string {
     if (err instanceof ApiError) {
@@ -73,33 +99,46 @@
     loaded = true;
   }
 
-  // Load on open, then keep statuses and player counts current while the
-  // popup stays open: a lobby turns into a running session within a minute.
+  // Without the project in hand, an admin's popup reads it on every opening
+  // of a new slug — the hosting list needs its id and name. Nobody else
+  // can host a project they were not handed, so nobody else pays the
+  // round-trip.
   let lastSlug: string | null = null;
   $effect(() => {
-    if (!open || !slug || !hosting) return;
+    if (!open || !slug || given || !isAdmin || slug === lastSlug) return;
     let stopped = false;
     const current = slug;
-    // Only open/slug/mode drive this; the state the loader writes must not.
+    // Only open/slug drive this; the state the loader writes must not.
     untrack(() => {
+      loadedProject = null;
+      loaded = false;
+      live = [];
+      error = null;
       void (async () => {
         try {
-          if (current !== lastSlug) {
-            projectId = null;
-            loaded = false;
-            live = [];
-            error = null;
-            const project = await getProjectBySlug(current);
-            if (stopped) return;
-            projectId = project.id;
-            projectName = project.name;
-            lastSlug = current;
-          }
-          await refresh();
+          const fetched = await getProjectBySlug(current);
+          if (stopped) return;
+          loadedProject = fetched;
+          lastSlug = current;
         } catch (err) {
-          if (!stopped) error = describe(err, "load your sessions");
+          if (!stopped) error = describe(err, "load the project");
         }
       })();
+    });
+    return () => {
+      stopped = true;
+    };
+  });
+
+  // While hosting, keep statuses and player counts current: a lobby turns
+  // into a running session within a minute.
+  $effect(() => {
+    if (!open || !hosting || !projectId) return;
+    let stopped = false;
+    untrack(() => {
+      refresh().catch((err) => {
+        if (!stopped) error = describe(err, "load your sessions");
+      });
     });
     const timer = setInterval(() => {
       if (!stopped) refresh().catch(() => {});
@@ -115,8 +154,9 @@
     busy = true;
     error = null;
     try {
-      // Named after the project, like `ololo start` names it.
-      const session = await createSession(projectName, projectId);
+      // Named after the project, like `ololo start` names it — but hosted,
+      // which `ololo start` never is: the server lets a host have several.
+      const session = await createSession(projectName, projectId, { host: true });
       fresh = session.join_code ?? null;
       await refresh();
     } catch (err) {
@@ -210,7 +250,7 @@
         Start session
       </h3>
 
-      {#if isAdmin}
+      {#if canHost}
         <div
           class="mb-[20px] mt-[14px] grid grid-cols-2 rounded-[10px] border border-brand-border bg-brand-blue/5 p-[4px]"
           role="tablist"
@@ -233,6 +273,12 @@
         </div>
       {/if}
 
+      <!-- Above both views: a project that failed to load leaves an admin on
+           the console view, and that is where they must learn why. -->
+      {#if error}
+        <p class="mb-[14px] text-[14px] text-brand-red" role="alert">{error}</p>
+      {/if}
+
       {#if hosting}
         <section data-testid="host-from-web">
           <p class="mb-[20px] text-[15px] text-brand-muted">
@@ -249,10 +295,6 @@
           >
             {busy ? "Creating…" : live.length > 0 ? "+ Create another session" : "Create session"}
           </Button>
-
-          {#if error}
-            <p class="mt-[10px] text-[14px] text-brand-red" role="alert">{error}</p>
-          {/if}
 
           {#if live.length > 0}
             <div class="mb-[10px] mt-[28px] flex items-baseline justify-between gap-[12px]">

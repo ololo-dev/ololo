@@ -149,7 +149,10 @@ fn walk(
         let rel = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
         let file_type = entry.file_type()?;
         if file_type.is_dir() {
-            if PRUNED_DIRS.iter().any(|d| name == *d) || skip(&rel, true) {
+            if PRUNED_DIRS.iter().any(|d| name == *d)
+                || under_dotnet_output(&rel, true)
+                || skip(&rel, true)
+            {
                 continue;
             }
             walk(root, &path, out, skip)?;
@@ -166,6 +169,9 @@ fn walk(
 /// Never shipped, whoever listed it: `.git` internals, dependency stores
 /// and build output at any depth, Finder junk.
 fn pruned(rel: &Path) -> bool {
+    if under_dotnet_output(rel, false) {
+        return true;
+    }
     let mut components = rel.components().peekable();
     while let Some(component) = components.next() {
         let std::path::Component::Normal(name) = component else {
@@ -180,6 +186,29 @@ fn pruned(rel: &Path) -> bool {
         }
     }
     false
+}
+
+/// Whether `rel` is (`is_dir`) or lies under .NET build output: `bin/Debug`
+/// or `bin/Release` at any depth — a copy of the runtime, tens of MB, that
+/// a `dotnet run` leaves next to the sources and no `.gitignore` of a fresh
+/// folder hides (session RDGAXE: 134 MB snapshots, every push killed at
+/// the deadline). `bin` on its own is not pruned: node CLIs keep their
+/// entry points there.
+fn under_dotnet_output(rel: &Path, is_dir: bool) -> bool {
+    let names: Vec<&std::ffi::OsStr> = rel
+        .components()
+        .filter_map(|c| match c {
+            std::path::Component::Normal(name) => Some(name),
+            _ => None,
+        })
+        .collect();
+    // For a file path the output directory must sit above the file.
+    let last_dir = if is_dir {
+        names.len()
+    } else {
+        names.len().saturating_sub(1)
+    };
+    (1..last_dir).any(|i| names[i - 1] == "bin" && (names[i] == "Debug" || names[i] == "Release"))
 }
 
 /// Ignore patterns from `worktree/<file>`, if it exists.
@@ -390,6 +419,28 @@ mod tests {
         let listing = list(w).unwrap();
         assert!(!listing.from_git);
         assert_eq!(names(&listing), [".gitignore", "main.py"]);
+    }
+
+    #[test]
+    fn dotnet_build_output_is_pruned_but_bin_itself_ships() {
+        let dir = tempfile::tempdir().unwrap();
+        let w = dir.path();
+        write(w, "bin/cli.js", "#!/usr/bin/env node");
+        write(w, "backend/bin/Debug/net8.0/App.dll", "MZ");
+        write(w, "backend/bin/Release/net8.0/App.dll", "MZ");
+        write(w, "backend/obj/project.assets.json", "{}");
+        write(w, "backend/Program.cs", "class P {}");
+
+        // Walked (no repository) …
+        let listing = list(w).unwrap();
+        assert!(!listing.from_git);
+        assert_eq!(names(&listing), ["backend/Program.cs", "bin/cli.js"]);
+
+        // … and listed by git, where no walk pruned the directories.
+        git(w, &["init", "-q"]);
+        let listing = list(w).unwrap();
+        assert!(listing.from_git);
+        assert_eq!(names(&listing), ["backend/Program.cs", "bin/cli.js"]);
     }
 
     #[test]

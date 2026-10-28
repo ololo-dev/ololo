@@ -144,14 +144,23 @@ fn run_job(snapshot: &Mutex<SnapshotRepo>, job: HealthJob) -> HealthReportPayloa
             .prefix("ololo-health-")
             .tempdir()
             .map_err(|e| format!("temp dir: {e}"))?;
-        {
-            let guard = snapshot
-                .lock()
-                .map_err(|e| format!("snapshot lock poisoned: {e}"))?;
-            guard
-                .export_tree(commit, dir.path(), &skip)
-                .map_err(|e| format!("exporting the commit tree: {e}"))?;
-        }
+        // The export opens the repo on its own and runs without the lock:
+        // writing a big tree takes up to a minute, and the probe loop
+        // commits (and shows the permission prompt) only once it has the
+        // lock — held through an export, that wait ate the whole prompt
+        // window in session RDGAXE.
+        let git_dir = snapshot
+            .lock()
+            .map_err(|e| format!("snapshot lock poisoned: {e}"))?
+            .git_dir()
+            .to_path_buf();
+        crate::snapshot::export_commit_tree(&git_dir, commit, dir.path(), &skip).map_err(|e| {
+            if crate::snapshot::is_disk_full(&e) {
+                format!("exporting the commit tree: the disk is full ({e})")
+            } else {
+                format!("exporting the commit tree: {e}")
+            }
+        })?;
         ololo_health::analyze(dir.path(), &cfg).map_err(|e| match e {
             ololo_health::HealthError::Timeout(d) => format!("timeout after {}s", d.as_secs()),
             other => other.to_string(),

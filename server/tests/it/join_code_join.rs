@@ -109,12 +109,32 @@ async fn create_session(
     create_session_on(app, cookie, name, &project_id).await
 }
 
-/// Create a session of an existing project.
+/// Create a session of an existing project, the way `ololo start` does.
 async fn create_session_on(
     app: &axum::Router,
     cookie: &str,
     name: &str,
     project_id: &str,
+) -> (StatusCode, serde_json::Value) {
+    post_session(app, cookie, name, project_id, false).await
+}
+
+/// Host a session of an existing project, the way the web popup does.
+async fn host_session_on(
+    app: &axum::Router,
+    cookie: &str,
+    name: &str,
+    project_id: &str,
+) -> (StatusCode, serde_json::Value) {
+    post_session(app, cookie, name, project_id, true).await
+}
+
+async fn post_session(
+    app: &axum::Router,
+    cookie: &str,
+    name: &str,
+    project_id: &str,
+    host: bool,
 ) -> (StatusCode, serde_json::Value) {
     let resp = app
         .clone()
@@ -122,7 +142,7 @@ async fn create_session_on(
             Method::POST,
             "/api/sessions",
             Some(cookie),
-            Some(serde_json::json!({ "name": name, "project_id": project_id })),
+            Some(serde_json::json!({ "name": name, "project_id": project_id, "host": host })),
         ))
         .await
         .expect("create session resp");
@@ -576,9 +596,11 @@ async fn test_create_is_refused_while_playing() {
 }
 
 /// An admin hosts several sessions at once from the web, even while
-/// playing one — but joining a second one to PLAY is still refused.
+/// playing one — but joining a second one to PLAY is still refused, and
+/// so is a console start, which would join what it creates: the refusal
+/// comes before the row, not as an orphan lobby after it.
 #[tokio::test]
-async fn test_admin_creates_sessions_while_playing() {
+async fn test_admin_hosts_sessions_while_playing() {
     let state = test_state_noop().await;
     let app = build_router(state);
     let (_, cookie_admin) = register_and_login(app.clone(), "admin@x.test", "password-12345").await;
@@ -588,13 +610,21 @@ async fn test_admin_creates_sessions_while_playing() {
     let (st, _) = join(&app, &cookie_admin, code1).await;
     assert_eq!(st, StatusCode::CREATED);
 
-    let (sc, s2) = create_session(&app, &cookie_admin, "Workshop A").await;
+    let (ps, pb) = create_project(&app, &cookie_admin, "workshop").await;
+    assert_eq!(ps, StatusCode::CREATED, "body={pb}");
+    let project_id = pb["id"].as_str().expect("project id").to_string();
+    let (sc, s2) = host_session_on(&app, &cookie_admin, "Workshop A", &project_id).await;
     assert_eq!(sc, StatusCode::CREATED, "body={s2}");
-    let (sc, s3) = create_session(&app, &cookie_admin, "Workshop B").await;
+    let (sc, s3) = host_session_on(&app, &cookie_admin, "Workshop B", &project_id).await;
     assert_eq!(sc, StatusCode::CREATED, "body={s3}");
 
     let code2 = s2["join_code"].as_str().expect("join_code");
     let (st, body) = join(&app, &cookie_admin, code2).await;
     assert_eq!(st, StatusCode::CONFLICT, "body={body}");
     assert_eq!(body["error"], "active_session_exists");
+
+    let (sc, body) = create_session_on(&app, &cookie_admin, "Started", &project_id).await;
+    assert_eq!(sc, StatusCode::CONFLICT, "body={body}");
+    assert_eq!(body["error"], "active_session_exists");
+    assert_eq!(body["active_join_code"], serde_json::json!(code1));
 }

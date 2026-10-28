@@ -13,6 +13,10 @@ vi.mock("$lib/ws-project.svelte", () => ({
   },
 }));
 
+// The start popup reads who is looking from the page data.
+const pageState = vi.hoisted(() => ({ page: { data: {} as Record<string, unknown> } }));
+vi.mock("$app/state", () => ({ page: pageState.page }));
+
 function project(over: Partial<Project> = {}): Project {
   return {
     id: "p1",
@@ -179,6 +183,21 @@ describe("ProjectDetailPage", () => {
     it("offers no start to anyone but its owner", () => {
       renderPersonal(personal, [], { currentUserId: "admin", isAdmin: true });
       expect(screen.queryByTestId("personal-start")).toBeNull();
+    });
+
+    it("lets its owner host sessions for a group from the web", async () => {
+      pageState.page.data = { isAdmin: false, user: { id: "me" } };
+      renderPersonal(personal, [], { currentUserId: "me", isAdmin: false });
+      expect(screen.queryByRole("dialog", { name: "Start session" })).toBeNull();
+      await fireEvent.click(screen.getByTestId("personal-host"));
+      // The card already shows the console line, so the popup opens on
+      // hosting — and knows the project on its first paint, no fetch.
+      const dialog = screen.getByRole("dialog", { name: "Start session" });
+      expect(dialog.querySelector('[data-testid="host-from-web"]')).not.toBeNull();
+      expect(
+        screen.getByRole("tab", { name: "Host several sessions" }).getAttribute("aria-selected"),
+      ).toBe("true");
+      pageState.page.data = {};
     });
 
     it("tells its owner who sees it, and where to change that", () => {

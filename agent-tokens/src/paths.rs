@@ -15,10 +15,35 @@ pub fn claude_projects_dir() -> PathBuf {
     home_dir().join(".claude").join("projects")
 }
 
-/// Escape a cwd path the way Claude Code does: replace every `/` with `-`.
-/// e.g. /Users/apk/Workspace/lab/tetris -> -Users-apk-Workspace-lab-tetris
+/// Escape a cwd path the way Claude Code names its project folder: every
+/// character outside `[A-Za-z0-9]` becomes `-` — the separators, but also
+/// `.`, `_`, spaces and a Windows drive colon.
+/// e.g. /Users/apk/lab/my_app.v2 -> -Users-apk-lab-my-app-v2,
+///      C:\Users\apk\play -> C--Users-apk-play
+///
+/// Replacing only `/` (the rule until 2026-10) named a folder Claude never
+/// writes to whenever the path had a dot or an underscore in it, and the
+/// scan came back empty without a word.
 pub fn escape_cwd(path: &std::path::Path) -> String {
-    path.to_string_lossy().replace('/', "-")
+    path.to_string_lossy()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
+}
+
+/// Whether a transcript's recorded `cwd` names `dir`. Claude Code writes
+/// `process.cwd()`; it agrees with Rust's `current_dir()` on Unix, while
+/// Windows may differ in the drive letter's case or a trailing separator.
+pub fn same_dir(recorded: &str, dir: &std::path::Path) -> bool {
+    let norm = |s: &str| -> String {
+        let s = s.trim_end_matches(['/', '\\']);
+        if cfg!(windows) {
+            s.replace('/', "\\").to_ascii_lowercase()
+        } else {
+            s.to_string()
+        }
+    };
+    norm(recorded) == norm(&dir.to_string_lossy())
 }
 
 pub fn pi_sessions_dir() -> PathBuf {

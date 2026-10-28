@@ -13,41 +13,97 @@ use crate::tui::pty_host::{PtyHost, SpawnArgs};
 use crate::tui::{self, log_redir};
 use crate::util;
 
-/// Open the snapshot repo for a session, write the session-start commit,
-/// and push it. Best-effort: any failure logs and returns `None` — probes
-/// and scoring never depend on snapshotting. The returned baseline tree id
-/// feeds the TUI's diff task; headless mode ignores it.
-fn init_snapshot_repo(
+/// The snapshot repo with its session-start commit, the baseline tree for
+/// the diff task, and the warning to show when the folder is too big to
+/// play in. The first push is NOT made here: it goes through the
+/// background pusher once [`spawn_sync_tasks`] has attached it, so a slow
+/// uplink never holds the TUI back (an inline push ran for its whole
+/// 60 s deadline before the screen appeared in session RDGAXE — players
+/// took it for a hang and restarted).
+struct SnapshotStart {
+    repo: Arc<std::sync::Mutex<snapshot::SnapshotRepo>>,
+    baseline: Option<gix::ObjectId>,
+    warning: Option<String>,
+}
+
+/// Best-effort: any failure is said once and returns `None` — probes and
+/// scoring never depend on snapshotting. Off the runtime: the first commit
+/// reads the whole working tree.
+async fn init_snapshot_repo(
     profile: &str,
     join_code: &str,
     worktree: &std::path::Path,
     git_remote_url: Option<String>,
     pat: String,
-) -> Option<(
-    Arc<std::sync::Mutex<snapshot::SnapshotRepo>>,
-    Option<gix::ObjectId>,
-)> {
-    match snapshot::SnapshotRepo::new(profile, join_code, worktree, git_remote_url, Some(pat)) {
-        Ok(snap) => {
-            if let Err(e) = snap.commit_session_start() {
-                tracing::warn!("session-start snapshot commit failed: {e}");
-                return None;
-            }
-            let _ = snap.push_to_remote();
-            let baseline = match snap.head_tree_id() {
-                Ok(t) => Some(t),
-                Err(e) => {
-                    tracing::warn!("snapshot head_tree_id failed, skipping diff task: {e}");
-                    None
-                }
-            };
-            Some((Arc::new(std::sync::Mutex::new(snap)), baseline))
-        }
+) -> Option<SnapshotStart> {
+    let (profile, join_code, worktree) = (
+        profile.to_string(),
+        join_code.to_string(),
+        worktree.to_path_buf(),
+    );
+    tokio::task::spawn_blocking(move || {
+        init_snapshot_repo_blocking(&profile, &join_code, &worktree, git_remote_url, pat)
+    })
+    .await
+    .unwrap_or_else(|e| {
+        tracing::warn!("snapshot init task panicked: {e}");
+        None
+    })
+}
+
+fn init_snapshot_repo_blocking(
+    profile: &str,
+    join_code: &str,
+    worktree: &std::path::Path,
+    git_remote_url: Option<String>,
+    pat: String,
+) -> Option<SnapshotStart> {
+    let snap = match snapshot::SnapshotRepo::new(
+        profile,
+        join_code,
+        worktree,
+        git_remote_url,
+        Some(pat),
+    ) {
+        Ok(snap) => snap,
         Err(e) => {
             tracing::warn!("snapshot repo init failed: {e}");
+            crate::ui::warn(format!("Snapshots are off for this session: {e}"));
+            return None;
+        }
+    };
+    if let Err(e) = snap.commit_session_start() {
+        tracing::warn!("session-start snapshot commit failed: {e}");
+        // Without snapshots nothing reaches the judges; say so where the
+        // player can act on it, instead of a quiet "health failed" later.
+        if snapshot::is_disk_full(&e) {
+            crate::ui::warn(
+                "Snapshots are off for this session: the disk is full. Free some space \
+                 and rejoin, or your code never reaches the judges.",
+            );
+        } else {
+            crate::ui::warn(format!("Snapshots are off for this session: {e}"));
+        }
+        return None;
+    }
+    let warning = snap
+        .last_staged()
+        .and_then(|stats| stats.big_workspace_warning());
+    if let Some(w) = &warning {
+        crate::ui::warn(w);
+    }
+    let baseline = match snap.head_tree_id() {
+        Ok(t) => Some(t),
+        Err(e) => {
+            tracing::warn!("snapshot head_tree_id failed, skipping diff task: {e}");
             None
         }
-    }
+    };
+    Some(SnapshotStart {
+        repo: Arc::new(std::sync::Mutex::new(snap)),
+        baseline,
+        warning,
+    })
 }
 
 /// Memory sources (AGENTS.md / README.md) are published as the player edits
@@ -65,7 +121,9 @@ fn spawn_sync_tasks(
     let (frame_tx, frame_rx) = tokio::sync::mpsc::unbounded_channel();
     // Every push goes through one background pusher (never blocks the
     // reducer or the probe loop; retries and resyncs on its own).
-    let (_pusher, _push_task) = snapshot::pusher::spawn(Arc::clone(snap));
+    let (pusher, _push_task) = snapshot::pusher::spawn(Arc::clone(snap));
+    // The session-start commit goes up now, in the background.
+    pusher.request();
     let (handle, mem_task) = crate::memory_sync::spawn(Arc::clone(snap), frame_tx.clone());
     let (suite, _suite_task) =
         crate::suite_run::spawn(Arc::clone(snap), frame_tx.clone(), Some(Arc::clone(&sink)));
@@ -208,7 +266,8 @@ pub async fn run_headless_start(
         git_remote_url,
         pat.clone(),
     )
-    .map(|(snap, _baseline)| snap);
+    .await
+    .map(|start| start.repo);
 
     let (memory_channel, _memory_task, _flag_task) = match maybe_snapshot.as_ref() {
         Some(snap) => {
@@ -378,13 +437,30 @@ pub async fn run_tui_start(
 
     // ponytail: snapshot init is best-effort — failures are logged and swallowed.
     let worktree_cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    if let Some((snap_arc, baseline)) = init_snapshot_repo(
+    if let Some(SnapshotStart {
+        repo: snap_arc,
+        baseline,
+        warning,
+    }) = init_snapshot_repo(
         profile,
         &join_code,
         &worktree_cwd,
         git_remote_url.clone(),
         pat.clone(),
-    ) {
+    )
+    .await
+    {
+        // The terminal line above is gone once the alternate screen opens;
+        // the chat pane keeps the warning.
+        if let Some(msg) = warning {
+            let _ = bus_dyn.send(
+                Origin::Network,
+                TuiEvent::Log {
+                    level: crate::tui::LogLevel::Warn,
+                    msg,
+                },
+            );
+        }
         if let Some(baseline_tree) = baseline {
             let git_dir = snap_arc
                 .lock()

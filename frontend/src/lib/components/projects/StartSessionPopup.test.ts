@@ -148,9 +148,43 @@ describe("StartSessionPopup", () => {
     await fireEvent.click(await findByRole("button", { name: "+ Create another session" }));
 
     await waitFor(() => expect(rows(container)).toHaveLength(2));
-    expect(hoisted.createSession).toHaveBeenNthCalledWith(1, "Extreme Startup", "p-1");
-    expect(hoisted.createSession).toHaveBeenNthCalledWith(2, "Extreme Startup", "p-1");
+    // Hosted, not started: the server lets a host have several at once.
+    expect(hoisted.createSession).toHaveBeenNthCalledWith(1, "Extreme Startup", "p-1", {
+      host: true,
+    });
+    expect(hoisted.createSession).toHaveBeenNthCalledWith(2, "Extreme Startup", "p-1", {
+      host: true,
+    });
     expect(getByRole("button", { name: "Copy all join commands" })).toBeTruthy();
+  });
+
+  it("reads the project by slug only for an admin who was not handed it", async () => {
+    const { rerender } = render(StartSessionPopup, { slug: "extreme-startup", open: true });
+    expect(hoisted.getProjectBySlug).not.toHaveBeenCalled();
+    await rerender({ slug: "extreme-startup", open: false });
+
+    asAdmin();
+    render(StartSessionPopup, {
+      slug: "extreme-startup",
+      open: true,
+      project: { id: "p-1", name: "Extreme Startup" } as never,
+    });
+    expect(hoisted.getProjectBySlug).not.toHaveBeenCalled();
+
+    cleanup();
+    render(StartSessionPopup, { slug: "extreme-startup", open: true });
+    await waitFor(() => expect(hoisted.getProjectBySlug).toHaveBeenCalledWith("extreme-startup"));
+  });
+
+  it("tells an admin on the console view that the project failed to load", async () => {
+    asAdmin();
+    hoisted.getProjectBySlug.mockRejectedValue(new ApiError(500, "database_error", null));
+    const { findByRole, getByText } = render(StartSessionPopup, {
+      slug: "extreme-startup",
+      open: true,
+    });
+    expect((await findByRole("alert")).textContent).toContain("Could not load the project");
+    expect(getByText("ololo start extreme-startup")).toBeTruthy();
   });
 
   it("copies every join command at once", async () => {
@@ -192,5 +226,62 @@ describe("StartSessionPopup", () => {
     await fireEvent.click(await findByRole("button", { name: "Create session" }));
     expect((await findByRole("alert")).textContent).toContain("start one of its parts");
     expect(queryAllByTestId("hosted-session")).toHaveLength(0);
+  });
+
+  describe("a personal project", () => {
+    const mine = {
+      id: "p-personal",
+      name: "Game of Life",
+      kind: "personal",
+      owner_user_id: "u-owner",
+    };
+
+    it("lets its owner host several sessions, opening on hosting when asked", async () => {
+      hoisted.page.data = { isAdmin: false, user: { id: "u-owner" } };
+      hoisted.listProjectSessions.mockResolvedValue([
+        session({ join_code: "GRPAAA", owner_id: "u-owner", project_id: "p-personal" }),
+      ]);
+      hoisted.createSession.mockResolvedValue(
+        session({ join_code: "GRPBBB", owner_id: "u-owner", project_id: "p-personal" }),
+      );
+      const { getByRole, getByTestId, findByRole, findAllByTestId, container } = render(
+        StartSessionPopup,
+        { slug: "game-of-life", open: true, startOn: "browser", project: mine as never },
+      );
+
+      // Handed the project, the first paint is already the hosting view.
+      expect(getByTestId("host-from-web")).toBeTruthy();
+      expect(
+        getByRole("tab", { name: "Host several sessions" }).getAttribute("aria-selected"),
+      ).toBe("true");
+      expect(hoisted.getProjectBySlug).not.toHaveBeenCalled();
+      await findAllByTestId("hosted-session");
+      expect(rows(container)).toEqual([
+        "GRPAAA Lobby 0 players Copy command Open ↗ Cancel session",
+      ]);
+
+      hoisted.listProjectSessions.mockResolvedValue([
+        session({ join_code: "GRPAAA", owner_id: "u-owner", project_id: "p-personal" }),
+        session({ join_code: "GRPBBB", owner_id: "u-owner", project_id: "p-personal" }),
+      ]);
+      await fireEvent.click(await findByRole("button", { name: "+ Create another session" }));
+      await waitFor(() => expect(rows(container)).toHaveLength(2));
+      expect(hoisted.createSession).toHaveBeenCalledWith("Game of Life", "p-personal", {
+        host: true,
+      });
+    });
+
+    it("offers nobody else the hosting tab", () => {
+      hoisted.page.data = { isAdmin: false, user: { id: "u-player" } };
+      const { getByText, queryByRole, queryByTestId } = render(StartSessionPopup, {
+        slug: "game-of-life",
+        open: true,
+        startOn: "browser",
+        project: mine as never,
+      });
+      expect(queryByRole("tablist")).toBeNull();
+      expect(queryByTestId("host-from-web")).toBeNull();
+      expect(getByText("ololo start game-of-life")).toBeTruthy();
+    });
   });
 });

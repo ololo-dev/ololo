@@ -491,4 +491,8 @@
   </div>
 </div>
 
-<StartSessionPopup slug={startSlug ?? ""} bind:open={startOpen} />
+<StartSessionPopup
+  slug={startSlug ?? ""}
+  project={data.projects.find((p) => p.slug === startSlug) ?? null}
+  bind:open={startOpen}
+/>

@@ -411,6 +411,15 @@
                 class="font-semibold text-brand-blue hover:opacity-70">How it works</a
               >
             </p>
+            <!-- A workshop: one session per group, hosted from here. -->
+            <button
+              type="button"
+              onclick={onStart}
+              data-testid="personal-host"
+              class="mt-[16px] block w-full rounded-[8px] bg-brand-blue px-4 py-[10px] text-center text-[15px] font-semibold text-white transition-opacity hover:opacity-80"
+            >
+              Host sessions for a group
+            </button>
           {/if}
           <a
             href={sessionCount > 0 || project.archived_at

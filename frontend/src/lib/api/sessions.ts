@@ -71,10 +71,16 @@ export function listAdminSessions(
   });
 }
 
-export function createSession(name: string, project_id: string, opts: { fetch?: FetchLike } = {}) {
+/** `host` marks a session run for a group from the web — the caller holds
+ *  no player row in it, so the server lets them have several at once. */
+export function createSession(
+  name: string,
+  project_id: string,
+  opts: { fetch?: FetchLike; host?: boolean } = {},
+) {
   return request<Session>("/api/sessions", {
     method: "POST",
-    body: { name, project_id },
+    body: opts.host ? { name, project_id, host: true } : { name, project_id },
     fetch: opts.fetch,
   });
 }

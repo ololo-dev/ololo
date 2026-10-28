@@ -699,6 +699,158 @@ async fn the_join_code_lets_players_in_but_only_the_owner_starts_a_session() {
     assert_eq!(err["error"], "personal_project");
 }
 
+/// A free-form project is what a workshop runs on: its owner hosts one
+/// session per group from the web, even while playing one themselves —
+/// like an admin on a catalog project. Playing stays one at a time.
+#[tokio::test]
+async fn the_owner_hosts_several_sessions_of_their_project_while_playing_one() {
+    let w = world().await;
+    let (_, project) = call(
+        &w.app,
+        Method::POST,
+        "/api/personal-projects",
+        &w.bob,
+        Some(csv_request()),
+    )
+    .await;
+    let id = project["id"].as_str().unwrap().to_string();
+    let playing = play(&w, &w.bob, &id).await;
+
+    let mut hosted = Vec::new();
+    for name in ["Group A", "Group B"] {
+        let (status, session) = call(
+            &w.app,
+            Method::POST,
+            "/api/sessions",
+            &w.bob,
+            Some(serde_json::json!({ "name": name, "project_id": id, "host": true })),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::CREATED,
+            "{name} while playing: {session}"
+        );
+        hosted.push(session["join_code"].as_str().unwrap().to_string());
+    }
+    assert_ne!(hosted[0], playing);
+
+    // `ololo start` joins what it creates, so a start while playing is
+    // refused before the row exists — an unjoined lobby would be an orphan.
+    let (status, err) = call(
+        &w.app,
+        Method::POST,
+        "/api/sessions",
+        &w.bob,
+        Some(serde_json::json!({ "name": "Started", "project_id": id })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{err}");
+    assert_eq!(err["error"], "active_session_exists");
+    assert_eq!(err["active_join_code"], serde_json::json!(playing));
+
+    // Hosting holds no player row; joining a second session to PLAY is
+    // still refused, and names the one being played.
+    let (status, err) = call(
+        &w.app,
+        Method::POST,
+        "/api/sessions/join",
+        &w.bob,
+        Some(serde_json::json!({ "code": hosted[0] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{err}");
+    assert_eq!(err["error"], "active_session_exists");
+    assert_eq!(err["active_join_code"], serde_json::json!(playing));
+
+    // The exemption is the owner's alone: a player of the project who is
+    // in a live session gets the usual refusal on a catalog project.
+    let (status, joined) = call(
+        &w.app,
+        Method::POST,
+        "/api/sessions/join",
+        &w.carol,
+        Some(serde_json::json!({ "code": hosted[1] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{joined}");
+    let (ps, catalog) = call(
+        &w.app,
+        Method::POST,
+        "/api/projects",
+        &w.admin,
+        Some(serde_json::json!({ "name": "Catalog", "description": "d", "public": true })),
+    )
+    .await;
+    assert_eq!(ps, StatusCode::CREATED, "{catalog}");
+    let (status, err) = call(
+        &w.app,
+        Method::POST,
+        "/api/sessions",
+        &w.carol,
+        Some(serde_json::json!({ "name": "x", "project_id": catalog["id"] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{err}");
+    assert_eq!(err["error"], "active_session_exists");
+}
+
+/// Hosting is a workshop's worth, not a loop's: each live session costs a
+/// lobby timer, a dashboard room and a game-server slot, so the owner of
+/// a personal project — unlike an admin — hosts at most twenty at a time.
+/// Ending one makes room for the next.
+#[tokio::test]
+async fn the_owner_hosts_a_workshops_worth_of_sessions_at_most() {
+    let w = world().await;
+    let (_, project) = call(
+        &w.app,
+        Method::POST,
+        "/api/personal-projects",
+        &w.bob,
+        Some(csv_request()),
+    )
+    .await;
+    let id = project["id"].as_str().unwrap().to_string();
+    let host = |name: String| {
+        let app = w.app.clone();
+        let bob = w.bob.clone();
+        let id = id.clone();
+        async move {
+            call(
+                &app,
+                Method::POST,
+                "/api/sessions",
+                &bob,
+                Some(serde_json::json!({ "name": name, "project_id": id, "host": true })),
+            )
+            .await
+        }
+    };
+
+    let mut first = None;
+    for n in 1..=20 {
+        let (status, session) = host(format!("Group {n}")).await;
+        assert_eq!(status, StatusCode::CREATED, "group {n}: {session}");
+        first.get_or_insert_with(|| session["id"].as_str().unwrap().to_string());
+    }
+    let (status, err) = host("Group 21".into()).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{err}");
+    assert_eq!(err["error"], "too_many_hosted_sessions");
+    assert_eq!(err["limit"], serde_json::json!(20));
+
+    let (status, cancelled) = call(
+        &w.app,
+        Method::PATCH,
+        &format!("/api/sessions/{}", first.unwrap()),
+        &w.bob,
+        Some(serde_json::json!({ "status": "cancelled" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{cancelled}");
+    let (status, session) = host("Group 21".into()).await;
+    assert_eq!(status, StatusCode::CREATED, "{session}");
+}
+
 #[tokio::test]
 async fn a_personal_slug_never_shadows_a_catalog_one() {
     let w = world().await;

@@ -409,6 +409,8 @@
 <!-- Start session popup -->
 <StartSessionPopup
   slug={startSlug ?? project.slug ?? ""}
+  project={startSlug === null || startSlug === project.slug ? project : null}
   bind:open={showStartPopup}
+  startOn={isPersonal ? "browser" : "console"}
 />
 

@@ -33,61 +33,79 @@ export const load: PageServerLoad = async ({ params, url, fetch, cookies }) => {
     throw error(500, "Failed to load player data");
   }
 
-  // Best-effort: git history load never blocks the page render. A 403 is
-  // not a failure but a boundary: a signed-in spectator may read the run,
-  // while diffs and files stay with the player and admins — the page hides
-  // the inspection tabs instead of showing them broken.
-  let history: PlayerHistoryResponse | null = null;
-  let inspectRestricted = false;
-  try {
-    const histResp = await fetch(
-      `/api/sessions/${encodeURIComponent(params.code)}/players/${encodeURIComponent(params.player_id)}/history`,
-    );
-    if (histResp.ok) {
-      history = (await histResp.json()) as PlayerHistoryResponse;
-    } else if (histResp.status === 403) {
-      inspectRestricted = true;
-    }
-  } catch {
-    // non-fatal
-  }
+  // The three side loads below are best-effort and independent, so they
+  // run together: one after another they added their latencies up, and
+  // with a workshop's worth of players refreshing, opening a player took
+  // seconds.
 
-  // Best-effort: task agent statistics never block the page render.
-  let taskStats: TaskStatsResponse | null = null;
-  try {
-    const statsResp = await fetch(
-      `/api/sessions/${encodeURIComponent(params.code)}/players/${encodeURIComponent(params.player_id)}/task-stats`,
-    );
-    if (statsResp.ok) {
-      taskStats = (await statsResp.json()) as TaskStatsResponse;
-    }
-  } catch {
-    // non-fatal
-  }
-
-  // Best-effort: judge avatars (slug → url) from the public project judges
-  // list; the session-by-code lookup carries the project id.
-  const judgeAvatars: Record<string, string> = {};
-  let sessionId: string | null = null;
-  try {
-    const sess = (await fetch(`/api/sessions/by-code/${encodeURIComponent(params.code)}`).then(
-      (r) => (r.ok ? r.json() : null),
-    )) as { id?: string; project_id?: string | null } | null;
-    sessionId = sess?.id ?? null;
-    if (sess?.project_id) {
-      const resp = await fetch(`/api/projects/${encodeURIComponent(sess.project_id)}/judges`);
-      if (resp.ok) {
-        const body = (await resp.json()) as {
-          judges?: { slug: string; avatar_url?: string | null }[];
+  // Git history: a 403 is not a failure but a boundary — a signed-in
+  // spectator may read the run, while diffs and files stay with the player
+  // and admins; the page hides the inspection tabs instead of showing them
+  // broken.
+  const loadHistory = async (): Promise<{
+    history: PlayerHistoryResponse | null;
+    inspectRestricted: boolean;
+  }> => {
+    try {
+      const histResp = await fetch(
+        `/api/sessions/${encodeURIComponent(params.code)}/players/${encodeURIComponent(params.player_id)}/history`,
+      );
+      if (histResp.ok) {
+        return {
+          history: (await histResp.json()) as PlayerHistoryResponse,
+          inspectRestricted: false,
         };
-        for (const j of body.judges ?? []) {
-          if (j.avatar_url) judgeAvatars[j.slug] = j.avatar_url;
+      }
+      return { history: null, inspectRestricted: histResp.status === 403 };
+    } catch {
+      return { history: null, inspectRestricted: false };
+    }
+  };
+
+  // Task agent statistics.
+  const loadTaskStats = async (): Promise<TaskStatsResponse | null> => {
+    try {
+      const statsResp = await fetch(
+        `/api/sessions/${encodeURIComponent(params.code)}/players/${encodeURIComponent(params.player_id)}/task-stats`,
+      );
+      return statsResp.ok ? ((await statsResp.json()) as TaskStatsResponse) : null;
+    } catch {
+      return null;
+    }
+  };
+
+  // Judge avatars (slug → url) from the public project judges list; the
+  // session-by-code lookup carries the project id.
+  const loadJudges = async (): Promise<{
+    judgeAvatars: Record<string, string>;
+    sessionId: string | null;
+  }> => {
+    const judgeAvatars: Record<string, string> = {};
+    let sessionId: string | null = null;
+    try {
+      const sess = (await fetch(`/api/sessions/by-code/${encodeURIComponent(params.code)}`).then(
+        (r) => (r.ok ? r.json() : null),
+      )) as { id?: string; project_id?: string | null } | null;
+      sessionId = sess?.id ?? null;
+      if (sess?.project_id) {
+        const resp = await fetch(`/api/projects/${encodeURIComponent(sess.project_id)}/judges`);
+        if (resp.ok) {
+          const body = (await resp.json()) as {
+            judges?: { slug: string; avatar_url?: string | null }[];
+          };
+          for (const j of body.judges ?? []) {
+            if (j.avatar_url) judgeAvatars[j.slug] = j.avatar_url;
+          }
         }
       }
+    } catch {
+      // non-fatal
     }
-  } catch {
-    // non-fatal
-  }
+    return { judgeAvatars, sessionId };
+  };
+
+  const [{ history, inspectRestricted }, taskStats, { judgeAvatars, sessionId }] =
+    await Promise.all([loadHistory(), loadTaskStats(), loadJudges()]);
 
   // A session is "live" (WS updates + Live badge) unless it has ended.
   // Derived from the snapshot status rather than a URL query param.

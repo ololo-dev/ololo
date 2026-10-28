@@ -15,6 +15,11 @@ const NAME_MAX: usize = 120;
 pub struct CreateSessionReq {
     pub name: String,
     pub project_id: uuid::Uuid,
+    /// The session is hosted, not played: the caller runs it for a group
+    /// from the web and holds no player row in it. Sent by the hosting
+    /// popup; `ololo start` leaves it off, since it joins what it creates.
+    #[serde(default)]
+    pub host: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -215,6 +220,10 @@ pub enum SessionError {
     /// The session runs someone's personal project: its owner is the only
     /// player, whoever holds the join code.
     PersonalProject,
+    /// The caller already hosts `limit` live sessions.
+    TooManyHostedSessions {
+        limit: u64,
+    },
     Db(DbErr),
 }
 
@@ -247,6 +256,8 @@ crate::api::error::impl_api_error!(SessionError {
     Self::PartLocked { required_project, required_part_ordinal } =>
         (CONFLICT, "part_locked", "required_project": required_project, "required_part_ordinal": required_part_ordinal),
     Self::PersonalProject => (FORBIDDEN, "personal_project"),
+    Self::TooManyHostedSessions { limit } =>
+        (CONFLICT, "too_many_hosted_sessions", "limit": limit),
     Self::Db(_) => (INTERNAL_SERVER_ERROR, "database_error"),
 });
 pub(crate) fn parse_user_id(claims: &AccessClaims) -> Result<Uuid, SessionError> {
@@ -293,6 +304,35 @@ pub(crate) async fn ensure_single_active_session(
         join_code: blocking.join_code,
         project,
     })
+}
+
+/// How many live sessions one user hosts at most. Hosting is unbounded
+/// for an admin; everybody else who may host (the owner of a personal
+/// project) gets a workshop's worth — each live session costs a lobby
+/// timer, a dashboard room and a game-server slot.
+pub(crate) const MAX_HOSTED_LIVE_SESSIONS: u64 = 20;
+
+/// Refuse when the caller already owns `limit` sessions that are still
+/// Lobby/Running/Paused.
+pub(crate) async fn ensure_hosted_sessions_below(
+    db: &DatabaseConnection,
+    user_id: Uuid,
+    limit: u64,
+) -> Result<(), SessionError> {
+    use sea_orm::PaginatorTrait;
+    let live = sessions::Entity::find()
+        .filter(sessions::Column::OwnerIdFk.eq(user_id))
+        .filter(sessions::Column::Status.is_in([
+            SessionStatus::Lobby,
+            SessionStatus::Running,
+            SessionStatus::Paused,
+        ]))
+        .count(db)
+        .await?;
+    if live >= limit {
+        return Err(SessionError::TooManyHostedSessions { limit });
+    }
+    Ok(())
 }
 
 /// Campaign gating for session creation.

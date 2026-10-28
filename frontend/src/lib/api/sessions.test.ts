@@ -53,6 +53,16 @@ describe("sessions api", () => {
     });
   });
 
+  it("createSession marks a hosted session as such", async () => {
+    mockRequest.mockResolvedValue({ id: "s1" });
+    await createSession("Game", "p1", { host: true });
+    expect(mockRequest).toHaveBeenCalledWith("/api/sessions", {
+      method: "POST",
+      body: { name: "Game", project_id: "p1", host: true },
+      fetch: undefined,
+    });
+  });
+
   it("getSession GETs by id", async () => {
     mockRequest.mockResolvedValue({ id: "s1" });
     await getSession("s1");

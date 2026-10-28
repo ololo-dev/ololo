@@ -1116,3 +1116,61 @@ fn stage_all_rereads_a_changed_file_behind_the_stat_cache() {
     let blob = find_path_in_tree(&snapshot.repo, second, "app.js").expect("app.js");
     assert_eq!(read_blob(&snapshot.repo, blob), b"version two");
 }
+
+#[test]
+fn the_start_commit_measures_the_tree_and_a_big_one_gets_a_warning() {
+    let _g = HOME_LOCK.lock().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let worktree = tempfile::tempdir().unwrap();
+    let _h = HomeGuard::set(home.path().to_str().unwrap());
+    std::fs::write(worktree.path().join("a.js"), "a".repeat(1000)).unwrap();
+    std::fs::write(worktree.path().join("b.js"), "b".repeat(24)).unwrap();
+
+    let snapshot = SnapshotRepo::new("default", "STATS1", worktree.path(), None, None).unwrap();
+    assert_eq!(snapshot.last_staged(), None, "nothing staged yet");
+    snapshot.commit_session_start().unwrap();
+    let stats = snapshot
+        .last_staged()
+        .expect("the start commit staged the tree");
+    assert_eq!(
+        stats,
+        TreeStats {
+            files: 2,
+            bytes: 1024
+        }
+    );
+    assert_eq!(stats.big_workspace_warning(), None, "a small tree is fine");
+
+    // Session RDGAXE: a .NET bin/ tree, 134 MB in 2179 files.
+    let big = TreeStats {
+        files: 2179,
+        bytes: 134_444_525,
+    };
+    let warning = big.big_workspace_warning().expect("warned");
+    assert!(warning.contains("2179 files / 128 MB"), "{warning}");
+    assert!(warning.contains("empty folder"), "{warning}");
+    // Either limit alone is enough.
+    assert!(
+        TreeStats {
+            files: 3_000,
+            bytes: 10
+        }
+        .big_workspace_warning()
+        .is_some()
+    );
+    assert!(
+        TreeStats {
+            files: 2,
+            bytes: 25 * 1024 * 1024
+        }
+        .big_workspace_warning()
+        .is_some()
+    );
+}
+
+#[test]
+fn a_full_disk_is_recognised_by_its_message() {
+    let enospc = std::io::Error::from_raw_os_error(28);
+    assert!(is_disk_full(&SnapshotError::Io(enospc)));
+    assert!(!is_disk_full(&SnapshotError::PushDisabled));
+}

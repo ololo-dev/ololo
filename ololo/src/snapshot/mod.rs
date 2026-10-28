@@ -106,6 +106,50 @@ pub struct SnapshotRepo {
     push: Mutex<PushLedger>,
     /// The background pusher, once attached; without it pushes run inline.
     pusher: Mutex<Option<PusherHandle>>,
+    /// What the last whole-tree commit staged — the size of what every
+    /// push carries, for the warning about a folder too big to play in.
+    last_staged: Mutex<Option<TreeStats>>,
+}
+
+/// The size of a staged working tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TreeStats {
+    pub files: usize,
+    pub bytes: u64,
+}
+
+/// Above this, a snapshot is a problem rather than a safety net: every
+/// probe commits and pushes the tree, and a push past [`PUSH_TIMEOUT`] is
+/// killed. 25 MB is 20 s at a conference uplink of 10 Mbit/s.
+const BIG_TREE_BYTES: u64 = 25 * 1024 * 1024;
+const BIG_TREE_FILES: usize = 3_000;
+
+impl TreeStats {
+    /// The warning a player gets when their folder is this big, if it is.
+    pub fn big_workspace_warning(&self) -> Option<String> {
+        if self.bytes < BIG_TREE_BYTES && self.files < BIG_TREE_FILES {
+            return None;
+        }
+        Some(format!(
+            "The working directory is {} files / {} MB — every check snapshots and \
+             uploads it, and an upload that takes over {}s is dropped, so your code \
+             may never reach the judges. Play in an empty folder, or list build \
+             output and data in .ololoignore.",
+            self.files,
+            self.bytes / (1024 * 1024),
+            PUSH_TIMEOUT.as_secs()
+        ))
+    }
+}
+
+/// Whether `err` says the disk is full — the one snapshot failure the
+/// player can fix and must hear about in those words (a player of RDGAXE
+/// saw only "health failed" while every export died with ENOSPC).
+pub fn is_disk_full(err: &dyn std::fmt::Display) -> bool {
+    let text = err.to_string();
+    text.contains("No space left on device")
+        || text.contains("StorageFull")
+        || text.contains("not enough space on the disk")
 }
 
 impl SnapshotRepo {
@@ -158,14 +202,7 @@ impl SnapshotRepo {
         std::fs::write(&config_path, config_content)
             .map_err(|e| SnapshotError::ConfigWrite(e.to_string()))?;
 
-        let repo: gix::Repository = gix::ThreadSafeRepository::open_opts(
-            &git_dir,
-            gix::open::Options::default()
-                .with(gix::sec::Trust::Full)
-                .open_path_as_is(true),
-        )
-        .map_err(Box::new)?
-        .to_thread_local();
+        let repo = open_repo(&git_dir)?;
 
         let started_tasks = started_tasks_on_main(&repo);
 
@@ -179,8 +216,23 @@ impl SnapshotRepo {
             started_tasks: Mutex::new(started_tasks),
             push: Mutex::new(PushLedger::default()),
             pusher: Mutex::new(None),
+            last_staged: Mutex::new(None),
         })
     }
+}
+
+/// Open the snapshot repo at `git_dir` for this thread. `SnapshotRepo`
+/// holds one; the health export opens another so it can read the commit
+/// without holding the repo lock for the minute a big tree takes to write.
+fn open_repo(git_dir: &Path) -> Result<gix::Repository, SnapshotError> {
+    Ok(gix::ThreadSafeRepository::open_opts(
+        git_dir,
+        gix::open::Options::default()
+            .with(gix::sec::Trust::Full)
+            .open_path_as_is(true),
+    )
+    .map_err(Box::new)?
+    .to_thread_local())
 }
 
 impl SnapshotRepo {
@@ -270,8 +322,14 @@ impl SnapshotRepo {
         &self.worktree
     }
 
-    pub fn stage_all(&self) -> Result<gix::ObjectId, SnapshotError> {
+    #[cfg(test)]
+    pub(crate) fn stage_all(&self) -> Result<gix::ObjectId, SnapshotError> {
         stage_all(&self.repo, &self.worktree)
+    }
+
+    /// The size of the tree the last whole-tree commit staged.
+    pub fn last_staged(&self) -> Option<TreeStats> {
+        self.last_staged.lock().ok().and_then(|s| *s)
     }
 
     pub fn head_tree_id(&self) -> Result<gix::ObjectId, SnapshotError> {
@@ -619,7 +677,10 @@ impl SnapshotRepo {
     }
 
     fn commit_raw(&self, msg: &str) -> Result<gix::ObjectId, SnapshotError> {
-        let tree_id = self.stage_all()?;
+        let (tree_id, stats) = stage_all_with_stats(&self.repo, &self.worktree)?;
+        if let Ok(mut last) = self.last_staged.lock() {
+            *last = Some(stats);
+        }
         self.commit_tree(msg, tree_id)
     }
 
@@ -650,84 +711,6 @@ impl SnapshotRepo {
         Ok(id.detach())
     }
 
-    /// Write the tree of `commit` under `dest` (which must exist and be
-    /// empty), leaving out the directories in `skip_dirs` at any depth and
-    /// symbolic links. This is what the health scan reads: the committed
-    /// tree, not the live working tree, so the client and the server score
-    /// the same bytes.
-    pub fn export_tree(
-        &self,
-        commit: gix::ObjectId,
-        dest: &Path,
-        skip_dirs: &[&str],
-    ) -> Result<(), SnapshotError> {
-        let commit = self
-            .repo
-            .find_commit(commit)
-            .map_err(|e| SnapshotError::Git {
-                op: "export",
-                detail: e.to_string(),
-            })?;
-        let tree = commit.tree()?;
-        self.write_tree(&tree, dest, skip_dirs)
-    }
-
-    fn write_tree(
-        &self,
-        tree: &gix::Tree<'_>,
-        dest: &Path,
-        skip_dirs: &[&str],
-    ) -> Result<(), SnapshotError> {
-        let decoded = tree.decode().map_err(|e| SnapshotError::Git {
-            op: "export",
-            detail: e.to_string(),
-        })?;
-        for entry in decoded.entries {
-            let name = entry.filename.to_string();
-            // Tree entries are relative names; anything else is not a tree
-            // this module wrote.
-            if name.is_empty()
-                || name == "."
-                || name == ".."
-                || name.contains('/')
-                || name.contains('\\')
-            {
-                continue;
-            }
-            let path = dest.join(&name);
-            if entry.mode.is_tree() {
-                if skip_dirs.contains(&name.as_str()) {
-                    continue;
-                }
-                std::fs::create_dir_all(&path)?;
-                let sub = self
-                    .repo
-                    .find_tree(entry.oid)
-                    .map_err(|e| SnapshotError::Git {
-                        op: "export",
-                        detail: e.to_string(),
-                    })?;
-                self.write_tree(&sub, &path, skip_dirs)?;
-            } else if entry.mode.is_blob() || entry.mode.is_executable() {
-                let blob = self
-                    .repo
-                    .find_blob(entry.oid)
-                    .map_err(|e| SnapshotError::Git {
-                        op: "export",
-                        detail: e.to_string(),
-                    })?;
-                std::fs::write(&path, &blob.data)?;
-                #[cfg(unix)]
-                if entry.mode.is_executable() {
-                    use std::os::unix::fs::PermissionsExt;
-                    let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755));
-                }
-            }
-            // Links and submodules are not the player's code; skipped.
-        }
-        Ok(())
-    }
-
     /// Test-only: message of the current head commit on `refs/heads/main`,
     /// or `None` when no commit exists yet.
     #[cfg(test)]
@@ -735,6 +718,87 @@ impl SnapshotRepo {
         let commit = self.repo.head_commit().ok()?;
         Some(commit.message_raw().ok()?.to_string())
     }
+}
+
+/// Write the tree of `commit` under `dest` (which must exist and be
+/// empty), leaving out the directories in `skip_dirs` at any depth and
+/// symbolic links. This is what the health scan reads: the committed
+/// tree, not the live working tree, so the client and the server score
+/// the same bytes. Opens `git_dir` afresh rather than taking a
+/// `SnapshotRepo`, so the health runner holds the repo lock only for a
+/// moment and probes keep committing while a big tree is written.
+pub fn export_commit_tree(
+    git_dir: &Path,
+    commit: gix::ObjectId,
+    dest: &Path,
+    skip_dirs: &[&str],
+) -> Result<(), SnapshotError> {
+    let repo = open_repo(git_dir)?;
+    export_from(&repo, commit, dest, skip_dirs)
+}
+
+fn export_from(
+    repo: &gix::Repository,
+    commit: gix::ObjectId,
+    dest: &Path,
+    skip_dirs: &[&str],
+) -> Result<(), SnapshotError> {
+    let commit = repo.find_commit(commit).map_err(|e| SnapshotError::Git {
+        op: "export",
+        detail: e.to_string(),
+    })?;
+    let tree = commit.tree()?;
+    write_tree(repo, &tree, dest, skip_dirs)
+}
+
+fn write_tree(
+    repo: &gix::Repository,
+    tree: &gix::Tree<'_>,
+    dest: &Path,
+    skip_dirs: &[&str],
+) -> Result<(), SnapshotError> {
+    let decoded = tree.decode().map_err(|e| SnapshotError::Git {
+        op: "export",
+        detail: e.to_string(),
+    })?;
+    for entry in decoded.entries {
+        let name = entry.filename.to_string();
+        // Tree entries are relative names; anything else is not a tree
+        // this module wrote.
+        if name.is_empty()
+            || name == "."
+            || name == ".."
+            || name.contains('/')
+            || name.contains('\\')
+        {
+            continue;
+        }
+        let path = dest.join(&name);
+        if entry.mode.is_tree() {
+            if skip_dirs.contains(&name.as_str()) {
+                continue;
+            }
+            std::fs::create_dir_all(&path)?;
+            let sub = repo.find_tree(entry.oid).map_err(|e| SnapshotError::Git {
+                op: "export",
+                detail: e.to_string(),
+            })?;
+            write_tree(repo, &sub, &path, skip_dirs)?;
+        } else if entry.mode.is_blob() || entry.mode.is_executable() {
+            let blob = repo.find_blob(entry.oid).map_err(|e| SnapshotError::Git {
+                op: "export",
+                detail: e.to_string(),
+            })?;
+            std::fs::write(&path, &blob.data)?;
+            #[cfg(unix)]
+            if entry.mode.is_executable() {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755));
+            }
+        }
+        // Links and submodules are not the player's code; skipped.
+    }
+    Ok(())
 }
 
 fn now_iso() -> String {
@@ -1095,9 +1159,17 @@ pub(crate) fn stage_all(
     repo: &gix::Repository,
     worktree: &Path,
 ) -> Result<gix::ObjectId, SnapshotError> {
+    stage_all_with_stats(repo, worktree).map(|(tree, _)| tree)
+}
+
+fn stage_all_with_stats(
+    repo: &gix::Repository,
+    worktree: &Path,
+) -> Result<(gix::ObjectId, TreeStats), SnapshotError> {
     let listing = files::list(worktree)?;
     let empty_tree = repo.empty_tree();
     let mut editor = empty_tree.edit()?;
+    let mut stats = TreeStats { files: 0, bytes: 0 };
 
     for rel in &listing.files {
         let abs = worktree.join(rel);
@@ -1115,6 +1187,8 @@ pub(crate) fn stage_all(
         let Some(blob_id) = blob_of(repo, &abs, &meta)? else {
             continue;
         };
+        stats.files += 1;
+        stats.bytes += meta.len();
 
         #[cfg(unix)]
         let kind = {
@@ -1132,7 +1206,7 @@ pub(crate) fn stage_all(
     }
 
     let tree_id = editor.write()?.detach();
-    Ok(tree_id)
+    Ok((tree_id, stats))
 }
 
 /// A file bigger than this is not code anyone reviews — a video, a dump, a

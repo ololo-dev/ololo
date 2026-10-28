@@ -38,9 +38,8 @@ pub async fn post_create(
     // A personal project is played when its owner starts it: public or
     // not, nobody else opens a session of it. Players they invite join
     // that session with its code, each in their own copy of the repository.
-    if project.owner_user_id_fk != user_id
-        && arena_core::personal::is_personal_project(&state.db, project.id).await?
-    {
+    let personal = arena_core::personal::is_personal_project(&state.db, project.id).await?;
+    if personal && project.owner_user_id_fk != user_id {
         return Err(SessionError::PersonalProject);
     }
     if project.archived_at.is_some() {
@@ -50,11 +49,19 @@ pub async fn post_create(
     // One live session per user: creating a session leads straight to
     // playing it (`ololo start` auto-joins), so refusing here — before the
     // row exists — beats refusing the join and stranding an orphan lobby.
-    // An admin is exempt: they host several sessions at once from the web
-    // (a workshop, a cohort), and hosting holds no player row — the join
-    // guard still keeps them to one session they PLAY.
-    if !crate::auth::is_user_admin(&state.db, user_id).await? {
+    // A HOSTED session is the exception: the web popup runs several at
+    // once (a workshop, a cohort) and hosting holds no player row — the
+    // join guard still keeps the host to one session they PLAY. An admin
+    // hosts any project; the owner of a personal project (the caller, past
+    // the check above) hosts their own, a workshop's worth at most. The
+    // request says which it is: `ololo start` never sets `host`, so a
+    // start while playing is refused here, not at the join after the row.
+    let admin = req.host && crate::auth::is_user_admin(&state.db, user_id).await?;
+    let hosting = req.host && (personal || admin);
+    if !hosting {
         ensure_single_active_session(&state.db, user_id, None).await?;
+    } else if !admin {
+        ensure_hosted_sessions_below(&state.db, user_id, MAX_HOSTED_LIVE_SESSIONS).await?;
     }
 
     // Campaign rules: a parent hosts no sessions, and a part waits for its

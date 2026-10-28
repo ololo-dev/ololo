@@ -127,7 +127,18 @@ pub fn notice(latest: &str) {
     ));
 }
 
+/// The latest release's version, read off the `releases/latest` redirect —
+/// `github.com/<repo>/releases/latest` answers 302 to `/releases/tag/v1.2.3`
+/// for anyone, without a request to the REST API. The API allows sixty
+/// unauthenticated calls an hour per address: a workshop room behind one
+/// NAT spends them in minutes, and `ololo update` said "latest-release
+/// lookup failed" to everyone who tried after. The API stays as the fallback
+/// for a redirect that does not come.
 async fn fetch_latest_version(client: &reqwest::Client) -> Result<String> {
+    match fetch_latest_from_redirect().await {
+        Ok(v) => return Ok(v),
+        Err(e) => tracing::debug!("latest-release redirect: {e:#}; asking the API"),
+    }
     #[derive(serde::Deserialize)]
     struct Release {
         tag_name: String,
@@ -149,6 +160,40 @@ async fn fetch_latest_version(client: &reqwest::Client) -> Result<String> {
         .await
         .context("parsing latest-release response")?;
     Ok(release.tag_name.trim_start_matches('v').to_string())
+}
+
+async fn fetch_latest_from_redirect() -> Result<String> {
+    let url = format!("https://github.com/{REPO}/releases/latest");
+    let resp = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .context("building the HTTP client")?
+        .head(&url)
+        .header(
+            reqwest::header::USER_AGENT,
+            format!("ololo/{}", current_version()),
+        )
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await
+        .with_context(|| format!("HEAD {url}"))?;
+    let location = resp
+        .headers()
+        .get(reqwest::header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| anyhow!("{} from {url}, no redirect", resp.status()))?;
+    version_from_release_location(location)
+        .ok_or_else(|| anyhow!("redirect to {location} names no release tag"))
+}
+
+/// `…/releases/tag/v1.2.3` → `1.2.3`.
+fn version_from_release_location(location: &str) -> Option<String> {
+    let (_, tag) = location
+        .trim_end_matches('/')
+        .rsplit_once("/releases/tag/")?;
+    let version = tag.trim_start_matches('v');
+    (!version.is_empty() && version.chars().all(|c| c.is_ascii_digit() || c == '.'))
+        .then(|| version.to_string())
 }
 
 // ── ololo update ──────────────────────────────────────────────────────────────
@@ -312,6 +357,33 @@ mod tests {
     fn garbage_components_compare_as_zero() {
         assert!(!is_newer("abc", "0.0.1"));
         assert!(is_newer("0.12.0-rc1", "0.11.1"), "prerelease digits count");
+    }
+
+    #[test]
+    fn the_release_redirect_names_the_version() {
+        assert_eq!(
+            version_from_release_location(
+                "https://github.com/ololo-dev/ololo/releases/tag/v0.36.0"
+            ),
+            Some("0.36.0".to_string())
+        );
+        assert_eq!(
+            version_from_release_location("/ololo-dev/ololo/releases/tag/1.2.3/"),
+            Some("1.2.3".to_string())
+        );
+        // No tag, or something that is not a version: the API decides.
+        assert_eq!(
+            version_from_release_location("https://github.com/ololo-dev/ololo/releases"),
+            None
+        );
+        assert_eq!(
+            version_from_release_location("https://github.com/login?return_to=/releases/tag/"),
+            None
+        );
+        assert_eq!(
+            version_from_release_location("https://github.com/x/y/releases/tag/nightly"),
+            None
+        );
     }
 
     #[test]

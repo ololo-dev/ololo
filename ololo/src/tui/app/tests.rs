@@ -2202,3 +2202,284 @@ fn the_picker_marks_pasted_items() {
     assert!(flat.contains("✓ pasted"), "{flat}");
     assert!(flat.contains("the agent has it"), "{flat}");
 }
+
+/// The ask as the server dispatches it when the judge named its files.
+const NAMED_FILES_COMMAND: &str = "# ARTIFACT REQUEST from ux-review: Capture desktop.png and mobile.png of the aim phase.\n\
+    # Open for 267s more.\n\
+    # Save the file(s) (up to 5) under .ololo/artifacts/fa5fa911/; the ololo CLI commits and pushes them automatically; do NOT run git.\n\
+    # If an earlier delivered capture already shows exactly this, copying that file into this folder is a valid delivery.\n\
+    n=0; for f in \"desktop.png\" \"mobile.png\"; do test -f \".ololo/artifacts/fa5fa911/$f\" && n=$((n+1)); done; test \"$n\" -ge 2 && echo delivered || echo \"waiting-for-file: $n of 2 named files (desktop.png, mobile.png) in .ololo/artifacts/fa5fa911/\"";
+
+fn request_poll(
+    task: Uuid,
+    outcome: Option<arena_core::protocol::ProbeOutcome>,
+) -> ProbeResultInfo {
+    request_poll_on(task, 2, outcome)
+}
+
+/// The ask dispatched on task `ordinal`'s queue — a carried-over request
+/// is tagged with whichever task is current when it polls.
+fn request_poll_on(
+    task: Uuid,
+    ordinal: i32,
+    outcome: Option<arena_core::protocol::ProbeOutcome>,
+) -> ProbeResultInfo {
+    let mut p = chat_probe(task, ordinal, 0, "brief");
+    p.command = NAMED_FILES_COMMAND.to_string();
+    p.outcome = outcome;
+    p
+}
+
+/// The judge of task 1 asks while task 1 is current; the player moves on
+/// and the same ask polls on task 2's queue, tagged task 2. One card, under
+/// the task that asked, and a pass under task 2 is its delivery.
+#[test]
+fn a_carried_over_ask_is_one_card_under_the_task_that_asked() {
+    use arena_core::protocol::ProbeOutcome;
+    let mut app = fresh_app();
+    let (first, second) = (Uuid::new_v4(), Uuid::new_v4());
+    app.on_event(TuiEvent::ProbeResult(request_poll_on(
+        first,
+        1,
+        Some(ProbeOutcome::Error),
+    )));
+    for _ in 0..2 {
+        app.on_event(TuiEvent::ProbeResult(request_poll_on(
+            second,
+            2,
+            Some(ProbeOutcome::Error),
+        )));
+    }
+    let shape = |app: &TuiApp| -> Vec<String> {
+        app.chat_transcript()
+            .iter()
+            .filter_map(|m| match m {
+                ChatMsg::TaskHeader { ordinal, .. } => Some(format!("task {ordinal}")),
+                ChatMsg::Request { delivered, .. } => Some(format!("request {delivered}")),
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(
+        shape(&app),
+        vec!["task 1", "request false", "task 2"],
+        "one card for the ask, under task 1"
+    );
+
+    app.on_event(TuiEvent::ProbeResult(request_poll_on(
+        second,
+        2,
+        Some(ProbeOutcome::Pass),
+    )));
+    assert_eq!(shape(&app), vec!["task 1", "request true", "task 2"]);
+}
+
+/// An earlier task's ask rides the next task's queue with test ordinal 0,
+/// so the per-test collapse misses it: HUCV6U's chat showed one ask four
+/// times over, every copy `[expired]`. The folder names the request.
+#[test]
+fn the_same_ask_re_dispatched_is_one_chat_card() {
+    use arena_core::protocol::ProbeOutcome;
+    let mut app = fresh_app();
+    let task = Uuid::new_v4();
+    for _ in 0..3 {
+        app.on_event(TuiEvent::ProbeResult(request_poll(
+            task,
+            Some(ProbeOutcome::Error),
+        )));
+    }
+    let msgs = app.chat_transcript();
+    let requests: Vec<bool> = msgs
+        .iter()
+        .filter_map(|m| match m {
+            ChatMsg::Request {
+                path, delivered, ..
+            } if path == ".ololo/artifacts/fa5fa911/" => Some(*delivered),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(requests, vec![false], "three polls of one ask are one card");
+
+    // A poll that passed anywhere in the history is the delivery, whatever
+    // the newest attempt said.
+    app.on_event(TuiEvent::ProbeResult(request_poll(
+        task,
+        Some(ProbeOutcome::Pass),
+    )));
+    app.on_event(TuiEvent::ProbeResult(request_poll(
+        task,
+        Some(ProbeOutcome::Error),
+    )));
+    let msgs = app.chat_transcript();
+    let delivered: Vec<bool> = msgs
+        .iter()
+        .filter_map(|m| match m {
+            ChatMsg::Request { delivered, .. } => Some(*delivered),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(delivered, vec![true]);
+}
+
+/// The files land in the worktree and the sweep ships them; the server
+/// never polls again, so no probe ever says `pass`. The sweep's own
+/// sighting is the delivery — the card reads delivered, not expired, and
+/// F3 stops offering the ask.
+#[test]
+fn an_ask_whose_files_the_sweep_found_reads_delivered() {
+    use crate::test_util::test_util::{HOME_LOCK, HomeGuard};
+    use arena_core::protocol::ProbeOutcome;
+    let _g = HOME_LOCK.lock().unwrap();
+    let home = tempfile::tempdir().expect("home tempdir");
+    let worktree = tempfile::tempdir().expect("worktree tempdir");
+    let _h = HomeGuard::set(home.path().to_str().unwrap());
+    std::fs::write(worktree.path().join("solution.txt"), "answer").unwrap();
+    let snap = crate::snapshot::SnapshotRepo::new("default", "DLV1", worktree.path(), None, None)
+        .expect("snapshot repo");
+
+    let mut app = fresh_app();
+    app.has_pty = true;
+    app.snapshot = Some(Arc::new(std::sync::Mutex::new(snap)));
+    app.on_event(TuiEvent::ProbeResult(request_poll(
+        Uuid::new_v4(),
+        Some(ProbeOutcome::Error),
+    )));
+    // The deadline passed — the old chip would read `[expired]`.
+    app.request_deadlines.insert(
+        crate::tui::app::request_key(
+            "ux-review",
+            "Capture desktop.png and mobile.png of the aim phase.",
+        ),
+        std::time::Instant::now(),
+    );
+
+    let folder = worktree.path().join(".ololo/artifacts/fa5fa911");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("desktop.png"), b"png").unwrap();
+    app.commit_arrived_artifacts();
+    let delivered = |app: &TuiApp| {
+        app.chat_transcript().iter().find_map(|m| match m {
+            ChatMsg::Request {
+                delivered,
+                deadline,
+                ..
+            } => Some((*delivered, *deadline)),
+            _ => None,
+        })
+    };
+    let (half, deadline) = delivered(&app).expect("the ask is in the chat");
+    assert!(!half, "one of two named files is not a delivery");
+    let (chip, _) = crate::tui::render::chat::request_chip(half, deadline);
+    assert_eq!(chip, " [expired]");
+
+    std::fs::write(folder.join("mobile.png"), b"png").unwrap();
+    app.commit_arrived_artifacts();
+    let (full, deadline) = delivered(&app).unwrap();
+    assert!(full, "both named files in the folder are the delivery");
+    let (chip, _) = crate::tui::render::chat::request_chip(full, deadline);
+    assert_eq!(chip, " [delivered ✓]");
+    assert!(
+        app.paste_items()
+            .iter()
+            .all(|i| i.kind != PasteKind::Request),
+        "a delivered ask is no longer offered to paste"
+    );
+}
+
+/// The sweep found the files, but the commit holding them never reached
+/// the server: not a delivery — the chip stays honest and F3 keeps
+/// offering the ask. Once a push lands, it is.
+#[test]
+fn files_found_but_not_pushed_are_not_a_delivery() {
+    use crate::test_util::test_util::{HOME_LOCK, HomeGuard};
+    use arena_core::protocol::ProbeOutcome;
+    let _g = HOME_LOCK.lock().unwrap();
+    let home = tempfile::tempdir().expect("home tempdir");
+    let _h = HomeGuard::set(home.path().to_str().unwrap());
+
+    let play = |remote: String| -> (tempfile::TempDir, TuiApp) {
+        let worktree = tempfile::tempdir().expect("worktree tempdir");
+        std::fs::write(worktree.path().join("solution.txt"), "answer").unwrap();
+        let snap = crate::snapshot::SnapshotRepo::new(
+            "default",
+            "DLV2",
+            worktree.path(),
+            Some(remote),
+            Some("pat".into()),
+        )
+        .expect("snapshot repo");
+        let mut app = fresh_app();
+        app.has_pty = true;
+        app.snapshot = Some(Arc::new(std::sync::Mutex::new(snap)));
+        app.on_event(TuiEvent::ProbeResult(request_poll(
+            Uuid::new_v4(),
+            Some(ProbeOutcome::Error),
+        )));
+        let folder = worktree.path().join(".ololo/artifacts/fa5fa911");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("desktop.png"), b"png").unwrap();
+        std::fs::write(folder.join("mobile.png"), b"png").unwrap();
+        app.commit_arrived_artifacts();
+        (worktree, app)
+    };
+    let delivered = |app: &TuiApp| {
+        app.chat_transcript()
+            .iter()
+            .find_map(|m| match m {
+                ChatMsg::Request { delivered, .. } => Some(*delivered),
+                _ => None,
+            })
+            .expect("the ask is in the chat")
+    };
+
+    // No such remote: the push fails, the files sit in a local commit.
+    let gone = tempfile::tempdir().expect("gone tempdir");
+    let (_wt, app) = play(format!("file://{}/nowhere.git", gone.path().display()));
+    assert!(
+        !delivered(&app),
+        "files the server never received are not delivered"
+    );
+    assert!(
+        app.paste_items()
+            .iter()
+            .any(|i| i.kind == PasteKind::Request),
+        "the ask is still offered to paste"
+    );
+
+    // A remote that takes the push: delivered.
+    let remote = tempfile::tempdir().expect("remote tempdir");
+    let bare = remote.path().join("player.git");
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "--bare", "--initial-branch=main"])
+            .arg(&bare)
+            .output()
+            .expect("git init")
+            .status
+            .success()
+    );
+    let (_wt, app) = play(format!("file://{}", bare.display()));
+    assert!(delivered(&app), "the push landed: the judge has the files");
+}
+
+#[test]
+fn a_request_names_its_files_in_the_delivery_gate() {
+    assert_eq!(
+        crate::tui::app::expected_files(NAMED_FILES_COMMAND),
+        vec!["desktop.png".to_string(), "mobile.png".to_string()]
+    );
+    assert!(
+        crate::tui::app::expected_files(ARTIFACT_COMMAND).is_empty(),
+        "a count-only gate names nothing"
+    );
+    // The judge's own words may hold a `for` loop; only the gate line counts.
+    let chatty = NAMED_FILES_COMMAND.replacen(
+        "Capture desktop.png and mobile.png of the aim phase.",
+        "Run `for f in src/*.js; do node $f; done` and capture desktop.png and mobile.png.",
+        1,
+    );
+    assert_eq!(
+        crate::tui::app::expected_files(&chatty),
+        vec!["desktop.png".to_string(), "mobile.png".to_string()]
+    );
+}

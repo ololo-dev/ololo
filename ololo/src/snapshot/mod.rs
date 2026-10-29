@@ -1052,8 +1052,6 @@ impl SnapshotRepo {
     /// when it is on (or behind) a head the server accepted; rejected when
     /// a recovery replaced the line it was on; failed when the last push
     /// error is still standing; pending otherwise.
-    // Read by the health report (the next commit wires it in).
-    #[allow(dead_code)]
     pub fn push_status_for(&self, commit: gix::ObjectId) -> PushStatus {
         let Ok(ledger) = self.push.lock() else {
             return PushStatus {

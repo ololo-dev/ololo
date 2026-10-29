@@ -1785,3 +1785,146 @@ async fn a_registered_command_is_queued_to_the_player_not_run_here() {
     // The judge is told to verdict on what it has and be revisited.
     assert!(reg.interactive_pending(), "the run must be revisited");
 }
+
+/// A re-driven run flips its `waiting` row only once it holds a judge-queue
+/// permit — minutes away under a session-end panel. Every tick in between
+/// used to see the same `waiting` row and spawn a twin: HUCV6U's ux-review
+/// resumed nine times after the session ended, nine verdicts, nine metered
+/// runs. The ticker claims the pair before spawning and skips a claimed one.
+#[tokio::test]
+async fn a_waiting_judge_is_re_driven_once_while_its_run_is_in_flight() {
+    use arena_core::entities::judge_results;
+    use game_server::probe_scheduler::{claim_redrive, tick};
+
+    let db = setup_db().await;
+    let state = test_state(db.clone());
+    let seeded = seed(&db).await;
+    // The session is this server's to drive.
+    arena_core::entities::game_servers::ActiveModel {
+        id: Set(state.server_id),
+        url: Set("ws://localhost:8081".to_string()),
+        zmq_url: Set(None),
+        display_name: Set(None),
+        capacity: Set(10),
+        active_sessions: Set(0),
+        status: Set("active".to_string()),
+        last_heartbeat: Set(Utc::now()),
+        created_at: Set(Utc::now()),
+        updated_at: Set(Utc::now()),
+    }
+    .insert(&db)
+    .await
+    .expect("game server row");
+    sessions::Entity::update_many()
+        .col_expr(
+            sessions::Column::GameServerId,
+            sea_orm::prelude::Expr::value(Some(state.server_id)),
+        )
+        .filter(sessions::Column::Id.eq(seeded.session_id))
+        .exec(&db)
+        .await
+        .expect("bind the session");
+
+    // The judge asked for a capture, the ask timed out: the run is due.
+    let reg = registrar(&state, &seeded, 1);
+    let out = reg
+        .register(&serde_json::json!({
+            "mode": "interactive", "instruction": "screenshot", "deadline_secs": 60
+        }))
+        .await;
+    let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let test_id: Uuid = parsed["test_id"].as_str().unwrap().parse().unwrap();
+    probes::ActiveModel {
+        id: Set(Uuid::new_v4()),
+        test_id: Set(test_id),
+        player_id: Set(seeded.player_id),
+        session_id: Set(seeded.session_id),
+        attempt: Set(1),
+        rendered_command: Set(String::new()),
+        fixture_values: Set("{}".to_string()),
+        expected_answer: Set(None),
+        resolved_answer: Set(None),
+        secret_meta: Set(None),
+        outcome: Set(Some("no_response".to_string())),
+        dispatched_at: Set(Utc::now() - Duration::seconds(120)),
+        deadline_at: Set(Utc::now() - Duration::seconds(30)),
+        resolved_at: Set(Some(Utc::now() - Duration::seconds(30))),
+        updated_at: Set(Some(Utc::now())),
+        output: Set(None),
+        exit_code: Set(None),
+        duration_ms: Set(None),
+        point_delta: Set(Some(0)),
+        result_json: Set(None),
+        artifact_path: Set(None),
+    }
+    .insert(&db)
+    .await
+    .expect("probe row");
+    let tj = task_judges::Entity::find()
+        .filter(task_judges::Column::TaskId.eq(seeded.task_id))
+        .filter(task_judges::Column::JudgeId.eq(seeded.judge_id))
+        .one(&db)
+        .await
+        .unwrap()
+        .expect("task judge");
+    arena_core::judging::record_judge_run_status(
+        &db,
+        seeded.session_id,
+        seeded.player_id,
+        tj.id,
+        "model",
+        "provider",
+        "waiting",
+        Some("waiting for a participant artifact"),
+        None,
+    )
+    .await
+    .expect("waiting row");
+    let status = || async {
+        judge_results::Entity::find()
+            .filter(judge_results::Column::TaskJudgeId.eq(tj.id))
+            .filter(judge_results::Column::PlayerIdFk.eq(seeded.player_id))
+            .one(&db)
+            .await
+            .unwrap()
+            .expect("judge row")
+            .status
+    };
+
+    // An earlier tick's run still holds the pair: these ticks spawn nothing.
+    let claim = claim_redrive(tj.id, seeded.player_id).expect("first claim");
+    for _ in 0..3 {
+        tick(&state).await.expect("tick");
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert_eq!(
+        status().await,
+        "waiting",
+        "no twin while a run is in flight"
+    );
+    assert!(
+        claim_redrive(tj.id, seeded.player_id).is_none(),
+        "the pair stays claimed until the run ends"
+    );
+
+    // The run let go: the next tick drives the judge. No repo and no
+    // reachable LLM, so it fails — terminal is what matters here.
+    drop(claim);
+    tick(&state).await.expect("tick");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while status().await == "waiting" && std::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert_ne!(
+        status().await,
+        "waiting",
+        "released, the judge is re-driven"
+    );
+    while claim_redrive(tj.id, seeded.player_id).is_none() && std::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(
+        claim_redrive(tj.id, seeded.player_id).is_some(),
+        "the run releases its claim when it ends"
+    );
+}

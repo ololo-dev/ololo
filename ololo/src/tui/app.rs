@@ -12,7 +12,7 @@ use crate::tui::event::{LeaderboardEntry, ProbeInfo, ProbeResultInfo, QuitReason
 use crate::tui::header::HeaderState;
 use crate::tui::pty_host::AgentParser;
 use crate::tui::pty_host::PtyHost;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use uuid::Uuid;
@@ -332,6 +332,15 @@ pub struct TuiApp {
     /// changes, the files are committed and pushed (git is the only channel
     /// for content; the availability probe then passes on its own).
     pub artifacts_fingerprint: u64,
+    /// The last `artifact: sync` commit — its push status says whether
+    /// the files the sweep found have reached the server.
+    pub artifacts_commit: Option<gix::ObjectId>,
+    /// Request folders whose named files the sweep found in the worktree
+    /// and shipped (the commit holding them was pushed): the delivery the
+    /// judge asked for. The chat reads these — the server never dispatches
+    /// the poll again once the push lands, so no probe ever comes back
+    /// `pass`.
+    pub delivered_folders: HashSet<String>,
     /// The open-ended judge phase: set when the server asks for the final
     /// snapshot, cleared when a new probe arrives or the session ends —
     /// the header shows what the silence is.
@@ -426,6 +435,8 @@ impl TuiApp {
             diff_stats: Default::default(),
             snapshot: None,
             artifacts_fingerprint: 0,
+            artifacts_commit: None,
+            delivered_folders: HashSet::new(),
             judging: false,
             committed_tasks: HashMap::new(),
             snapshot_current_task: None,
@@ -1013,8 +1024,12 @@ impl TuiApp {
             return;
         };
         let Ok(guard) = snap.lock() else { return };
-        let dir = guard.worktree().join(".ololo").join("artifacts");
+        let worktree = guard.worktree().to_path_buf();
+        let dir = worktree.join(".ololo").join("artifacts");
         let mut fp: u64 = 0;
+        // Every file under the folder, worktree-relative with `/` — the
+        // form the request names them in.
+        let mut present: Vec<String> = Vec::new();
         let mut walk = vec![dir.clone()];
         while let Some(d) = walk.pop() {
             let Ok(entries) = std::fs::read_dir(&d) else {
@@ -1035,17 +1050,77 @@ impl TuiApp {
                         .map(|d| d.as_secs())
                         .hash(&mut h);
                     fp ^= h.finish();
+                    if let Ok(rel) = p.strip_prefix(&worktree) {
+                        present.push(rel.to_string_lossy().replace('\\', "/"));
+                    }
                 }
             }
         }
-        if fp == 0 || fp == self.artifacts_fingerprint {
-            return;
+        drop(guard);
+        if fp != 0 && fp != self.artifacts_fingerprint {
+            let Ok(guard) = snap.lock() else { return };
+            match guard.commit_artifacts_sync() {
+                Ok(id) => {
+                    guard.request_push();
+                    self.artifacts_fingerprint = fp;
+                    self.artifacts_commit = Some(id);
+                    tracing::info!("artifacts committed (.ololo/artifacts sync); push requested");
+                }
+                Err(e) => {
+                    tracing::warn!("artifacts commit failed: {e}");
+                    return;
+                }
+            }
         }
-        if guard.commit_artifacts_sync().is_ok() {
-            guard.request_push();
-            self.artifacts_fingerprint = fp;
-            tracing::info!("artifacts committed (.ololo/artifacts sync); push requested");
+        // A file in the worktree is a delivery only once the server has it:
+        // the commit holding it was pushed (or pushing is off — nothing to
+        // wait for). Until then the last shipped state stands.
+        let shipped = match (self.artifacts_commit, snap.lock()) {
+            (Some(id), Ok(guard)) => {
+                guard.push_target().is_none()
+                    || guard.push_status_for(id).state == arena_core::protocol::PushState::Pushed
+            }
+            _ => false,
+        };
+        if shipped {
+            self.delivered_folders = self.landed_folders(&present);
         }
+    }
+
+    /// Which open requests `present` (worktree-relative files) answers: a
+    /// request naming its files needs every one of them, one that names
+    /// none needs any file in its folder.
+    fn landed_folders(&self, present: &[String]) -> HashSet<String> {
+        let mut landed: HashSet<String> = HashSet::new();
+        for p in &self.probes {
+            let Some(req) = parse_artifact_request(&p.command) else {
+                continue;
+            };
+            if req.path.is_empty() || landed.contains(&req.path) {
+                continue;
+            }
+            let names = expected_files(&p.command);
+            let complete = if names.is_empty() {
+                present.iter().any(|f| f.starts_with(&req.path))
+            } else {
+                names
+                    .iter()
+                    .map(|n| format!("{}{n}", req.path))
+                    .all(|want| present.contains(&want))
+            };
+            if complete {
+                landed.insert(req.path.clone());
+            }
+        }
+        landed
+    }
+
+    /// The request landed: its poll passed, or the sweep found its files
+    /// in the worktree and shipped them.
+    fn request_delivered(&self, runs: &[&ProbeResultInfo], path: &str) -> bool {
+        runs.iter()
+            .any(|p| matches!(p.outcome, Some(arena_core::protocol::ProbeOutcome::Pass)))
+            || self.delivered_folders.contains(path)
     }
 
     fn commit_tasks(&mut self, only_below_max: bool) {
@@ -1505,7 +1580,6 @@ impl TuiApp {
     /// (soonest deadline first), then the current task's brief, then the
     /// last failed check.
     pub fn paste_items(&self) -> Vec<PasteItem> {
-        use arena_core::protocol::ProbeOutcome;
         let mut requests: Vec<PasteItem> = Vec::new();
         let mut seen: Vec<String> = Vec::new();
         for p in self.probes.iter().rev() {
@@ -1517,7 +1591,7 @@ impl TuiApp {
                 continue;
             }
             seen.push(key);
-            if matches!(p.outcome, Some(ProbeOutcome::Pass)) {
+            if self.request_delivered(&[p], &req.path) {
                 continue;
             }
             let deadline = self.request_deadline(&req);
@@ -1814,6 +1888,21 @@ impl TuiApp {
                 placed_notes += 1;
             }
         }
+        // A judge's ask is one card wherever its polls were dispatched: an
+        // earlier task's request rides the next task's queue tagged with
+        // that task (and test ordinal 0), so the per-task collapse alone
+        // showed HUCV6U one ask four times over, every copy `[expired]`.
+        // The folder names the request; every poll of it, across tasks, is
+        // its history, told once under the task that asked.
+        let mut request_runs: HashMap<String, Vec<&ProbeResultInfo>> = HashMap::new();
+        for p in self.probes.iter().filter(|p| p.task_id.is_some()) {
+            if let Some(req) = parse_artifact_request(&p.command)
+                && !req.path.is_empty()
+            {
+                request_runs.entry(req.path).or_default().push(p);
+            }
+        }
+        let mut told_requests: HashSet<String> = HashSet::new();
         for g in &groups {
             let newest = g.probes.last().expect("task group is never empty");
             let title = if newest.task_title.is_empty() {
@@ -1843,16 +1932,39 @@ impl TuiApp {
 
             // Collapse re-runs: probes sharing a known test ordinal are the
             // same check re-polled — the newest attempt speaks, `runs`
-            // carries the history. Ordinal 0 (old servers) stays per-probe.
-            let mut order: Vec<(i32, Uuid)> = Vec::new();
-            let mut by_test: HashMap<(i32, Uuid), Vec<&ProbeResultInfo>> = HashMap::new();
+            // carries the history. Ordinal 0 (old servers) stays per-probe,
+            // except a judge's request, which its folder names (see
+            // `request_runs` above).
+            #[derive(PartialEq, Eq, Hash, Clone)]
+            enum Key {
+                Request(String),
+                Test(i32),
+                Probe(Uuid),
+            }
+            let mut order: Vec<Key> = Vec::new();
+            let mut by_test: HashMap<Key, Vec<&ProbeResultInfo>> = HashMap::new();
             for p in &g.probes {
+                match parse_artifact_request(&p.command) {
+                    Some(req) if !req.path.is_empty() => {
+                        // Told once, under the first task its polls ran in,
+                        // with every poll across tasks as its history.
+                        if told_requests.insert(req.path.clone()) {
+                            by_test.insert(
+                                Key::Request(req.path.clone()),
+                                request_runs[&req.path].clone(),
+                            );
+                            order.push(Key::Request(req.path));
+                        }
+                        continue;
+                    }
+                    _ => {}
+                }
                 let key = if p.test_ordinal > 0 {
-                    (p.test_ordinal, Uuid::nil())
+                    Key::Test(p.test_ordinal)
                 } else {
-                    (0, p.probe_id)
+                    Key::Probe(p.probe_id)
                 };
-                let slot = by_test.entry(key).or_default();
+                let slot = by_test.entry(key.clone()).or_default();
                 if slot.is_empty() {
                     order.push(key);
                 }
@@ -1868,11 +1980,8 @@ impl TuiApp {
                         deadline: self.request_deadline(&req),
                         judge: req.judge.to_string(),
                         instruction: request_instruction(&latest.test_description, req.instruction),
-                        path: req.path.clone(),
-                        delivered: matches!(
-                            latest.outcome,
-                            Some(arena_core::protocol::ProbeOutcome::Pass)
-                        ),
+                        delivered: self.request_delivered(runs, &req.path),
+                        path: req.path,
                     });
                     continue;
                 }
@@ -2399,6 +2508,26 @@ fn parse_artifact_request(command: &str) -> Option<ArtifactRequest<'_>> {
         path,
         open_secs,
     })
+}
+
+/// The files a request names, from its delivery gate: `for f in "a" "b";
+/// do …`. Empty when the gate only counts files (the judge named none).
+fn expected_files(command: &str) -> Vec<String> {
+    // The gate is the command's last line; the judge's free text above it
+    // may well mention a `for` loop of its own.
+    let Some(gate) = command.lines().last() else {
+        return Vec::new();
+    };
+    let Some(at) = gate.rfind("for f in ") else {
+        return Vec::new();
+    };
+    let Some(list) = gate[at + "for f in ".len()..].split("; do").next() else {
+        return Vec::new();
+    };
+    list.split_whitespace()
+        .map(|n| n.trim_matches('"').to_string())
+        .filter(|n| !n.is_empty())
+        .collect()
 }
 
 /// The question a quiz probe asked, parsed from its command — a

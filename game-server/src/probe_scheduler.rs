@@ -282,6 +282,43 @@ async fn resolve_interactive_timeouts(state: &GameServerState) -> Result<(), sea
     Ok(())
 }
 
+/// Re-drives in flight, by (task_judge_id, player_id). A re-driven run only
+/// flips its row from `waiting` once it holds a judge-queue permit, and under
+/// a session-end panel that is minutes away — until then every tick saw the
+/// same `waiting` row and spawned another run. HUCV6U: the ux-review of one
+/// task resumed nine times after the session ended, nine verdicts, nine
+/// metered runs. The claim lives in memory: a restart has nothing in flight.
+fn redrives_in_flight() -> &'static dashmap::DashMap<(Uuid, Uuid), ()> {
+    static IN_FLIGHT: std::sync::OnceLock<dashmap::DashMap<(Uuid, Uuid), ()>> =
+        std::sync::OnceLock::new();
+    IN_FLIGHT.get_or_init(dashmap::DashMap::new)
+}
+
+/// The claim on a waiting judge's re-drive; dropping it (the run ended, or
+/// panicked) lets the ticker drive the pair again.
+pub struct RedriveClaim {
+    key: (Uuid, Uuid),
+}
+
+impl Drop for RedriveClaim {
+    fn drop(&mut self) {
+        redrives_in_flight().remove(&self.key);
+    }
+}
+
+/// Claim the re-drive of `(task_judge_id, player_id)`; `None` while another
+/// run already holds it.
+pub fn claim_redrive(task_judge_id: Uuid, player_id: Uuid) -> Option<RedriveClaim> {
+    let key = (task_judge_id, player_id);
+    match redrives_in_flight().entry(key) {
+        dashmap::mapref::entry::Entry::Occupied(_) => None,
+        dashmap::mapref::entry::Entry::Vacant(v) => {
+            v.insert(());
+            Some(RedriveClaim { key })
+        }
+    }
+}
+
 /// Judges suspended on an interactive probe: once every awaited probe of a
 /// `waiting` run is resolved (artifact landed, or timed out above), re-drive
 /// the judge so it verdicts on the final evidence. A verdict reached after a
@@ -294,6 +331,10 @@ async fn redrive_waiting_judges(state: &GameServerState) -> Result<(), sea_orm::
         .all(&state.db)
         .await?;
     for row in waiting {
+        // A run spawned by an earlier tick still owns this row.
+        if redrives_in_flight().contains_key(&(row.task_judge_id, row.player_id_fk)) {
+            continue;
+        }
         let Ok(Some(tj)) = task_judges::Entity::find_by_id(row.task_judge_id)
             .one(&state.db)
             .await
@@ -415,7 +456,13 @@ async fn redrive_waiting_judges(state: &GameServerState) -> Result<(), sea_orm::
         let (session_id, player_id, task_id, judge_id) =
             (row.session_id_fk, row.player_id_fk, tj.task_id, tj.judge_id);
         let (task_judge_id, mark_partial) = (row.task_judge_id, any_no_response);
+        let Some(claim) = claim_redrive(task_judge_id, player_id) else {
+            continue;
+        };
         tokio::spawn(async move {
+            // Held until the run ends: the ticker sees `waiting` until the
+            // run takes its permit, and must not spawn a twin meanwhile.
+            let _claim = claim;
             let outcome = crate::judge_queue::enqueue_judge_run(
                 &redrive_state,
                 &redrive_state.db,
@@ -426,6 +473,25 @@ async fn redrive_waiting_judges(state: &GameServerState) -> Result<(), sea_orm::
                 false,
             )
             .await;
+            // The claim ends here. A run that returned without moving the
+            // row off `waiting` would be picked up again next tick — once
+            // per tick, metered each time — so say so where it can be seen.
+            let still_waiting = judge_results::Entity::find()
+                .filter(judge_results::Column::TaskJudgeId.eq(task_judge_id))
+                .filter(judge_results::Column::PlayerIdFk.eq(player_id))
+                .filter(judge_results::Column::Status.eq("waiting"))
+                .one(&redrive_state.db)
+                .await
+                .ok()
+                .flatten()
+                .is_some();
+            if still_waiting {
+                tracing::warn!(
+                    session_id = %session_id, player_id = %player_id,
+                    task_id = %task_id, judge_id = %judge_id, ok = outcome.is_ok(),
+                    "re-driven judge run ended with the row still waiting; the ticker will re-drive it"
+                );
+            }
             if outcome.is_ok() && mark_partial {
                 // The artifact never came: the verdict stands on less than
                 // the judge asked to see.

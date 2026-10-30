@@ -15,6 +15,33 @@
 }
 
 @layer components {
+  /* Presentation mode on the session page (`?view=screen`): the screen is
+     the whole viewport — the site header and footer step aside, main hands
+     its height over, and nothing scrolls. The page's own strips are divs,
+     so the header/footer selectors reach only the site chrome. */
+  html.screen-frame,
+  html.screen-frame body {
+    height: 100%;
+    overflow: hidden;
+    background: #0b1628;
+  }
+  html.screen-frame[data-screen-theme="light"],
+  html.screen-frame[data-screen-theme="light"] body {
+    background: #f4f8fe;
+  }
+  html.screen-frame header,
+  html.screen-frame footer {
+    display: none;
+  }
+  html.screen-frame main {
+    min-height: 0;
+    height: 100dvh;
+    padding: 0;
+  }
+  /* uPlot's legend under a chart drawn on the dark screen. */
+  .score-chart-dark .u-legend {
+    color: #dbe6f5;
+  }
   /* Judge verdicts rendered as markdown — the activity feed and the criterion
      hovercards. The shared prose scale is built for documentation pages and is
      too airy for a log row, so the feed keeps its own compact set. */

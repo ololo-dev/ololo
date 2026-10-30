@@ -27,11 +27,19 @@
     scoreHistory,
     health = null,
     revealUntil = null,
+    height = null,
+    dark = false,
   }: {
     phase: Phase;
     leaderboard: LeaderboardEntry[];
     reportMembers: MemberInfo[];
     scoreHistory: ScoreHistoryPoint[];
+    /** A fixed canvas height (px) — the presentation screen hands the chart
+     * the room its card has. `null` sizes by the number of participants. */
+    height?: number | null;
+    /** Drawn on a dark surface: grid, halos and hollow markers take the
+     * dark background instead of white. */
+    dark?: boolean;
     /** Every participant's code-health history. With it, every probe sits
      * on the participant's line as a marker in its health colour; without
      * it the chart is the plain points line. */
@@ -56,6 +64,11 @@
   let hookShowHealthLabels = true;
   let hookShowPointLabels = true;
   let hookCrowded = false;
+  // The surface behind the chart — hollow markers and the halo under a
+  // grade box are "cut out" in it, so they read on light and dark alike.
+  const DARK_BG = "#0b1628";
+  let hookBg = "#ffffff";
+  let hookHalo = "rgba(255,255,255,0.9)";
 
   /** Past this many participants a chart drawn like a duel turns to mush:
    * every probe's pill and every task's separator times sixteen. A crowded
@@ -108,7 +121,25 @@
     hookShowHealthLabels = showHealthLabels;
     hookShowPointLabels = showPointLabels;
     hookCrowded = crowded;
+    hookBg = dark ? DARK_BG : "#ffffff";
+    hookHalo = dark ? "rgba(11,22,40,0.9)" : "rgba(255,255,255,0.9)";
     uplotInstance?.redraw();
+  });
+
+  // A fixed height follows its card: the presentation screen re-measures
+  // when the window changes and the canvas follows without a rebuild.
+  $effect(() => {
+    if (!browser || !uplotInstance || height == null) return;
+    uplotInstance.setSize({ width: uplotInstance.width, height });
+  });
+
+  // The grid and tick colours are fixed at build time: a theme flip after
+  // the build would leave the dark grid on the light chart. Rebuild.
+  let builtDark = false;
+  $effect(() => {
+    if (!browser || !uplotInstance || dark === builtDark) return;
+    const members = membersOf();
+    if (members.length > 0) buildChart(members);
   });
 
   /** Tooltip for the point under the cursor. */
@@ -221,10 +252,12 @@
             return m > 0 ? `${m}:${String(s).padStart(2, "0")}` : `${s}s`;
           }),
         stroke: "#8fb4ec",
-        font: "11px sans-serif",
-        labelFont: "bold 11px sans-serif",
-        grid: { stroke: "#f0f4fa", width: 1 },
-        ticks: { stroke: "#e0e8f0", width: 1 },
+        // The dark chart is the presentation screen's: read from across a
+        // room, so its axes speak up.
+        font: dark ? "14px sans-serif" : "11px sans-serif",
+        labelFont: dark ? "bold 14px sans-serif" : "bold 11px sans-serif",
+        grid: { stroke: dark ? "#1c2c45" : "#f0f4fa", width: 1 },
+        ticks: { stroke: dark ? "#2a3d58" : "#e0e8f0", width: 1 },
       },
       {
         label: "Points",
@@ -232,19 +265,20 @@
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         values: (_u: any, vals: number[]) => vals.map((v) => String(Math.round(v))),
         stroke: "#8fb4ec",
-        font: "11px sans-serif",
-        labelFont: "bold 11px sans-serif",
-        grid: { stroke: "#f0f4fa", width: 1 },
-        ticks: { stroke: "#e0e8f0", width: 1 },
+        font: dark ? "14px sans-serif" : "11px sans-serif",
+        labelFont: dark ? "bold 14px sans-serif" : "bold 11px sans-serif",
+        grid: { stroke: dark ? "#1c2c45" : "#f0f4fa", width: 1 },
+        ticks: { stroke: dark ? "#2a3d58" : "#e0e8f0", width: 1 },
         space: 40,
       },
     ];
 
     try {
+      builtDark = dark;
       uplotInstance = new uPlot(
         {
           width,
-          height: chartHeight(members.length),
+          height: height ?? chartHeight(members.length),
           series,
           scales,
           hooks: {
@@ -390,7 +424,7 @@
     // the line or the grid runs behind them.
     ctx.lineJoin = "round";
     ctx.lineWidth = 3 * dpr;
-    ctx.strokeStyle = "rgba(255,255,255,0.9)";
+    ctx.strokeStyle = hookHalo;
     roundedRect(ctx, boxLeft, top + (h - box) / 2, box, box, 3 * dpr);
     ctx.stroke();
     ctx.fillStyle = pill.color;
@@ -481,13 +515,13 @@
             ctx.strokeStyle = color;
             ctx.stroke();
           } else if (cp.server_status === "pending") {
-            ctx.fillStyle = "#ffffff";
+            ctx.fillStyle = hookBg;
             ctx.fill();
             ctx.strokeStyle = level;
             ctx.stroke();
           } else {
             ctx.setLineDash([2 * dpr, 2 * dpr]);
-            ctx.fillStyle = "#ffffff";
+            ctx.fillStyle = hookBg;
             ctx.fill();
             ctx.strokeStyle = level;
             ctx.stroke();
@@ -535,7 +569,7 @@
           ctx.fillStyle = color;
           ctx.fill();
           ctx.lineWidth = 1.5 * dpr;
-          ctx.strokeStyle = "#ffffff";
+          ctx.strokeStyle = hookBg;
           ctx.stroke();
           if (hookShowPointLabels) {
             pill(x, y, d, { kind: "plain", text: `${verdict >= 0 ? "+" : "−"}${Math.abs(verdict)}`, color }, true);
@@ -769,7 +803,7 @@
      state, never gain height at all — the absolute overlay contributed none).
      Audit UI-M4: blank/shifting areas on the session page. -->
 {#if browser}
-  <div class="relative" style="min-height: {chartHeight(membersOf().length)}px;">
+  <div class="relative" class:score-chart-dark={dark} style="min-height: {height ?? chartHeight(membersOf().length)}px;">
     {#if health}
       <div class="absolute right-0 top-[-28px] z-10 flex items-center gap-[6px]">
         {#each [{ label: "Health labels", on: showHealthLabels, toggle: toggleHealthLabels, id: "health-labels-toggle" }, { label: "Points labels", on: showPointLabels, toggle: togglePointLabels, id: "point-labels-toggle" }] as t (t.id)}
@@ -794,7 +828,7 @@
     <div bind:this={chartEl} class="w-full"></div>
     {#if showEmpty}
       <div class="absolute inset-0 flex items-center justify-center">
-        <p class="text-sm" style="color: #9aa6b2;">{emptyMessage}</p>
+        <p class="text-sm" style="color: {dark ? '#5b6b86' : '#9aa6b2'};">{emptyMessage}</p>
       </div>
     {/if}
     {#if tip}

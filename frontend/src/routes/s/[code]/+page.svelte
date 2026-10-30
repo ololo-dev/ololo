@@ -1,5 +1,6 @@
 <script lang="ts">
   import { browser } from "$app/environment";
+  import { page } from "$app/state";
   import { onMount, onDestroy, untrack } from "svelte";
   import type { LeaderboardEntry, MemberInfo, ScoreHistoryPoint, ActivityEvent, SessionHealthPayload } from "$lib/types/arena";
   import { indicatorFor } from "$lib/session-health";
@@ -8,7 +9,7 @@
   import { patchSession, getSessionPlayerStats, getSessionReport, getSessionHealth } from "$lib/api";
   import type { SessionPlayerStatsResponse } from "$lib/api";
   import SessionPlayerStatsBlock from "$lib/components/session/SessionPlayerStatsBlock.svelte";
-  import { invalidateAll } from "$app/navigation";
+  import { invalidateAll, replaceState } from "$app/navigation";
   import { notify } from "$lib/notifications.svelte";
   import { WsSessionClient } from "$lib/ws-session.svelte";
   import SessionCongratsModal from "$lib/components/session/SessionCongratsModal.svelte";
@@ -24,6 +25,7 @@
   import SessionHeaderCard from "$lib/components/session/SessionHeaderCard.svelte";
   import SessionCampaignCard from "$lib/components/session/SessionCampaignCard.svelte";
   import SessionReplay from "$lib/components/session/SessionReplay.svelte";
+  import SessionScreen from "$lib/components/session/SessionScreen.svelte";
   import { createReplay } from "$lib/replay.svelte";
   import { countdownDigits } from "$lib/format";
 
@@ -482,6 +484,45 @@
     return `${n}${s[(v - 20) % 10] ?? s[v] ?? s[0]}`;
   }
 
+  // ── Presentation screen ───────────────────────────────────────────────────
+
+  // The session as one dark fullscreen board, for sharing on a call or a
+  // projector. Same page, same socket — only the markup changes, and the
+  // site chrome steps aside (`html.screen-frame`). Two doors in: a shared
+  // `?view=screen` link, or the host's Fullscreen button, which also asks
+  // the browser for real fullscreen — the click is the user gesture that
+  // allows it. The button's choice outranks the link the page opened with
+  // (a shallow replaceState keeps the address bar honest but never reaches
+  // the page store).
+  let presenting = $state<boolean | null>(null);
+  const screenMode = $derived(presenting ?? page.url.searchParams.get("view") === "screen");
+  function setScreenUrl(on: boolean) {
+    if (!browser) return;
+    const url = new URL(window.location.href);
+    if (on) url.searchParams.set("view", "screen");
+    else url.searchParams.delete("view");
+    replaceState(url, page.state);
+  }
+  function enterScreen() {
+    presenting = true;
+    setScreenUrl(true);
+    if (browser) void document.documentElement.requestFullscreen?.().catch(() => {});
+  }
+  function leaveScreen() {
+    presenting = false;
+    setScreenUrl(false);
+    if (browser && document.fullscreenElement) void document.exitFullscreen().catch(() => {});
+  }
+  // Esc out of the browser's fullscreen is the host leaving the board.
+  function onFullscreenChange() {
+    if (presenting === true && !document.fullscreenElement) leaveScreen();
+  }
+  $effect(() => {
+    if (!browser) return;
+    document.documentElement.classList.toggle("screen-frame", screenMode);
+    return () => document.documentElement.classList.remove("screen-frame");
+  });
+
   // ── Lifecycle ─────────────────────────────────────────────────────────────
 
   onMount(async () => {
@@ -509,6 +550,28 @@
   Single-column layout below: header card, project description, phase content.
   Active phase: chart (flex-grow) + leaderboard (fixed 260px) side by side.
  -->
+<svelte:window onfullscreenchange={onFullscreenChange} />
+
+{#if screenMode}
+<SessionScreen
+  {phase}
+  projectName={data.session.project_name}
+  joinCode={data.session.join_code}
+  {timerDigits}
+  {participants}
+  entries={phase === "finished" ? reportLeaderboard : mergedLeaderboardWithInfo}
+  {leaderboard}
+  {reportMembers}
+  scoreHistory={effectiveScoreHistory}
+  {health}
+  events={activityEvents}
+  {avatarByPlayerId}
+  {judgingPending}
+  {resultSummary}
+  exitHref="/s/{data.session.join_code}"
+  onExit={leaveScreen}
+/>
+{:else}
 <div class="-mx-6 -mt-8 min-h-screen" style="background: #f4f8fe;">
 
   {#if showSessionEndBanner}
@@ -550,6 +613,7 @@
     onControl={(next) => void setSessionStatus(next)}
     onCancel={onCancelClick}
     projectName={data.session.project_name}
+    onFullscreen={enterScreen}
   >
     <div class="flex items-center gap-[12px]">
       {#each timerDigits as digit, i (i)}
@@ -681,6 +745,7 @@
         startedAt={data.session.started_at ?? null}
         finishedAt={effectiveFinishedAt}
         createdAt={data.session.created_at ?? null}
+        onFullscreen={canControl ? enterScreen : null}
       />
 
 
@@ -753,6 +818,7 @@
 
   </div>
 </div>
+{/if}
 
 <style>
   @keyframes pulse {

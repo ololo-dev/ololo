@@ -8,6 +8,7 @@
     onControl,
     onCancel,
     projectName,
+    onFullscreen = null,
     children,
   }: {
     phase: "lobby" | "active" | "paused" | "finished";
@@ -17,6 +18,9 @@
     onControl: (next: "paused" | "running") => void;
     onCancel: () => void;
     projectName?: string | null;
+    /** Switch this page to the presentation screen, fullscreen — the
+     * host's button for sharing the session on a call or a projector. */
+    onFullscreen?: (() => void) | null;
     children: Snippet;
   } = $props();
 </script>
@@ -92,12 +96,26 @@
     {/if}
   </div>
 
-  <!-- Right: participant count -->
-  <span class="text-[12px] font-semibold" style="color: rgba(255,255,255,0.55);">
-    {#if phase === "active"}
-      {participants.length} competing
-    {:else}
-      {participants.length} in lobby
+  <!-- Right: the host's fullscreen button + participant count -->
+  <div class="flex items-center gap-[14px]">
+    {#if onFullscreen && canControl}
+      <button
+        type="button"
+        onclick={onFullscreen}
+        class="hidden items-center gap-[6px] rounded-[6px] px-[10px] py-[5px] text-[12px] font-semibold transition-colors hover:bg-white/15 sm:inline-flex"
+        style="color: rgba(255,255,255,0.85); background: rgba(255,255,255,0.1);"
+        title="Show the session fullscreen — for sharing on a call or a projector (Esc returns)"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3"></path></svg>
+        Fullscreen
+      </button>
     {/if}
-  </span>
+    <span class="text-[12px] font-semibold" style="color: rgba(255,255,255,0.55);">
+      {#if phase === "active"}
+        {participants.length} competing
+      {:else}
+        {participants.length} in lobby
+      {/if}
+    </span>
+  </div>
 </div>

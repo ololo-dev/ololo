@@ -19,6 +19,7 @@
     startedAt = null,
     finishedAt = null,
     createdAt = null,
+    onFullscreen = null,
   }: {
     joinCode: string;
     projectName?: string | null;
@@ -36,6 +37,9 @@
     startedAt?: string | null;
     finishedAt?: string | null;
     createdAt?: string | null;
+    /** The host's door to the presentation board — a finished session has
+     * no top bar, so the button lives here. */
+    onFullscreen?: (() => void) | null;
   } = $props();
 
   let descOpen = $state(false);
@@ -226,6 +230,24 @@
       </button>
       <span class="text-[12px]" style="color: #8fb4ec;">
         — share the final standings
+      </span>
+    </div>
+  {/if}
+
+  {#if onFullscreen}
+    <div class="mt-[4px] flex items-center gap-[8px]">
+      <button
+        type="button"
+        onclick={onFullscreen}
+        class="flex items-center gap-[5px] text-[12px] font-semibold transition-colors hover:opacity-70"
+        style="color: #4a90e2;"
+        title="Show the session fullscreen — for sharing on a call or a projector (Esc returns)"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3"></path></svg>
+        Fullscreen
+      </button>
+      <span class="text-[12px]" style="color: #8fb4ec;">
+        — the board for a call or a projector
       </span>
     </div>
   {/if}

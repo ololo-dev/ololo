@@ -133,6 +133,21 @@
     uplotInstance.setSize({ width: uplotInstance.width, height });
   });
 
+  // The width follows the container too. The board moves between a window
+  // and a projector, and a canvas sized once at build time spilled past its
+  // card after the window shrank (or left it half empty after it grew).
+  $effect(() => {
+    if (!browser || !chartEl || !uplotInstance || typeof ResizeObserver === "undefined") return;
+    const el = chartEl;
+    const u = uplotInstance;
+    const observer = new ResizeObserver(() => {
+      const width = el.clientWidth;
+      if (width > 0 && width !== u.width) u.setSize({ width, height: u.height });
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  });
+
   // The grid and tick colours are fixed at build time: a theme flip after
   // the build would leave the dark grid on the light chart. Rebuild.
   let builtDark = false;

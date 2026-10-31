@@ -7,14 +7,19 @@
     events,
     avatarByPlayerId = new Map<string, string | null>(),
     limit = 4,
+    compact = false,
   }: {
     events: ActivityEvent[];
     avatarByPlayerId?: Map<string, string | null>;
     /** How many of the latest events the strip holds. */
     limit?: number;
+    /** The narrow column beside the commentator: shorter words per row. */
+    compact?: boolean;
   } = $props();
 
-  const rows = $derived(latestEvents(events, limit).map((ev) => ({ ev, line: tickerLine(ev) })));
+  const rows = $derived(
+    latestEvents(events, limit).map((ev) => ({ ev, line: tickerLine(ev, compact) })),
+  );
 </script>
 
 <!-- The last few things that happened, newest first — the live strip under
@@ -26,7 +31,13 @@
   {:else}
     {#each rows as { ev, line } (ev.timestamp + ev.player_id + ev.task_id + ev.kind)}
       {@const avatar = avatarByPlayerId.get(ev.player_id)}
-      <div class="ticker-row flex items-center gap-[12px] text-[clamp(14px,1.2vw,20px)] leading-tight">
+      <!-- The points never leave the card: the words give way to an ellipsis
+           first; the name keeps its width up to half the row, then truncates
+           too. A long display name in the narrow column used to push the
+           delta past the card's edge. -->
+      <div
+        class="ticker-row flex min-w-0 items-center gap-[12px] overflow-hidden text-[clamp(14px,1.2vw,20px)] leading-tight"
+      >
         {#if avatar}
           <img src={ikAvatar(avatar, 28)} alt="" class="h-[28px] w-[28px] shrink-0 rounded-full object-cover" />
         {:else}
@@ -35,7 +46,9 @@
             style="background: var(--s-avatar); color: var(--s-avatar-text);"
           >{line.who.charAt(0).toUpperCase()}</span>
         {/if}
-        <span class="shrink-0 font-semibold" style="color: var(--s-text);">{line.who}</span>
+        <span class="max-w-[55%] shrink-0 truncate font-semibold" style="color: var(--s-text);"
+          >{line.who}</span
+        >
         <span class="min-w-0 truncate" style="color: var(--s-sub);">{line.what}</span>
         {#if line.delta != null}
           <span

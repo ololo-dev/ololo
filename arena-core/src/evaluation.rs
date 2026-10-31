@@ -361,6 +361,20 @@ pub struct ProbeConfig {
     /// scores like a normal task check.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capture_memory: Option<String>,
+    /// Deterministic probe: this section establishes the environment the
+    /// task's later sections depend on (a dev server started in the
+    /// background, a seeded database). When a later section fails, the
+    /// scheduler replays the task's script before retrying it: this section,
+    /// then every section that already passed, then the failed one — so a
+    /// server the player restarted or killed comes back, and so does the
+    /// state the earlier sections built (session 6LWZRJ: ten retries of one
+    /// check against a dead port, −50 points, four tasks never reached;
+    /// O3ITAA: the server came back with an empty store and the earlier
+    /// section's pot was gone). Replayed sections pay nothing when they
+    /// pass; a failed one costs the usual fail delta. The first run scores
+    /// like any other task check.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub setup: bool,
 }
 
 impl ProbeConfig {
@@ -461,6 +475,16 @@ pub fn validate_probe_config(cfg: &ProbeConfig, has_command: bool) -> Result<(),
             return Err("`capture_memory` must name a memory key".into());
         }
     }
+    if cfg.setup {
+        if cfg.mode != ProbeMode::Deterministic {
+            return Err("`setup` is only valid on deterministic probes".into());
+        }
+        if cfg.schedule.is_some() {
+            return Err(
+                "a `setup` probe is dispatched by the task's section order, not a schedule".into(),
+            );
+        }
+    }
     if let Some(schedule) = &cfg.schedule {
         if schedule.on.is_empty() {
             return Err("schedule.on must not be empty".into());
@@ -535,6 +559,7 @@ impl JudgeProbeDef {
             artifact: self.artifact.clone(),
             deadline_secs: self.deadline_secs,
             capture_memory: None,
+            setup: false,
         }
     }
 }
@@ -790,6 +815,30 @@ mod tests {
             interactive.artifact.as_ref().unwrap().max_bytes,
             ARTIFACT_DEFAULT_MAX_BYTES_IMAGE
         );
+    }
+
+    #[test]
+    fn a_setup_probe_is_deterministic_and_unscheduled() {
+        let setup = probe(serde_json::json!({ "mode": "deterministic", "setup": true })).unwrap();
+        validate_probe_config(&setup, true).unwrap();
+        assert!(setup.setup);
+        // Round-trips through JSON as a plain boolean, absent when false.
+        let json = serde_json::to_value(&setup).unwrap();
+        assert_eq!(json["setup"], serde_json::json!(true));
+        let plain = probe(serde_json::json!({ "mode": "deterministic" })).unwrap();
+        assert!(!plain.setup);
+        assert!(serde_json::to_value(&plain).unwrap().get("setup").is_none());
+
+        let analysis =
+            probe(serde_json::json!({ "mode": "analysis", "tool": "jscpd", "setup": true }))
+                .unwrap();
+        assert!(validate_probe_config(&analysis, false).is_err());
+        let scheduled = probe(serde_json::json!({
+            "mode": "deterministic", "setup": true,
+            "schedule": { "on": ["done"] }
+        }))
+        .unwrap();
+        assert!(validate_probe_config(&scheduled, true).is_err());
     }
 
     #[test]

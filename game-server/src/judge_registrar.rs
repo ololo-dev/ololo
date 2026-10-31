@@ -548,6 +548,7 @@ impl JudgeProbeRegistrar {
             }),
             deadline_secs: Some(deadline_secs),
             capture_memory: None,
+            setup: false,
         };
         let next_ordinal = tests::Entity::find()
             .filter(tests::Column::SessionId.eq(self.session_id))
@@ -658,6 +659,7 @@ impl JudgeProbeRegistrar {
             artifact: None,
             deadline_secs: None,
             capture_memory: None,
+            setup: false,
         };
         let next_ordinal = tests::Entity::find()
             .filter(tests::Column::SessionId.eq(self.session_id))

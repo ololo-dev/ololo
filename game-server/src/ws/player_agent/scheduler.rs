@@ -1,6 +1,6 @@
 use crate::state::GameServerState;
 use arena_core::entities::{
-    activity_event, players, session_scheduler_state, sessions, tasks, tests,
+    activity_event, players, probes, session_scheduler_state, sessions, tasks, tests,
 };
 use arena_core::protocol::{ArenaFrame, ZmqEvent};
 use arena_core::session_status::SessionStatus;
@@ -78,15 +78,91 @@ pub async fn pick_next_adapted_test(
     // it passes, then the next. Sections that already passed are excluded.
     // Tests rows are shared per session, so passes are checked per player:
     // only this player's own probes count towards their completion.
+    let mut current: Option<tests::Model> = None;
     for at in &all_tests {
         let has_pass = probes_passed(state, at.id, player_id).await;
         if !has_pass {
-            return Some(Some(at.clone()));
+            current = Some(at.clone());
+            break;
         }
     }
-
     // Every section passed for this player — their task is done.
-    None
+    let current = current?;
+
+    // A retry of a later section replays the task's script first: the
+    // `setup` section, then every section that already passed, then the
+    // failed one.
+    if let Some(step) = replay_step_before_retry(state, &all_tests, &current, player_id).await {
+        return Some(Some(step));
+    }
+    Some(Some(current))
+}
+
+/// Whether a section is the task's environment setup (`setup: true` in its
+/// `yaml probe` fence): a dev server started in the background, a seeded
+/// store — whatever the later sections talk to.
+pub fn is_setup_section(test: &tests::Model) -> bool {
+    test.probe_config
+        .as_ref()
+        .and_then(|c| arena_core::evaluation::ProbeConfig::from_json(c).ok())
+        .is_some_and(|c| c.setup)
+}
+
+/// The next step of a replay, when `current` is being retried in a task
+/// that declares a `setup` section: the sections from the setup up to
+/// `current` form a script (start the server, create a pot, read it back…),
+/// and a retry replays it from the top so that both the environment and the
+/// state the passed sections built are there again.
+///
+/// The classic loop retried only the failed section. Once the player
+/// restarted or killed the server a setup section had started, every retry
+/// hit a dead port until the session ended (6LWZRJ: ten retries of one
+/// check, −50 points, four tasks never reached). Re-running the setup alone
+/// is not enough either: a server that came back with an empty store still
+/// 404s the pot an earlier section created (O3ITAA, 18 minutes on one
+/// check). Replayed sections pay nothing when they pass; a replayed section
+/// that fails costs the usual delta and sends the next retry back to the
+/// setup — nothing after it can pass without it.
+///
+/// `None` means "dispatch `current`": the task has no setup section, the
+/// setup is the current section or comes after it, a judge's request is
+/// current, or the latest probe passed the section right before `current`
+/// (a first dispatch, or the replay reaching the failed section).
+async fn replay_step_before_retry(
+    state: &GameServerState,
+    all_tests: &[tests::Model],
+    current: &tests::Model,
+    player_id: Uuid,
+) -> Option<tests::Model> {
+    if current.registered_by_judge_id.is_some() {
+        return None;
+    }
+    let own: Vec<&tests::Model> = all_tests
+        .iter()
+        .filter(|t| t.registered_by_judge_id.is_none())
+        .collect();
+    let setup_pos = own.iter().position(|t| is_setup_section(t))?;
+    let current_pos = own.iter().position(|t| t.id == current.id)?;
+    if setup_pos >= current_pos {
+        return None;
+    }
+    let latest = probes::Entity::find()
+        .filter(probes::Column::PlayerId.eq(player_id))
+        .filter(probes::Column::TestId.is_in(own.iter().map(|t| t.id).collect::<Vec<_>>()))
+        .filter(probes::Column::Outcome.is_not_null())
+        .order_by_desc(probes::Column::DispatchedAt)
+        .one(&state.db)
+        .await
+        .ok()
+        .flatten()?;
+    if latest.outcome.as_deref() != Some("pass") {
+        return Some(own[setup_pos].clone());
+    }
+    // The latest probe passed: the script continues after its section,
+    // never past the current one.
+    let latest_pos = own.iter().position(|t| t.id == latest.test_id)?;
+    let next = latest_pos + 1;
+    (latest_pos >= setup_pos && next < current_pos).then(|| own[next].clone())
 }
 
 /// Scheduler-state marker for the judge-probe phase: every defined probe is
@@ -782,8 +858,8 @@ pub async fn test_position(
     }
 }
 
-async fn probes_passed(state: &GameServerState, test_id: Uuid, player_id: Uuid) -> bool {
-    use arena_core::entities::probes;
+/// Whether this player already has a passing probe for the section.
+pub(crate) async fn probes_passed(state: &GameServerState, test_id: Uuid, player_id: Uuid) -> bool {
     probes::Entity::find()
         .filter(probes::Column::TestId.eq(test_id))
         .filter(probes::Column::PlayerId.eq(player_id))
@@ -1655,5 +1731,241 @@ mod request_deadline_tests {
         );
         assert_eq!(annotate_request_deadline("npm test", 30), "npm test");
         assert!(annotate_request_deadline(cmd, -5).contains("# Open for 0s more."));
+    }
+}
+
+#[cfg(test)]
+mod setup_rerun_tests {
+    //! A retry of a later section replays the task's script from its
+    //! `setup` section (6LWZRJ: the player's agent killed the server a setup
+    //! section had started; the failed check was retried alone ten times
+    //! against a dead port. O3ITAA: the server came back empty and the pot
+    //! an earlier section had created was gone — the setup alone was not
+    //! enough).
+    use super::*;
+    use crate::test_fixtures::{mem_db, session_with_player, task_with_test, test_state};
+    use sea_orm::{ActiveModelTrait, Set};
+
+    async fn section(
+        db: &sea_orm::DatabaseConnection,
+        fx: &crate::test_fixtures::SessionFixture,
+        task_id: Uuid,
+        ordinal: i32,
+        setup: bool,
+    ) -> Uuid {
+        let config = setup.then(|| serde_json::json!({"mode": "deterministic", "setup": true}));
+        tests::ActiveModel {
+            id: Set(Uuid::new_v4()),
+            command_template: Set(format!("echo {ordinal}")),
+            answer_template: Set(String::new()),
+            fixture_definitions: Set(String::new()),
+            created_at: Set(Utc::now()),
+            session_id: Set(fx.session_id),
+            task_id: Set(task_id),
+            ordinal: Set(ordinal),
+            prompt: Set(String::new()),
+            description: Set(None),
+            probe_config: Set(config),
+            initiator: Set("system".to_string()),
+            registered_by_judge_id: Set(None),
+        }
+        .insert(db)
+        .await
+        .expect("insert test")
+        .id
+    }
+
+    /// A resolved probe dispatched `seq` seconds after a fixed origin, so the
+    /// "latest probe" ordering is explicit rather than a race on `now()`.
+    async fn probe_at(
+        db: &sea_orm::DatabaseConnection,
+        fx: &crate::test_fixtures::SessionFixture,
+        test_id: Uuid,
+        seq: i64,
+        outcome: &str,
+    ) {
+        let at = chrono::DateTime::parse_from_rfc3339("2026-10-31T07:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc)
+            + chrono::Duration::seconds(seq);
+        probes::ActiveModel {
+            id: Set(Uuid::new_v4()),
+            test_id: Set(test_id),
+            player_id: Set(fx.player_id),
+            session_id: Set(fx.session_id),
+            attempt: Set(1),
+            rendered_command: Set("echo".to_string()),
+            fixture_values: Set("{}".to_string()),
+            expected_answer: Set(None),
+            resolved_answer: Set(None),
+            secret_meta: Set(None),
+            outcome: Set(Some(outcome.to_string())),
+            dispatched_at: Set(at),
+            deadline_at: Set(at),
+            resolved_at: Set(Some(at)),
+            updated_at: Set(Some(at)),
+            output: Set(None),
+            exit_code: Set(None),
+            duration_ms: Set(None),
+            point_delta: Set(None),
+            result_json: Set(None),
+            artifact_path: Set(None),
+        }
+        .insert(db)
+        .await
+        .expect("insert probe");
+    }
+
+    async fn pick(
+        state: &GameServerState,
+        fx: &crate::test_fixtures::SessionFixture,
+        task_id: Uuid,
+    ) -> Option<Uuid> {
+        let task = tasks::Entity::find_by_id(task_id)
+            .one(&state.db)
+            .await
+            .expect("query")
+            .expect("task");
+        // `Some(None)` (no sections) and `None` (all passed) both mean
+        // "nothing to dispatch" here.
+        pick_next_adapted_test(state, &task, fx.session_id, fx.player_id)
+            .await
+            .flatten()
+            .map(|t| t.id)
+    }
+
+    #[tokio::test]
+    async fn a_failed_later_section_replays_the_script_from_the_setup() {
+        let db = mem_db().await;
+        let fx = session_with_player(&db).await;
+        let (task_id, setup) = task_with_test(&db, &fx).await;
+        // The fixture's section becomes the setup; three checks follow.
+        let mut am: tests::ActiveModel = tests::Entity::find_by_id(setup)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap()
+            .into();
+        am.probe_config = Set(Some(
+            serde_json::json!({"mode": "deterministic", "setup": true}),
+        ));
+        am.update(&db).await.unwrap();
+        let create = section(&db, &fx, task_id, 1, false).await;
+        let list = section(&db, &fx, task_id, 2, false).await;
+        let by_id = section(&db, &fx, task_id, 3, false).await;
+        let state = test_state(db.clone());
+
+        probe_at(&db, &fx, setup, 0, "pass").await;
+        probe_at(&db, &fx, create, 1, "pass").await;
+        probe_at(&db, &fx, list, 2, "pass").await;
+        assert_eq!(
+            pick(&state, &fx, task_id).await,
+            Some(by_id),
+            "first dispatch of a section"
+        );
+
+        probe_at(&db, &fx, by_id, 3, "error").await;
+        assert_eq!(
+            pick(&state, &fx, task_id).await,
+            Some(setup),
+            "retry → the setup runs first"
+        );
+
+        probe_at(&db, &fx, setup, 4, "error").await;
+        assert_eq!(
+            pick(&state, &fx, task_id).await,
+            Some(setup),
+            "a failed setup re-run repeats"
+        );
+
+        probe_at(&db, &fx, setup, 5, "pass").await;
+        assert_eq!(
+            pick(&state, &fx, task_id).await,
+            Some(create),
+            "then the passed sections replay…"
+        );
+        probe_at(&db, &fx, create, 6, "pass").await;
+        assert_eq!(pick(&state, &fx, task_id).await, Some(list), "…in order…");
+        probe_at(&db, &fx, list, 7, "pass").await;
+        assert_eq!(
+            pick(&state, &fx, task_id).await,
+            Some(by_id),
+            "…and the failed section follows"
+        );
+
+        probe_at(&db, &fx, by_id, 8, "no_response").await;
+        assert_eq!(
+            pick(&state, &fx, task_id).await,
+            Some(setup),
+            "a no-response is a retry too"
+        );
+        probe_at(&db, &fx, setup, 9, "pass").await;
+        probe_at(&db, &fx, create, 10, "error").await;
+        assert_eq!(
+            pick(&state, &fx, task_id).await,
+            Some(setup),
+            "a replayed section that fails goes back to the setup"
+        );
+
+        probe_at(&db, &fx, setup, 11, "pass").await;
+        probe_at(&db, &fx, create, 12, "pass").await;
+        probe_at(&db, &fx, list, 13, "pass").await;
+        probe_at(&db, &fx, by_id, 14, "pass").await;
+        assert_eq!(
+            pick(&state, &fx, task_id).await,
+            None,
+            "all sections passed"
+        );
+    }
+
+    #[tokio::test]
+    async fn without_a_setup_section_the_failed_check_is_retried_alone() {
+        let db = mem_db().await;
+        let fx = session_with_player(&db).await;
+        let (task_id, first) = task_with_test(&db, &fx).await;
+        let second = section(&db, &fx, task_id, 1, false).await;
+        let state = test_state(db.clone());
+        probe_at(&db, &fx, first, 0, "pass").await;
+        probe_at(&db, &fx, second, 1, "error").await;
+        assert_eq!(pick(&state, &fx, task_id).await, Some(second));
+    }
+
+    #[tokio::test]
+    async fn sections_before_the_setup_are_not_replayed() {
+        let db = mem_db().await;
+        let fx = session_with_player(&db).await;
+        let (task_id, plain) = task_with_test(&db, &fx).await;
+        // Setup is the second section here: a task may open with a check
+        // that needs no server.
+        let setup = section(&db, &fx, task_id, 1, true).await;
+        let later = section(&db, &fx, task_id, 2, false).await;
+        let state = test_state(db.clone());
+        probe_at(&db, &fx, plain, 0, "pass").await;
+        probe_at(&db, &fx, setup, 1, "error").await;
+        assert_eq!(
+            pick(&state, &fx, task_id).await,
+            Some(setup),
+            "a failing setup is just retried"
+        );
+        probe_at(&db, &fx, setup, 2, "pass").await;
+        probe_at(&db, &fx, later, 3, "error").await;
+        assert_eq!(
+            pick(&state, &fx, task_id).await,
+            Some(setup),
+            "the replay starts at the setup, not at the first section"
+        );
+        probe_at(&db, &fx, setup, 4, "pass").await;
+        assert_eq!(
+            pick(&state, &fx, task_id).await,
+            Some(later),
+            "and reaches the failed section right after it"
+        );
+        assert!(is_setup_section(
+            &tests::Entity::find_by_id(setup)
+                .one(&db)
+                .await
+                .unwrap()
+                .unwrap()
+        ));
     }
 }

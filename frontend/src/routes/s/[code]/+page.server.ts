@@ -2,7 +2,7 @@ import type { PageServerLoad } from "./$types";
 import { error, redirect } from "@sveltejs/kit";
 import { getSessionByCode, getSessionCampaign, getSessionReport, ApiError } from "$lib/api";
 
-export const load: PageServerLoad = async ({ params, fetch }) => {
+export const load: PageServerLoad = async ({ params, fetch, url }) => {
   let session;
   try {
     session = await getSessionByCode(params.code, { fetch });
@@ -18,7 +18,11 @@ export const load: PageServerLoad = async ({ params, fetch }) => {
     throw error(500, "Failed to load session");
   }
 
-  if (session.state === "lobby") {
+  // The dashboard's lobby is its own page; the presentation screen
+  // (`?view=screen`) keeps this route so the board can show the lobby —
+  // join command, faces as they arrive, the commentator's intro — and roll
+  // into the live board on the same socket when the session starts.
+  if (session.state === "lobby" && url.searchParams.get("view") !== "screen") {
     throw redirect(307, `/s/${params.code}/lobby`);
   }
 

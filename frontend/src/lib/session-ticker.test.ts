@@ -68,6 +68,23 @@ describe("tickerLine", () => {
   });
 });
 
+describe("tickerLine, compact", () => {
+  it("keeps the fact and drops the prose, so an ellipsis cuts nothing that matters", () => {
+    expect(tickerLine(ev({ kind: "task_started", task_title: "Build the UI" }), true).what).toBe(
+      "started Task 2",
+    );
+    expect(
+      tickerLine(ev({ kind: "task_scored", judge_name: "Task Anti-Cheat", point_delta: 0 }), true)
+        .what,
+    ).toBe("Task Anti-Cheat · Task 2");
+    expect(tickerLine(ev({ kind: "artifact_received" }), true).what).toBe("capture · Task 2");
+    // The wide strip keeps its full sentences.
+    expect(
+      tickerLine(ev({ kind: "task_scored", judge_name: "Task Anti-Cheat", point_delta: 0 })).what,
+    ).toBe("evaluated by Task Anti-Cheat on Task 2");
+  });
+});
+
 describe("latestEvents", () => {
   it("keeps the newest few, newest first", () => {
     const events = [

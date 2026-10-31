@@ -9,19 +9,26 @@ export interface TickerLine {
   delta: number | null;
 }
 
-export function tickerLine(ev: ActivityEvent): TickerLine {
+/** `compact` is the narrow column beside the commentator's strip: the
+ * words that survive an ellipsis are the ones that carry the fact (which
+ * task, which judge), so the title and the prose go. */
+export function tickerLine(ev: ActivityEvent, compact = false): TickerLine {
   const who = ev.player_display_name;
   const task = `Task ${ev.task_ordinal}`;
   switch (ev.kind) {
     case "task_started":
       return {
         who,
-        what: ev.task_title ? `started ${task} · ${ev.task_title}` : `started ${task}`,
+        what: ev.task_title && !compact ? `started ${task} · ${ev.task_title}` : `started ${task}`,
         delta: null,
       };
     case "task_scored":
       if (ev.judge_name) {
-        return { who, what: `evaluated by ${ev.judge_name} on ${task}`, delta: ev.point_delta };
+        return {
+          who,
+          what: compact ? `${ev.judge_name} · ${task}` : `evaluated by ${ev.judge_name} on ${task}`,
+          delta: ev.point_delta,
+        };
       }
       return { who, what: `implemented ${task}`, delta: ev.point_delta };
     case "similarity": {
@@ -32,7 +39,11 @@ export function tickerLine(ev: ActivityEvent): TickerLine {
       return { who, what: "copy/paste check: clean", delta: null };
     }
     case "artifact_received":
-      return { who, what: `delivered a capture for ${task}`, delta: null };
+      return {
+        who,
+        what: compact ? `capture · ${task}` : `delivered a capture for ${task}`,
+        delta: null,
+      };
   }
 }
 

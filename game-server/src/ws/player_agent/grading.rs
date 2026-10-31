@@ -290,6 +290,35 @@ pub async fn handle_capture_memory(
     crate::session_memory::capture_value(state, session_id, player_id, &key, stdout_trimmed).await;
 }
 
+/// Whether a passing run of this probe is a replay — the scheduler running
+/// the task's script again (its `setup` section and every section that
+/// already passed) before retrying a later section. Such a run pays nothing:
+/// the first pass already did, and paying again would turn fail → replay →
+/// pass into a net gain. A *failed* replay keeps the usual fail delta. Only
+/// tasks with a setup section replay, so only there can a passed section be
+/// dispatched again.
+pub async fn replay_pays_nothing(
+    state: &GameServerState,
+    adapted_test: &tests::Model,
+    player_id: Uuid,
+    pass: bool,
+) -> bool {
+    use crate::ws::player_agent::scheduler::{is_setup_section, probes_passed};
+    if !pass || !probes_passed(state, adapted_test.id, player_id).await {
+        return false;
+    }
+    if is_setup_section(adapted_test) {
+        return true;
+    }
+    tests::Entity::find()
+        .filter(tests::Column::TaskId.eq(adapted_test.task_id))
+        .filter(tests::Column::SessionId.eq(adapted_test.session_id))
+        .all(&state.db)
+        .await
+        .map(|rows| rows.iter().any(is_setup_section))
+        .unwrap_or(false)
+}
+
 /// The opt-in point table of a config-carrying probe: `Some(points)` for any
 /// probe with a `probe_config` (defaulting to 0/0), `None` for legacy probes.
 pub fn probe_points(adapted_test: &tests::Model) -> Option<arena_core::evaluation::ProbePoints> {
@@ -300,7 +329,9 @@ pub fn probe_points(adapted_test: &tests::Model) -> Option<arena_core::evaluatio
         // score off the task pay table, not the 0/0 measurement default that
         // an open-ended config implies. Only a config that opts into `points`
         // overrides the pay table.
-        Ok(cfg) if cfg.capture_memory.is_some() && cfg.points.is_none() => None,
+        // The same holds for a `setup` section: it is a task check that
+        // happens to be re-run before retries.
+        Ok(cfg) if (cfg.capture_memory.is_some() || cfg.setup) && cfg.points.is_none() => None,
         Ok(cfg) => Some(cfg.points.unwrap_or_default()),
         Err(e) => {
             tracing::warn!(test_id = %adapted_test.id, error = %e, "unparseable probe_config; scoring as measurement (0/0)");
@@ -477,6 +508,13 @@ pub async fn grade_test_result(
                         task_row.fail_points
                     }
                 }
+            };
+            // Queried before this probe's own row is resolved below, so only
+            // earlier passes count.
+            let delta = if replay_pays_nothing(state, adapted_test, player_id, pass).await {
+                0
+            } else {
+                delta
             };
 
             let received_at = Utc::now();
@@ -1244,6 +1282,80 @@ mod grade_stdout_tests {
         }));
         let pts = probe_points(&t).expect("config present");
         assert_eq!((pts.pass, pts.fail), (5, 0));
+
+        // A setup section is an ordinary task check too (its first run pays
+        // the task's points; re-runs are zeroed at grading time).
+        t.probe_config = Some(serde_json::json!({"mode": "deterministic", "setup": true}));
+        assert_eq!(probe_points(&t), None, "setup config → task-level scoring");
+    }
+
+    /// A replayed section (the scheduler running the task's script again
+    /// before a retry) pays nothing once it has passed before.
+    #[tokio::test]
+    async fn a_replayed_section_pays_nothing_after_its_first_pass() {
+        use crate::test_fixtures::{
+            insert_probe, mem_db, session_with_player, task_with_test, test_state,
+        };
+        use sea_orm::{ActiveModelTrait, Set};
+        let db = mem_db().await;
+        let fx = session_with_player(&db).await;
+        let (task_id, test_id) = task_with_test(&db, &fx).await;
+        let state = test_state(db.clone());
+        let t = tests::Entity::find_by_id(test_id)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert!(
+            !replay_pays_nothing(&state, &t, fx.player_id, true).await,
+            "first pass pays"
+        );
+        insert_probe(&db, &fx, test_id, Some("pass")).await;
+        assert!(
+            !replay_pays_nothing(&state, &t, fx.player_id, true).await,
+            "a task without a setup section never replays, so a second pass is not one"
+        );
+
+        // Give the task a setup section: now a second pass of any section
+        // is a replay.
+        let setup = tests::ActiveModel {
+            id: Set(Uuid::new_v4()),
+            command_template: Set("echo setup".to_string()),
+            answer_template: Set(String::new()),
+            fixture_definitions: Set(String::new()),
+            created_at: Set(chrono::Utc::now()),
+            session_id: Set(fx.session_id),
+            task_id: Set(task_id),
+            ordinal: Set(-1),
+            prompt: Set(String::new()),
+            description: Set(None),
+            probe_config: Set(Some(
+                serde_json::json!({"mode": "deterministic", "setup": true}),
+            )),
+            initiator: Set("system".to_string()),
+            registered_by_judge_id: Set(None),
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        assert!(
+            replay_pays_nothing(&state, &t, fx.player_id, true).await,
+            "replay pays nothing"
+        );
+        assert!(
+            !replay_pays_nothing(&state, &t, fx.player_id, false).await,
+            "a failed replay still costs"
+        );
+        assert!(
+            !replay_pays_nothing(&state, &setup, fx.player_id, true).await,
+            "the setup's first pass pays"
+        );
+        insert_probe(&db, &fx, setup.id, Some("pass")).await;
+        assert!(
+            replay_pays_nothing(&state, &setup, fx.player_id, true).await,
+            "its re-run pays nothing"
+        );
     }
 }
 

@@ -117,6 +117,76 @@ impl TaskStatsReport {
     }
 }
 
+/// CLI -> server: what the player's coding agents were configured with on
+/// their machine — skills and MCP servers, names only — read by the CLI at
+/// the session's start, after each finished task and on exit. The repository shows only what the player
+/// committed; user-level and plugin configuration never reaches git. Never
+/// commands, arguments, URLs or environment: MCP configs carry secrets.
+/// Client-reported (honest-trust), never used for scoring directly — the
+/// Agentic judge reads it as evidence.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentSetupReport {
+    pub agents: Vec<AgentSetupConfig>,
+}
+
+/// One coding agent's configuration found on the machine.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentSetupConfig {
+    /// Agent identifier in kebab case (`claude-code`, `codex`, `gemini`,
+    /// `cursor`, `agents` for the shared `~/.agents` convention).
+    pub agent: String,
+    #[serde(default)]
+    pub skills: Vec<ConfiguredItem>,
+    #[serde(default)]
+    pub mcp_servers: Vec<ConfiguredItem>,
+}
+
+/// A skill or MCP server, where it is configured.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfiguredItem {
+    pub name: String,
+    /// `user` (the player's home config), `project` (a file in the working
+    /// directory, usually committed), `local` (the agent's per-project
+    /// setting kept outside the repository) or `plugin`.
+    pub scope: String,
+    /// The plugin that provides it, for `scope: plugin`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin: Option<String>,
+}
+
+pub const AGENT_SETUP_MAX_AGENTS: usize = 16;
+pub const AGENT_SETUP_MAX_ITEMS: usize = 256;
+
+impl AgentSetupReport {
+    /// Reject reports past the size limits (names as for task stats).
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.agents.len() > AGENT_SETUP_MAX_AGENTS {
+            return Err("too many agents");
+        }
+        for a in &self.agents {
+            if a.agent.len() > TASK_STATS_MAX_NAME_LEN {
+                return Err("agent name exceeds max length");
+            }
+            if a.skills.len() > AGENT_SETUP_MAX_ITEMS || a.mcp_servers.len() > AGENT_SETUP_MAX_ITEMS
+            {
+                return Err("too many skills or MCP servers");
+            }
+            let too_long = |i: &ConfiguredItem| {
+                i.name.len() > TASK_STATS_MAX_NAME_LEN
+                    || i.scope.len() > 16
+                    || i.plugin.as_deref().map_or(0, str::len) > TASK_STATS_MAX_NAME_LEN
+            };
+            if a.skills.iter().chain(&a.mcp_servers).any(too_long) {
+                return Err("skill or MCP server field exceeds max length");
+            }
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,5 +244,30 @@ mod tests {
     fn unknown_fields_rejected() {
         let json = r#"{"task_ordinal":1,"agents":[],"bogus":true}"#;
         assert!(serde_json::from_str::<TaskStatsReport>(json).is_err());
+    }
+
+    #[test]
+    fn agent_setup_reports_round_trip_and_are_bounded() {
+        let json = r#"{"agents":[{"agent":"claude-code","skills":[{"name":"capture","scope":"user"}],
+            "mcp_servers":[{"name":"playwright","scope":"plugin","plugin":"pw@market"}]}]}"#;
+        let report: AgentSetupReport = serde_json::from_str(json).unwrap();
+        assert!(report.validate().is_ok());
+        assert_eq!(
+            report.agents[0].mcp_servers[0].plugin.as_deref(),
+            Some("pw@market")
+        );
+        // Nothing but names: a command or env field is refused outright.
+        let leaky = r#"{"agents":[{"agent":"x","mcp_servers":[{"name":"a","scope":"user","command":"npx"}]}]}"#;
+        assert!(serde_json::from_str::<AgentSetupReport>(leaky).is_err());
+        let mut big = report.clone();
+        big.agents[0].skills = vec![
+            ConfiguredItem {
+                name: "s".into(),
+                scope: "user".into(),
+                plugin: None
+            };
+            AGENT_SETUP_MAX_ITEMS + 1
+        ];
+        assert!(big.validate().is_err());
     }
 }

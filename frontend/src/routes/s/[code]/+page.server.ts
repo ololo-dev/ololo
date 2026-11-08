@@ -1,6 +1,12 @@
 import type { PageServerLoad } from "./$types";
 import { error, redirect } from "@sveltejs/kit";
-import { getSessionByCode, getSessionCampaign, getSessionReport, ApiError } from "$lib/api";
+import {
+  getSessionByCode,
+  getSessionCampaign,
+  getSessionLinks,
+  getSessionReport,
+  ApiError,
+} from "$lib/api";
 
 export const load: PageServerLoad = async ({ params, fetch, url }) => {
   let session;
@@ -35,9 +41,13 @@ export const load: PageServerLoad = async ({ params, fetch, url }) => {
     }
   }
 
-  // Campaign context, when this session plays a part of one: null for every
-  // ordinary session, and best-effort — the board must render without it.
-  const campaign = await getSessionCampaign(params.code, { fetch }).catch(() => null);
+  // Campaign context, when this session plays a part of one, and the
+  // sessions this one is linked with: null for every ordinary session, and
+  // best-effort — the board must render without either.
+  const [campaign, links] = await Promise.all([
+    getSessionCampaign(params.code, { fetch }).catch(() => null),
+    getSessionLinks(params.code, { fetch }).catch(() => null),
+  ]);
 
-  return { session, report, campaign };
+  return { session, report, campaign, links };
 };

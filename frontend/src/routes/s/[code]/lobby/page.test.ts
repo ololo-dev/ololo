@@ -12,6 +12,7 @@ vi.mock("$lib/api", () => ({
     }
   },
   getSessionByCode: (...args: unknown[]) => getSessionByCodeMock(...args),
+  getSessionLinks: async () => null,
 }));
 
 describe("routes/s/[code]/lobby/+page.server.ts", () => {
@@ -44,6 +45,7 @@ describe("routes/s/[code]/lobby/+page.server.ts", () => {
         project_name: "Project One",
         project_slug: "project-one",
       },
+      links: null,
     });
     expect(setHeaders).toHaveBeenCalledWith({ "cache-control": "no-store" });
   });

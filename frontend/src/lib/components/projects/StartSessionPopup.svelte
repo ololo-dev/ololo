@@ -74,6 +74,10 @@
   let fresh = $state<string | null>(null);
   let confirming = $state<string | null>(null);
   let copied = $state<string | null>(null);
+  // The rooms of a workshop are one event: a new session is linked with
+  // the live ones by default — the board flips between them and there is
+  // one standings for the lot. Off, for a session of its own.
+  let linkWithLive = $state(true);
 
   const ERRORS: Record<string, string> = {
     campaign_project: "A campaign hosts no sessions: start one of its parts.",
@@ -156,7 +160,10 @@
     try {
       // Named after the project, like `ololo start` names it — but hosted,
       // which `ololo start` never is: the server lets a host have several.
-      const session = await createSession(projectName, projectId, { host: true });
+      // Linked with the newest live one: the groups merge, so one is enough.
+      const last = live.at(-1);
+      const link = linkWithLive && last?.join_code ? { link_with: last.join_code } : {};
+      const session = await createSession(projectName, projectId, { host: true, ...link });
       fresh = session.join_code ?? null;
       await refresh();
     } catch (err) {
@@ -285,6 +292,21 @@
             One session per group: you host, they play. A lobby counts down from the moment it is
             created, and latecomers can still join once it runs.
           </p>
+
+          {#if live.length > 0}
+            <label class="mb-[14px] flex items-start gap-[10px] text-[14px] text-brand-text">
+              <input
+                type="checkbox"
+                class="mt-[3px] h-[16px] w-[16px] shrink-0 accent-brand-blue"
+                bind:checked={linkWithLive}
+                data-testid="host-link-with-live"
+              />
+              <span>
+                Link with your live sessions — one event: the board flips between the rooms and
+                shows one standings for all of them.
+              </span>
+            </label>
+          {/if}
 
           <Button
             type="button"

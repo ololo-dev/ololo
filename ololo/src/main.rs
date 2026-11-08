@@ -5,6 +5,7 @@
 )]
 
 mod agent_cmd;
+mod agent_setup;
 mod antigravity_sync;
 mod auth;
 mod campaign;

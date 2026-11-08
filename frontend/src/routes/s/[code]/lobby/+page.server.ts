@@ -1,6 +1,6 @@
 import { redirect, error } from "@sveltejs/kit";
 import type { PageServerLoad } from "./$types";
-import { ApiError, getSessionByCode } from "$lib/api";
+import { ApiError, getSessionByCode, getSessionLinks } from "$lib/api";
 
 export const load: PageServerLoad = async ({ params, fetch, setHeaders }) => {
   setHeaders({ "cache-control": "no-store" });
@@ -10,7 +10,9 @@ export const load: PageServerLoad = async ({ params, fetch, setHeaders }) => {
     if (session.state !== "lobby") {
       throw redirect(307, `/s/${session.join_code}`);
     }
-    return { session };
+    // The sessions this one is linked with — best-effort, null when none.
+    const links = await getSessionLinks(params.code, { fetch }).catch(() => null);
+    return { session, links };
   } catch (err) {
     if (err instanceof ApiError && err.status === 404) {
       throw error(404, "Session not found");

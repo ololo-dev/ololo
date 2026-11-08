@@ -472,12 +472,16 @@ pub async fn run_join(
             // Launch the user's agent process alongside the plain probe loop
             // and wait for the agent to exit.
             let probe_task = spawn_probe_loop(&ws_base, &code, &cfg.token);
+            // The agents' machine configuration for the Agentic judge: now,
+            // and again once the agent exits (below).
+            crate::agent_setup::report(&cfg.server_url, &cfg.token, &code).await;
             let cmd = crate::agent_cmd::AgentCommand::parse(&launch_cmd)?;
             let mut child = std::process::Command::new(&cmd.program)
                 .args(&cmd.args)
                 .spawn()
                 .with_context(|| format!("launching agent '{launch_cmd}'"))?;
             let exit = child.wait().context("waiting for agent process")?;
+            crate::agent_setup::report(&cfg.server_url, &cfg.token, &code).await;
 
             // Agent exited — cancel the probe task and propagate exit code.
             probe_task.abort();

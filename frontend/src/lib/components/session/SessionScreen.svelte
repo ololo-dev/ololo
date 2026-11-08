@@ -8,11 +8,14 @@
     ScoreHistoryPoint,
     SessionHealthPayload,
   } from "$lib/types/arena";
+  import type { SessionLinks } from "$lib/api";
+  import { slideStops, stopBy, type ScreenSlide, type SlideTarget } from "$lib/session-links";
   import { ikAvatar } from "$lib/imagekit";
   import type { HealthIndicator } from "$lib/session-health";
   import ScoreChart from "./ScoreChart.svelte";
   import ScreenLeaderboard from "./ScreenLeaderboard.svelte";
   import ScreenTicker from "./ScreenTicker.svelte";
+  import ScreenCombinedLeaderboard from "./ScreenCombinedLeaderboard.svelte";
 
   type Phase = "lobby" | "active" | "paused" | "finished";
   type Theme = "dark" | "light";
@@ -44,6 +47,9 @@
     resultSummary = null,
     exitHref,
     onExit = null,
+    links = null,
+    slide = "session",
+    onSlide = null,
   }: {
     phase: Phase;
     projectName: string | null | undefined;
@@ -68,6 +74,14 @@
     /** Leave without a navigation — the page swaps the board back for the
      * dashboard itself (and drops the browser's fullscreen). */
     onExit?: (() => void) | null;
+    /** The sessions this one is linked with — rooms of one event, running
+     * side by side: the slider flips the board between them and to the
+     * combined standings (live while they play, final once every one has
+     * ended). Null (or a group of one) leaves the board exactly as it was. */
+    links?: SessionLinks | null;
+    slide?: ScreenSlide;
+    /** The page moves the board: to another linked session, or to "overall". */
+    onSlide?: ((target: SlideTarget) => void) | null;
   } = $props();
 
   // ── Theme ──────────────────────────────────────────────────────────────
@@ -155,8 +169,23 @@
   const chartHeight = $derived(Math.max(200, chartBodyHeight - 8));
 
   const running = $derived(phase === "active" || phase === "paused");
+
+  // The slider: one stop per linked session, in the order they were linked,
+  // and — once every one of them has ended — a last stop for the combined
+  // standings. A session linked to nothing has no slider.
+  const stops = $derived(slideStops(links, slide));
+  const hasSlider = $derived(stops.length > 0);
+  const overall = $derived(slide === "overall" && stops.length > 0);
+  function slideBy(step: number) {
+    const next = stopBy(stops, step);
+    if (next) onSlide?.(next.target);
+  }
   const statusLabel = $derived(
-    phase === "active"
+    overall
+      ? links?.all_finished
+        ? "Final standings"
+        : "Overall · live"
+      : phase === "active"
       ? "Live"
       : phase === "paused"
         ? "Paused"
@@ -174,6 +203,14 @@
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     const target = e.target as HTMLElement | null;
     if (target && ["INPUT", "TEXTAREA"].includes(target.tagName)) return;
+    if (hasSlider && e.key === "ArrowRight") {
+      slideBy(1);
+      return;
+    }
+    if (hasSlider && e.key === "ArrowLeft") {
+      slideBy(-1);
+      return;
+    }
     if (e.key === "t") {
       toggleTheme();
       return;
@@ -184,6 +221,8 @@
   }
 </script>
 
+<!-- `f` toggles the browser's own fullscreen, `t` flips the theme; with
+     linked sessions, the arrow keys move the slider. -->
 <svelte:window onkeydown={onKey} />
 
 <!-- The session as a room sees it: one screen, no site chrome, no scroll —
@@ -193,9 +232,10 @@
      colour is a palette variable, so the two themes are one markup. -->
 <div
   class="grid h-[100dvh] w-full gap-[16px] px-[28px] py-[20px]"
-  style="grid-template-rows: auto minmax(0, 1fr) auto; background: var(--s-bg); color: var(--s-text); {paletteStyle};"
+  style="grid-template-rows: auto {hasSlider ? 'auto ' : ''}minmax(0, 1fr){overall ? '' : ' auto'}; background: var(--s-bg); color: var(--s-text); {paletteStyle};"
   data-testid="session-screen"
   data-theme={theme}
+  data-slide={slide}
 >
   <!-- Top strip -->
   <div class="flex items-center justify-between gap-[24px]">
@@ -286,8 +326,74 @@
     </div>
   </div>
 
+  {#if hasSlider}
+    <!-- The slider between linked sessions: one stop per session, the
+         combined standings last once every session has ended. Arrows and
+         the ← → keys walk it; a stop is a door to that session's board. -->
+    <nav
+      class="flex items-center justify-center gap-[10px]"
+      aria-label="Linked sessions"
+      data-testid="screen-slider"
+    >
+      <button
+        type="button"
+        class="slide-arrow inline-flex h-[32px] w-[32px] shrink-0 items-center justify-center rounded-full"
+        style="color: var(--s-dim);"
+        onclick={() => slideBy(-1)}
+        aria-label="Previous session"
+        data-testid="screen-slider-prev"
+      >‹</button>
+      <ol class="flex min-w-0 flex-wrap items-center justify-center gap-[8px]">
+        {#each stops as stop (stop.key)}
+          <li>
+            <button
+              type="button"
+              class="slide-stop max-w-[22vw] truncate rounded-full px-[14px] py-[5px] text-[clamp(12px,1vw,16px)] font-semibold"
+              style={stop.current
+                ? "background: var(--s-head); color: var(--s-bg);"
+                : "background: var(--s-chip); border: 1px solid var(--s-chip-border); color: var(--s-sub);"}
+              aria-current={stop.current ? "true" : undefined}
+              onclick={() => {
+                if (!stop.current) onSlide?.(stop.target);
+              }}
+              title={stop.key === "overall" ? "Standings across every linked session" : `ololo join ${stop.key}`}
+              data-testid="screen-slider-stop"
+              data-key={stop.key}
+            >{stop.label}</button>
+          </li>
+        {/each}
+      </ol>
+      <button
+        type="button"
+        class="slide-arrow inline-flex h-[32px] w-[32px] shrink-0 items-center justify-center rounded-full"
+        style="color: var(--s-dim);"
+        onclick={() => slideBy(1)}
+        aria-label="Next session"
+        data-testid="screen-slider-next"
+      >›</button>
+    </nav>
+  {/if}
+
   <!-- Middle -->
-  {#if phase === "lobby"}
+  {#if overall && links}
+    <!-- The whole event: every room's players in one list by points — live
+         while the rooms play, the final word once every one has ended. -->
+    <div
+      class="flex min-h-0 flex-col overflow-hidden rounded-[12px] px-[16px] py-[18px]"
+      style="background: var(--s-card); border: 1px solid var(--s-border);"
+      data-testid="screen-overall"
+    >
+      <h2 class="mb-[10px] shrink-0 px-[12px] font-heading text-[clamp(14px,1.2vw,20px)] font-bold" style="color: var(--s-head);">
+        {links.all_finished ? "Final standings" : "Overall standings"} · {links.sessions.length} sessions
+        {#if !links.all_finished}
+          <span class="ml-[8px] text-[clamp(11px,0.9vw,15px)] font-semibold uppercase tracking-[0.12em]" style="color: var(--s-dim);" data-testid="screen-overall-live">live</span>
+        {/if}
+      </h2>
+      <div class="min-h-0 flex-grow overflow-hidden">
+        <ScreenCombinedLeaderboard {links} />
+      </div>
+    </div>
+  {:else if phase === "lobby"}
     <div class="flex min-h-0 flex-col items-center justify-center gap-[28px]">
       <p class="text-[clamp(16px,1.4vw,24px)]" style="color: var(--s-head);">Join from your terminal</p>
       <div
@@ -357,8 +463,11 @@
     </div>
   {/if}
 
-  <!-- Bottom strip -->
-  {#if phase === "lobby"}
+  <!-- Bottom strip — none on the Overall slide: the last moves and the
+       final line belong to one room, not to the event. -->
+  {#if overall}
+    <!-- nothing -->
+  {:else if phase === "lobby"}
     <p class="text-center text-[clamp(12px,1vw,16px)]" style="color: var(--s-dim);">
       ololo.dev/s/{joinCode}
     </p>
@@ -374,6 +483,10 @@
 </div>
 
 <style>
+  .slide-arrow:hover,
+  .slide-stop:hover {
+    background: var(--s-hover);
+  }
   .live-dot {
     animation: screen-pulse 1.5s ease-in-out infinite;
   }

@@ -37,6 +37,32 @@ fn sliding_window_check(
     window: Duration,
     max: usize,
 ) -> bool {
+    sliding_window(state, ip, now, window, max, Stamp::IfAllowed)
+}
+
+/// What a sliding-window call does with the stamp.
+#[derive(Clone, Copy)]
+enum Stamp {
+    /// Record the request when it is allowed (`check_and_record`).
+    IfAllowed,
+    /// Only look: is there room in the window? (`check`)
+    Never,
+    /// Record unconditionally (`record` — a miss the caller already served).
+    Always,
+}
+
+/// Recovers from a poisoned lock (`into_inner`) rather than propagating the
+/// panic — the guarded state is only timestamps, so it is safe to keep using
+/// after an unrelated panic; the previous `.expect("poisoned")` bricked the
+/// endpoint for the rest of the process instead.
+fn sliding_window(
+    state: &Mutex<HashMap<String, VecDeque<Instant>>>,
+    ip: &str,
+    now: Instant,
+    window: Duration,
+    max: usize,
+    stamp: Stamp,
+) -> bool {
     let cutoff = now - window;
     let mut map = state.lock().unwrap_or_else(|e| e.into_inner());
 
@@ -49,11 +75,13 @@ fn sliding_window_check(
     while timestamps.front().is_some_and(|t| *t < cutoff) {
         timestamps.pop_front();
     }
-    if timestamps.len() >= max {
-        return false;
+    let allowed = timestamps.len() < max;
+    match stamp {
+        Stamp::IfAllowed if allowed => timestamps.push_back(now),
+        Stamp::Always => timestamps.push_back(now),
+        Stamp::IfAllowed | Stamp::Never => {}
     }
-    timestamps.push_back(now);
-    true
+    allowed
 }
 
 /// Trait that controls whether a request from a given IP should be allowed.
@@ -65,6 +93,17 @@ pub trait RateLimiter: Send + Sync {
     /// been exceeded.  Implementations must both check and record the attempt
     /// atomically (i.e. under the same lock).
     fn check_and_record(&self, ip: &str) -> bool;
+
+    /// Is there room for a request from `ip` right now? Records nothing: the
+    /// caller spends the budget with `record` once it knows the request was a
+    /// miss. The join-code limiter guards against guessing codes, and a guess
+    /// is a lookup that finds nothing — a page reading a code it already
+    /// holds (a board flipping between linked rooms, a workshop's worth of
+    /// players behind one address) is no guess and costs nothing.
+    fn check(&self, ip: &str) -> bool;
+
+    /// Spend one request of `ip`'s budget — a miss served after `check`.
+    fn record(&self, ip: &str);
 }
 
 /// In-memory sliding-window rate limiter.
@@ -94,6 +133,26 @@ impl Default for InMemoryRateLimiter {
 impl RateLimiter for InMemoryRateLimiter {
     fn check_and_record(&self, ip: &str) -> bool {
         sliding_window_check(&self.state, ip, Instant::now(), WINDOW, MAX_REQUESTS)
+    }
+    fn check(&self, ip: &str) -> bool {
+        sliding_window(
+            &self.state,
+            ip,
+            Instant::now(),
+            WINDOW,
+            MAX_REQUESTS,
+            Stamp::Never,
+        )
+    }
+    fn record(&self, ip: &str) {
+        sliding_window(
+            &self.state,
+            ip,
+            Instant::now(),
+            WINDOW,
+            MAX_REQUESTS,
+            Stamp::Always,
+        );
     }
 }
 
@@ -135,6 +194,26 @@ impl RateLimiter for EmailRateLimiter {
             EMAIL_MAX_REQUESTS,
         )
     }
+    fn check(&self, ip: &str) -> bool {
+        sliding_window(
+            &self.state,
+            ip,
+            Instant::now(),
+            EMAIL_WINDOW,
+            EMAIL_MAX_REQUESTS,
+            Stamp::Never,
+        )
+    }
+    fn record(&self, ip: &str) {
+        sliding_window(
+            &self.state,
+            ip,
+            Instant::now(),
+            EMAIL_WINDOW,
+            EMAIL_MAX_REQUESTS,
+            Stamp::Always,
+        );
+    }
 }
 
 /// Sliding-window rate limiter with a configurable cap and window.
@@ -163,6 +242,26 @@ impl RateLimiter for SlidingWindowLimiter {
     fn check_and_record(&self, ip: &str) -> bool {
         sliding_window_check(&self.state, ip, Instant::now(), self.window, self.max)
     }
+    fn check(&self, ip: &str) -> bool {
+        sliding_window(
+            &self.state,
+            ip,
+            Instant::now(),
+            self.window,
+            self.max,
+            Stamp::Never,
+        )
+    }
+    fn record(&self, ip: &str) {
+        sliding_window(
+            &self.state,
+            ip,
+            Instant::now(),
+            self.window,
+            self.max,
+            Stamp::Always,
+        );
+    }
 }
 
 /// No-op rate limiter that always allows requests.
@@ -175,6 +274,10 @@ impl RateLimiter for NoOpRateLimiter {
     fn check_and_record(&self, _ip: &str) -> bool {
         true
     }
+    fn check(&self, _ip: &str) -> bool {
+        true
+    }
+    fn record(&self, _ip: &str) {}
 }
 
 /// Per-IP rate limiter for the public profile endpoints.
@@ -236,6 +339,23 @@ mod tests {
             rl.check_and_record("1.2.3.4");
         }
         assert!(!rl.check_and_record("1.2.3.4"));
+    }
+
+    #[test]
+    fn check_looks_without_spending_and_record_spends() {
+        let rl = InMemoryRateLimiter::new();
+        for _ in 0..(MAX_REQUESTS * 3) {
+            assert!(rl.check("1.2.3.4"), "a look costs nothing");
+        }
+        for _ in 0..MAX_REQUESTS {
+            rl.record("1.2.3.4");
+        }
+        assert!(!rl.check("1.2.3.4"));
+        assert!(!rl.check_and_record("1.2.3.4"));
+        // Recording past the cap keeps the window full, it does not panic.
+        rl.record("1.2.3.4");
+        assert!(!rl.check("1.2.3.4"));
+        assert!(rl.check("5.6.7.8"));
     }
 
     #[test]

@@ -3,7 +3,8 @@
 //! Route handlers (consumed by `lib.rs` router assembly):
 //! - [`post_create`], [`get_list`], [`get_by_code`], [`get_one`],
 //!   [`patch_one`], [`delete_one`], [`get_report`], [`get_project_sessions`],
-//!   [`post_regenerate_code`], [`post_join`], [`get_admin_list`]
+//!   [`post_regenerate_code`], [`post_join`], [`get_admin_list`],
+//!   [`get_links_by_code`], [`post_link`], [`delete_link`]
 //!
 //! Shared request/response types and [`SessionError`] live in [`common`].
 
@@ -12,6 +13,7 @@ pub use common::{CreateSessionReq, JoinSessionReq, PatchSessionReq, SessionError
 pub use create::post_create;
 pub use health::{get_health, load_session_health};
 pub use join::post_join;
+pub use links::{delete_link, get_links_by_code, post_link};
 pub(crate) use read::load_session_activity;
 pub use read::{
     delete_one, get_activity, get_by_code, get_campaign_by_code, get_list, get_one,
@@ -24,5 +26,6 @@ pub(crate) mod common;
 pub(crate) mod create;
 pub(crate) mod health;
 pub(crate) mod join;
+pub(crate) mod links;
 pub(crate) mod read;
 pub(crate) mod regenerate;

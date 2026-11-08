@@ -120,6 +120,14 @@ pub fn build_router(state: AppState) -> Router {
             get(api::sessions::get_campaign_by_code),
         )
         .route(
+            "/api/sessions/by-code/:join_code/links",
+            get(api::sessions::get_links_by_code),
+        )
+        .route(
+            "/api/sessions/:id/links",
+            post(api::sessions::post_link).delete(api::sessions::delete_link),
+        )
+        .route(
             "/api/sessions/:id",
             get(api::sessions::get_one)
                 .patch(api::sessions::patch_one)

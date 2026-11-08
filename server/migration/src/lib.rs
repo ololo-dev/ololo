@@ -59,6 +59,7 @@ mod m20260922_000003_health_checkpoints;
 mod m20260923_000001_personal_projects;
 mod m20260924_000001_project_repos;
 mod m20260925_000001_health_tests;
+mod m20261031_000001_session_links;
 
 /// Advisory-lock key serialising `Migrator::up` across processes on Postgres.
 /// Arbitrary but must be identical in every binary that runs migrations.
@@ -190,6 +191,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260923_000001_personal_projects::Migration),
             Box::new(m20260924_000001_project_repos::Migration),
             Box::new(m20260925_000001_health_tests::Migration),
+            Box::new(m20261031_000001_session_links::Migration),
         ]
     }
 }

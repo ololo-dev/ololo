@@ -76,8 +76,16 @@ export function listAdminSessions(
 export function createSession(
   name: string,
   project_id: string,
-  opts: { fetch?: FetchLike; host?: boolean } = {},
+  opts: {
+    fetch?: FetchLike;
+    host?: boolean;
+    /** The join code of a session to link the new one with (one event). */
+    link_with?: string;
+  } = {},
 ) {
+  const body: Record<string, unknown> = { name, project_id };
+  if (opts.host) body.host = true;
+  if (opts.link_with) body.link_with = opts.link_with;
   return request<Session>("/api/sessions", {
     method: "POST",
     body: opts.host ? { name, project_id, host: true } : { name, project_id },
@@ -275,4 +283,86 @@ export async function getPlayerEventLog(
   // `request` JSON-parses when it can: a multi-line JSONL body comes back as
   // the raw string, but a single-line log parses into an object. Undo that.
   return typeof raw === "string" ? raw : JSON.stringify(raw);
+}
+
+// ---------- Linked sessions ----------
+
+/** One session of a linked group, as the pages name it. */
+export interface LinkedSession {
+  id: string;
+  join_code: string;
+  name: string;
+  status: string;
+  project_id: string;
+  project_name: string | null;
+  project_slug: string | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  player_count: number;
+  /** The session the page is about. */
+  current: boolean;
+}
+
+/** What one session contributed to a combined row. */
+export interface CombinedSessionPoints {
+  session_id: string;
+  points: number;
+  /** The player's place in that session, 1-based. */
+  rank: number;
+}
+
+/** One row of the combined standings across linked sessions — a player's
+ *  points added up by account. */
+export interface CombinedEntry {
+  user_id: string | null;
+  display_name: string;
+  username?: string | null;
+  avatar_url?: string | null;
+  total_points: number;
+  sessions_played: number;
+  per_session: CombinedSessionPoints[];
+}
+
+export interface SessionLinks {
+  group_id: string;
+  /** In the order they were linked. */
+  sessions: LinkedSession[];
+  /** Every session in the group has ended — the combined standings are final. */
+  all_finished: boolean;
+  leaderboard: CombinedEntry[];
+}
+
+/**
+ * The group a session is linked into — the sessions and the combined
+ * standings across them. `null` when it is linked to nothing (the endpoint
+ * answers 204). Public, like the by-code lookup.
+ */
+export async function getSessionLinks(
+  code: string,
+  opts: { fetch?: FetchLike } = {},
+): Promise<SessionLinks | null> {
+  const data = await request<SessionLinks | undefined>(
+    `/api/sessions/by-code/${encodeURIComponent(code)}/links`,
+    { fetch: opts.fetch },
+  );
+  return data ?? null;
+}
+
+/** Link session `id` with the one `joinCode` names. Host of both, or admin.
+ *  Answers with the group. */
+export function linkSession(id: string, joinCode: string, opts: { fetch?: FetchLike } = {}) {
+  return request<SessionLinks>(`/api/sessions/${encodeURIComponent(id)}/links`, {
+    method: "POST",
+    body: { join_code: joinCode },
+    fetch: opts.fetch,
+  });
+}
+
+/** Take session `id` out of its group. Host or admin. */
+export function unlinkSession(id: string, opts: { fetch?: FetchLike } = {}) {
+  return request<void>(`/api/sessions/${encodeURIComponent(id)}/links`, {
+    method: "DELETE",
+    fetch: opts.fetch,
+  });
 }

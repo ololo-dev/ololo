@@ -44,6 +44,7 @@ const baseSession = {
 
 const baseData = {
   session: baseSession,
+  links: null,
   isAuthenticated: false,
   isAdmin: false,
   allowProjectCreation: false,

@@ -5,11 +5,11 @@
   import type { LeaderboardEntry, MemberInfo, ScoreHistoryPoint, ActivityEvent, SessionHealthPayload } from "$lib/types/arena";
   import { indicatorFor } from "$lib/session-health";
   import type { PageData } from "./$types";
-  import type { SessionReportResponse } from "$lib/api";
-  import { patchSession, getSessionPlayerStats, getSessionReport, getSessionHealth } from "$lib/api";
+  import type { SessionLinks, SessionReportResponse } from "$lib/api";
+  import { patchSession, getSessionPlayerStats, getSessionReport, getSessionHealth, getSessionLinks } from "$lib/api";
   import type { SessionPlayerStatsResponse } from "$lib/api";
   import SessionPlayerStatsBlock from "$lib/components/session/SessionPlayerStatsBlock.svelte";
-  import { invalidateAll, replaceState } from "$app/navigation";
+  import { goto, invalidateAll, replaceState } from "$app/navigation";
   import { notify } from "$lib/notifications.svelte";
   import { WsSessionClient } from "$lib/ws-session.svelte";
   import SessionCongratsModal from "$lib/components/session/SessionCongratsModal.svelte";
@@ -24,6 +24,8 @@
   import TopBar from "$lib/components/session/TopBar.svelte";
   import SessionHeaderCard from "$lib/components/session/SessionHeaderCard.svelte";
   import SessionCampaignCard from "$lib/components/session/SessionCampaignCard.svelte";
+  import SessionLinksCard from "$lib/components/session/SessionLinksCard.svelte";
+  import { slideFromUrl, type ScreenSlide, type SlideTarget } from "$lib/session-links";
   import SessionReplay from "$lib/components/session/SessionReplay.svelte";
   import SessionScreen from "$lib/components/session/SessionScreen.svelte";
   import { createReplay } from "$lib/replay.svelte";
@@ -513,6 +515,65 @@
     setScreenUrl(false);
     if (browser && document.fullscreenElement) void document.exitFullscreen().catch(() => {});
   }
+  // ── Linked sessions ───────────────────────────────────────────────────────
+
+  // The group this session is linked with, from the page load; the host's
+  // link/unlink hands the card's answer back here, and while any of them is
+  // still running the page asks again now and then — the other rooms'
+  // finishes are not on this session's socket.
+  let links = $state<SessionLinks | null>(untrack(() => data.links ?? null));
+  const LINKS_POLL_MS = 30_000;
+  $effect(() => {
+    if (!browser || !links || links.all_finished) return;
+    const timer = setInterval(() => {
+      getSessionLinks(data.session.join_code)
+        .then((next) => {
+          if (next) links = next;
+        })
+        .catch(() => {});
+    }, LINKS_POLL_MS);
+    return () => clearInterval(timer);
+  });
+
+  // The board's slide: this session, or the group's combined standings
+  // (`?slide=overall`). The slider's choice outranks the URL the page opened
+  // with; another linked session is another page of this route — a
+  // navigation, which the route's keyed layout turns into a fresh board on
+  // the same fullscreen.
+  let slideOverride = $state<ScreenSlide | null>(null);
+  const slide = $derived<ScreenSlide>(slideOverride ?? slideFromUrl(page.url));
+  function setSlide(next: ScreenSlide) {
+    slideOverride = next;
+    if (!browser) return;
+    const url = new URL(window.location.href);
+    if (next === "overall") url.searchParams.set("slide", "overall");
+    else url.searchParams.delete("slide");
+    replaceState(url, page.state);
+  }
+  function onSlide(target: SlideTarget) {
+    if (target === "overall") {
+      setSlide("overall");
+    } else if (target.code === data.session.join_code) {
+      setSlide("session");
+    } else {
+      void goto(`/s/${target.code}?view=screen`);
+    }
+  }
+  // The last room to finish turns the board to the whole event: once every
+  // linked session has ended (seen by a poll while this board was up) and
+  // the congratulations have had their moment, the slider moves to Overall
+  // by itself. A board opened on an already-finished group stays where its
+  // URL says.
+  let allFinishedAtOpen = untrack(() => data.links?.all_finished ?? false);
+  let slidToOverall = $state(false);
+  $effect(() => {
+    if (slidToOverall || allFinishedAtOpen) return;
+    if (!screenMode || !links?.all_finished) return;
+    if (celebration === "waiting" || celebration === "shown") return;
+    slidToOverall = true;
+    setSlide("overall");
+  });
+
   // Esc out of the browser's fullscreen is the host leaving the board.
   function onFullscreenChange() {
     if (presenting === true && !document.fullscreenElement) leaveScreen();
@@ -570,6 +631,9 @@
   {resultSummary}
   exitHref="/s/{data.session.join_code}"
   onExit={leaveScreen}
+  {links}
+  {slide}
+  {onSlide}
 />
 {:else}
 <div class="-mx-6 -mt-8 min-h-screen" style="background: #f4f8fe;">
@@ -654,6 +718,13 @@
       {#if data.campaign}
         <SessionCampaignCard campaign={data.campaign} />
       {/if}
+      <SessionLinksCard
+        {links}
+        sessionId={data.session.id}
+        joinCode={data.session.join_code}
+        {canControl}
+        onChanged={(next) => (links = next)}
+      />
       {#if wsClient?.protocolMismatch}
         <div class="mb-[12px] rounded-[8px] bg-white px-[20px] py-[14px] text-[13px]" style="color: #fb341c;">
           Update required. Please refresh the page.
@@ -714,6 +785,13 @@
       {#if data.campaign}
         <SessionCampaignCard campaign={data.campaign} />
       {/if}
+      <SessionLinksCard
+        {links}
+        sessionId={data.session.id}
+        joinCode={data.session.join_code}
+        {canControl}
+        onChanged={(next) => (links = next)}
+      />
 
       <!-- Activity log (Statistics is a finished-session summary — omitted
            while the session is still running) -->
@@ -799,6 +877,13 @@
       {#if data.campaign}
         <SessionCampaignCard campaign={data.campaign} />
       {/if}
+      <SessionLinksCard
+        {links}
+        sessionId={data.session.id}
+        joinCode={data.session.join_code}
+        {canControl}
+        onChanged={(next) => (links = next)}
+      />
 
       <!-- Statistics + Activity log. The outcome blocks are the session's
            result, so a replay in flight hides them until it reaches the

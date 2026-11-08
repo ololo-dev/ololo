@@ -17,6 +17,9 @@ import {
   listTasks,
   listAgents,
   registerAgent,
+  getSessionLinks,
+  linkSession,
+  unlinkSession,
 } from "./sessions";
 import type { RegisterAgentBody } from "./types";
 
@@ -181,5 +184,31 @@ describe("sessions api", () => {
     mockRequest.mockResolvedValue({ id: "s/1" });
     await getSession("s/1");
     expect(mockRequest).toHaveBeenCalledWith("/api/sessions/s%2F1", { fetch: undefined });
+  });
+
+  it("getSessionLinks GETs the public links endpoint and turns a 204 into null", async () => {
+    mockRequest.mockResolvedValue(undefined);
+    expect(await getSessionLinks("abc123")).toBeNull();
+    expect(mockRequest).toHaveBeenCalledWith("/api/sessions/by-code/abc123/links", {
+      fetch: undefined,
+    });
+    const group = { group_id: "g", sessions: [], all_finished: false, leaderboard: [] };
+    mockRequest.mockResolvedValue(group);
+    expect(await getSessionLinks("ABC123")).toEqual(group);
+  });
+
+  it("linkSession POSTs the join code; unlinkSession DELETEs", async () => {
+    mockRequest.mockResolvedValue({});
+    await linkSession("s1", "XYZ789");
+    expect(mockRequest).toHaveBeenCalledWith("/api/sessions/s1/links", {
+      method: "POST",
+      body: { join_code: "XYZ789" },
+      fetch: undefined,
+    });
+    await unlinkSession("s1");
+    expect(mockRequest).toHaveBeenCalledWith("/api/sessions/s1/links", {
+      method: "DELETE",
+      fetch: undefined,
+    });
   });
 });

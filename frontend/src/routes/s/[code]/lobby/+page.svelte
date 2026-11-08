@@ -1,14 +1,16 @@
 <script lang="ts">
   import { browser } from "$app/environment";
   import { goto, invalidateAll } from "$app/navigation";
-  import { onMount, onDestroy } from "svelte";
+  import { onMount, onDestroy, untrack } from "svelte";
   import type { PageData } from "./$types";
   import type { MemberInfo } from "$lib/types/arena";
+  import type { SessionLinks } from "$lib/api";
   import { getToken, initAuth } from "$lib/auth";
   import { patchSession } from "$lib/api";
   import { notify } from "$lib/notifications.svelte";
   import { WsSessionClient } from "$lib/ws-session.svelte";
   import SessionLobby from "$lib/components/session/SessionLobby.svelte";
+  import SessionLinksCard from "$lib/components/session/SessionLinksCard.svelte";
   import Button from "$lib/components/ui/Button.svelte";
   import { countdownDigits as toDigits } from "$lib/format";
 
@@ -19,6 +21,10 @@
   const canControl = $derived(isOwner || isAdmin);
 
   let controlBusy = $state(false);
+
+  // The sessions this one is linked with — the host sets the group up here,
+  // before the start, and the card hands its changes back.
+  let links = $state<SessionLinks | null>(untrack(() => data.links ?? null));
 
   async function cancelSession(): Promise<void> {
     if (controlBusy) return;
@@ -214,6 +220,15 @@
           </div>
         {/if}
         <SessionLobby {participants} />
+        <div class="mt-[20px]">
+          <SessionLinksCard
+            {links}
+            sessionId={data.session.id}
+            joinCode={data.session.join_code}
+            {canControl}
+            onChanged={(next) => (links = next)}
+          />
+        </div>
       </div>
 
     </div>

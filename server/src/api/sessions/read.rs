@@ -841,25 +841,16 @@ pub async fn get_project_sessions(
 ///
 /// Unauthenticated lookup of a session by its join code. Returns a minimal
 /// public view: `{ id, join_code, state, project_id, project_name, project_slug }`.
-/// Rate-limited by IP.
+/// Rate-limited by IP — misses spend the budget, hits are free.
 pub async fn get_by_code(
     conn_info: Option<ConnectInfo<SocketAddr>>,
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(code): Path<String>,
 ) -> Response {
-    let ip = extract_ip(&headers, conn_info.as_ref());
-    if !state.rate_limiter.check_and_record(&ip) {
-        return SessionError::RateLimited.into_response();
-    }
-    let row = match sessions::Entity::find()
-        .filter(sessions::Column::JoinCode.eq(code.to_uppercase()))
-        .one(&state.db)
-        .await
-    {
-        Ok(Some(r)) => r,
-        Ok(None) => return SessionError::NotFound.into_response(),
-        Err(e) => return SessionError::Db(e).into_response(),
+    let row = match find_public_by_code(&state, &headers, conn_info.as_ref(), &code).await {
+        Ok(r) => r,
+        Err(e) => return e.into_response(),
     };
     // Fetch project info for the link displayed on the public spectator page.
     let project = projects::Entity::find_by_id(row.project_id_fk)
@@ -956,16 +947,7 @@ pub async fn get_campaign_by_code(
     headers: HeaderMap,
     Path(code): Path<String>,
 ) -> Result<Response, SessionError> {
-    let ip = extract_ip(&headers, conn_info.as_ref());
-    if !state.rate_limiter.check_and_record(&ip) {
-        return Err(SessionError::RateLimited);
-    }
-
-    let session = sessions::Entity::find()
-        .filter(sessions::Column::JoinCode.eq(code.to_uppercase()))
-        .one(&state.db)
-        .await?
-        .ok_or(SessionError::NotFound)?;
+    let session = find_public_by_code(&state, &headers, conn_info.as_ref(), &code).await?;
 
     let project = projects::Entity::find_by_id(session.project_id_fk)
         .one(&state.db)

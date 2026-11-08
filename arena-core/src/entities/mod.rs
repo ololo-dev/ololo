@@ -24,6 +24,7 @@ pub mod probes;
 pub mod project_repos;
 pub mod projects;
 pub mod refresh_tokens;
+pub mod session_links;
 pub mod session_scheduler_state;
 pub mod sessions;
 pub mod similarity_reports;

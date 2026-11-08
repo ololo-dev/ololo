@@ -39,6 +39,12 @@ impl RateLimiter for CountingRateLimiter {
         *c += 1;
         true
     }
+    fn check(&self, _ip: &str) -> bool {
+        *self.count.lock().unwrap() < self.max
+    }
+    fn record(&self, _ip: &str) {
+        *self.count.lock().unwrap() += 1;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -428,6 +434,61 @@ async fn test_rate_limit_429() {
     let (status, body) = join(&app, &cookie, "AAAAAA").await;
     assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "body={body}");
     assert_eq!(body, serde_json::json!({"error": "rate_limited"}));
+}
+
+/// A lookup that finds its session is no guess: with a budget of 2, a page
+/// may read a code it holds any number of times, and only misses count.
+#[tokio::test]
+async fn by_code_lookups_spend_the_budget_only_on_misses() {
+    let state = test_state_counting(2).await;
+    let app = build_router(state);
+    let (_, cookie) = register_and_login(app.clone(), "host@x.test", "password-12345").await;
+    let (status, body) = create_session(&app, &cookie, "Room").await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let code = body["join_code"].as_str().expect("join code").to_string();
+
+    let get = |path: String| {
+        let app = app.clone();
+        async move {
+            let resp = app
+                .oneshot(req(Method::GET, &path, None, None))
+                .await
+                .expect("lookup");
+            resp.status()
+        }
+    };
+    for _ in 0..5 {
+        assert_eq!(
+            get(format!("/api/sessions/by-code/{code}")).await,
+            StatusCode::OK
+        );
+        // Campaign and links answer 204 for a plain session — found, not a miss.
+        assert_eq!(
+            get(format!("/api/sessions/by-code/{code}/campaign")).await,
+            StatusCode::NO_CONTENT
+        );
+        assert_eq!(
+            get(format!("/api/sessions/by-code/{code}/links")).await,
+            StatusCode::NO_CONTENT
+        );
+    }
+    // Two misses fit the budget; the third is refused, and so is a hit now.
+    assert_eq!(
+        get("/api/sessions/by-code/ZZZZZZ".into()).await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        get("/api/sessions/by-code/ZZZZZY/links".into()).await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        get("/api/sessions/by-code/ZZZZZX".into()).await,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    assert_eq!(
+        get(format!("/api/sessions/by-code/{code}")).await,
+        StatusCode::TOO_MANY_REQUESTS
+    );
 }
 
 /// TC-11: collision retry — marked `#[ignore]`.

@@ -63,6 +63,7 @@ mod public_judges;
 mod resolve_join_code;
 mod seed_real_judges;
 mod session_health_api;
+mod session_links;
 mod session_player_metadata_patch;
 mod session_player_metadata_validation;
 mod session_report_api;

@@ -41,6 +41,12 @@ impl RateLimiter for CountingRateLimiter {
         *c += 1;
         true
     }
+    fn check(&self, _ip: &str) -> bool {
+        *self.count.lock().unwrap() < self.max
+    }
+    fn record(&self, _ip: &str) {
+        *self.count.lock().unwrap() += 1;
+    }
 }
 
 // ---------------------------------------------------------------------------

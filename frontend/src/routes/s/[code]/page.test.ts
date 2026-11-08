@@ -15,9 +15,13 @@ vi.mock("$lib/api", () => ({
   patchSession: (...args: unknown[]) => patchSessionMock(...args),
   getSessionPlayerStats: async () => ({ total_tasks: 0, players: [] }),
   getSessionHealth: async () => ({ thresholds: { green_min: 70, amber_min: 55 }, players: {} }),
+  getSessionLinks: async () => null,
+  linkSession: vi.fn(),
+  unlinkSession: vi.fn(),
 }));
 
 vi.mock("$app/navigation", () => ({
+  goto: vi.fn(async () => {}),
   invalidateAll: vi.fn(async () => {}),
   replaceState: vi.fn(),
 }));
@@ -82,6 +86,7 @@ const baseData = {
   session: baseSession,
   report: null,
   campaign: null,
+  links: null,
   isAuthenticated: false,
   isAdmin: false,
   allowProjectCreation: false,

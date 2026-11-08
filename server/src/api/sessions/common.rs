@@ -20,6 +20,12 @@ pub struct CreateSessionReq {
     /// popup; `ololo start` leaves it off, since it joins what it creates.
     #[serde(default)]
     pub host: bool,
+    /// The join code of a session to link the new one with — a host
+    /// creating the rooms of one event links them as they come. The caller
+    /// must host that session too (or be an admin), as with
+    /// `POST /api/sessions/:id/links`.
+    #[serde(default)]
+    pub link_with: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -224,6 +230,11 @@ pub enum SessionError {
     TooManyHostedSessions {
         limit: u64,
     },
+    /// A session cannot be linked with itself.
+    LinkToSelf,
+    /// Linked sessions run one project: the group is one brief in several
+    /// rooms, and its combined standings only add up on one task list.
+    LinkAcrossProjects,
     Db(DbErr),
 }
 
@@ -258,6 +269,8 @@ crate::api::error::impl_api_error!(SessionError {
     Self::PersonalProject => (FORBIDDEN, "personal_project"),
     Self::TooManyHostedSessions { limit } =>
         (CONFLICT, "too_many_hosted_sessions", "limit": limit),
+    Self::LinkToSelf => (CONFLICT, "link_to_self"),
+    Self::LinkAcrossProjects => (CONFLICT, "link_across_projects"),
     Self::Db(_) => (INTERNAL_SERVER_ERROR, "database_error"),
 });
 pub(crate) fn parse_user_id(claims: &AccessClaims) -> Result<Uuid, SessionError> {
@@ -639,6 +652,31 @@ pub(crate) fn extract_ip(
     conn_info: Option<&ConnectInfo<SocketAddr>>,
 ) -> String {
     crate::client_ip::client_ip_str(headers, conn_info.map(|ci| ci.0.ip()))
+}
+
+/// The session a public page named by join code, under the per-IP guess
+/// limit: the caller's budget is checked first and spent only on a miss. A
+/// lookup that finds its session is no guess — a board flipping between
+/// linked rooms, or a workshop's worth of players behind one address, must
+/// never run out of lookups for codes they already hold. Case-insensitive.
+pub(crate) async fn find_public_by_code(
+    state: &crate::state::AppState,
+    headers: &HeaderMap,
+    conn_info: Option<&ConnectInfo<SocketAddr>>,
+    code: &str,
+) -> Result<sessions::Model, SessionError> {
+    let ip = extract_ip(headers, conn_info);
+    if !state.rate_limiter.check(&ip) {
+        return Err(SessionError::RateLimited);
+    }
+    let found = sessions::Entity::find()
+        .filter(sessions::Column::JoinCode.eq(code.to_uppercase()))
+        .one(&state.db)
+        .await?;
+    found.ok_or_else(|| {
+        state.rate_limiter.record(&ip);
+        SessionError::NotFound
+    })
 }
 
 #[cfg(test)]

@@ -149,13 +149,27 @@ describe("StartSessionPopup", () => {
 
     await waitFor(() => expect(rows(container)).toHaveLength(2));
     // Hosted, not started: the server lets a host have several at once.
+    // The second room is linked with the first by default — one event.
     expect(hoisted.createSession).toHaveBeenNthCalledWith(1, "Extreme Startup", "p-1", {
       host: true,
     });
     expect(hoisted.createSession).toHaveBeenNthCalledWith(2, "Extreme Startup", "p-1", {
       host: true,
+      link_with: "AAAAAA",
     });
     expect(getByRole("button", { name: "Copy all join commands" })).toBeTruthy();
+  });
+
+  it("creates a session of its own when the link box is unticked", async () => {
+    hoisted.listProjectSessions.mockResolvedValue([session({ join_code: "AAAAAA" })]);
+    hoisted.createSession.mockResolvedValue(session({ join_code: "BBBBBB" }));
+    const { findByRole, findByTestId } = await openHosting("extreme-startup");
+    const box = (await findByTestId("host-link-with-live")) as HTMLInputElement;
+    expect(box.checked).toBe(true);
+    await fireEvent.click(box);
+    await fireEvent.click(await findByRole("button", { name: "+ Create another session" }));
+    await waitFor(() => expect(hoisted.createSession).toHaveBeenCalledTimes(1));
+    expect(hoisted.createSession).toHaveBeenCalledWith("Extreme Startup", "p-1", { host: true });
   });
 
   it("reads the project by slug only for an admin who was not handed it", async () => {
@@ -266,8 +280,10 @@ describe("StartSessionPopup", () => {
       ]);
       await fireEvent.click(await findByRole("button", { name: "+ Create another session" }));
       await waitFor(() => expect(rows(container)).toHaveLength(2));
+      // A workshop's rooms: the new one is linked with the live one by default.
       expect(hoisted.createSession).toHaveBeenCalledWith("Game of Life", "p-personal", {
         host: true,
+        link_with: "GRPAAA",
       });
     });
 

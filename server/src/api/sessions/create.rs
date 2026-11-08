@@ -69,6 +69,28 @@ pub async fn post_create(
     // actionable "finish the session you're in" wins when both apply.
     ensure_campaign_unlocked(&state.db, &project, user_id).await?;
 
+    // The session to link the new one with, checked before the row exists:
+    // a code that names nothing, a session the caller does not host, or one
+    // of another project is refused without leaving an orphan lobby.
+    let link_with = match &req.link_with {
+        Some(code) => {
+            let code = validate_join_code(code)?;
+            let other = sessions::Entity::find()
+                .filter(sessions::Column::JoinCode.eq(code))
+                .one(&state.db)
+                .await?
+                .ok_or(SessionError::NotFound)?;
+            if !admin && other.owner_id_fk != Some(user_id) {
+                return Err(SessionError::Forbidden);
+            }
+            if other.project_id_fk != project.id {
+                return Err(SessionError::LinkAcrossProjects);
+            }
+            Some(other.id)
+        }
+        None => None,
+    };
+
     let now = Utc::now();
     let id = Uuid::new_v4();
 
@@ -150,6 +172,17 @@ pub async fn post_create(
                 let lt_jc = jc.clone();
                 let lt_secs = state.lobby_timer_secs;
                 tokio::spawn(lobby_timer(lt_state, model.id, lt_jc, project_id, lt_secs));
+
+                // Linked with the room the host named: one event, read
+                // together — the named room first, the new one after it,
+                // in the order the host made them. A session that failed
+                // to link is still a session: logged, not returned.
+                if let Some(other) = link_with
+                    && let Err(e) =
+                        arena_core::session_links::link(&state.db, other, session_id).await
+                {
+                    tracing::warn!(session_id = %session_id, error = %e, "could not link the new session");
+                }
 
                 return Ok((StatusCode::CREATED, Json(to_summary(model, Some(jc)))).into_response());
             }

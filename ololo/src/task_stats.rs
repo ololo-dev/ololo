@@ -40,6 +40,13 @@ pub fn spawn_reporter(
         let client = reqwest::Client::new();
         let http_base = crate::util::http_base_url(&server_url);
         let cwd = std::env::current_dir().ok();
+        // The agents' machine configuration for the Agentic judge rides the
+        // same queue: once now, after every batch of finished tasks (a skill
+        // or MCP server added mid-session reaches the judge before the end),
+        // and once more as the queue closes. One task, so the reports land
+        // in the order they were read — a late start report can never
+        // overwrite the end one.
+        crate::agent_setup::report(&server_url, &pat, &session_code).await;
         while let Some(first) = rx.recv().await {
             // Drain everything already queued into one batch. The scan
             // dominates the cost — agent-tokens walks EVERY local agent
@@ -128,7 +135,10 @@ pub fn spawn_reporter(
                     }
                 }
             }
+            crate::agent_setup::report(&server_url, &pat, &session_code).await;
         }
+        // The queue closed: the session is over for this CLI.
+        crate::agent_setup::report(&server_url, &pat, &session_code).await;
     });
     (tx, handle)
 }

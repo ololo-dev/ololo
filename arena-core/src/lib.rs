@@ -19,6 +19,7 @@ pub mod sandbox;
 pub mod scoring;
 pub mod seasons;
 pub mod session_completion;
+pub mod session_links;
 pub mod session_status;
 pub mod settings_encryption;
 pub mod snapshot_message;

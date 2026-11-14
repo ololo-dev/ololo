@@ -265,6 +265,178 @@ fn opencode_extractor_parses_db() {
     }
 }
 
+/// opencode 2.x: sessions in `session_v2`, messages in `session_message`
+/// with the role in a column, the model nested under `data.model` and the
+/// tool calls inside the reply's `content`. A game restarted with `/new` is
+/// two conversations in one folder.
+#[test]
+fn opencode_extractor_parses_v2_db() {
+    let tmp = tempfile::tempdir().unwrap();
+    let data_dir = tmp.path().join("data");
+    fs::create_dir_all(data_dir.join("opencode")).unwrap();
+    let db_path = data_dir.join("opencode/opencode.db");
+    let conn = Connection::open(&db_path).unwrap();
+
+    conn.execute_batch(
+        "CREATE TABLE session_v2 (
+            id TEXT PRIMARY KEY,
+            directory TEXT NOT NULL,
+            model TEXT,
+            cost REAL DEFAULT 0 NOT NULL,
+            tokens_input INTEGER DEFAULT 0 NOT NULL,
+            tokens_output INTEGER DEFAULT 0 NOT NULL,
+            tokens_reasoning INTEGER DEFAULT 0 NOT NULL,
+            tokens_cache_read INTEGER DEFAULT 0 NOT NULL,
+            tokens_cache_write INTEGER DEFAULT 0 NOT NULL,
+            time_created INTEGER NOT NULL,
+            time_updated INTEGER NOT NULL
+        );
+        CREATE TABLE session_message (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            type TEXT NOT NULL,
+            seq INTEGER NOT NULL,
+            time_created INTEGER NOT NULL,
+            time_updated INTEGER NOT NULL,
+            data TEXT NOT NULL
+        );
+        CREATE TABLE session_part (
+            message_id TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            ordinal INTEGER NOT NULL,
+            type TEXT NOT NULL,
+            time_created INTEGER NOT NULL,
+            data TEXT NOT NULL
+        );",
+    )
+    .unwrap();
+
+    let model = r#"{"id":"gemini-4-hydrogen","providerID":"github-copilot"}"#;
+    for (id, input, output, cost, created) in [
+        ("ses-a", 400u64, 60u64, 1.5f64, 1000i64),
+        ("ses-b", 100, 10, 0.5, 5000),
+    ] {
+        conn.execute(
+            "INSERT INTO session_v2 (id, directory, model, cost, tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, time_created, time_updated)
+             VALUES (?1, '/tmp/game', ?2, ?3, ?4, ?5, 7, 900, ?6, ?6 + 100)",
+            rusqlite::params![id, model, cost, input, output, created],
+        )
+        .unwrap();
+    }
+
+    let reply = |input: u64, tool: &str| {
+        serde_json::json!({
+            "model": {"id": "gemini-4-hydrogen", "providerID": "github-copilot", "variant": "default"},
+            "content": [
+                {"type": "reasoning", "text": "thinking"},
+                {"type": "tool", "name": tool, "state": {"status": "completed", "input": {"path": "a.js"}}},
+            ],
+            "cost": 0.25,
+            "tokens": {"input": input, "output": 20, "reasoning": 3, "cache": {"read": 300, "write": 0}},
+        })
+        .to_string()
+    };
+    let failed = serde_json::json!({
+        "model": {"id": "gemini-4-hydrogen", "providerID": "github-copilot"},
+        "content": [],
+        "error": {"message": "too many images"},
+    })
+    .to_string();
+    let rows: Vec<(&str, &str, &str, i64, String)> = vec![
+        ("m1", "ses-a", "user", 1000, r#"{"text":"build it"}"#.into()),
+        ("m2", "ses-a", "assistant", 1100, reply(100, "write")),
+        ("m3", "ses-a", "assistant", 1200, reply(150, "shell")),
+        ("m4", "ses-a", "assistant", 1300, failed),
+        (
+            "m5",
+            "ses-a",
+            "idle",
+            1400,
+            r#"{"outcome":"succeeded"}"#.into(),
+        ),
+        ("m6", "ses-b", "user", 5000, r#"{"text":"continue"}"#.into()),
+        ("m7", "ses-b", "assistant", 5100, reply(50, "write")),
+        (
+            "m8",
+            "ses-b",
+            "synthetic",
+            5200,
+            r#"{"text":"shell done"}"#.into(),
+        ),
+    ];
+    for (seq, (id, session, kind, ts, data)) in rows.iter().enumerate() {
+        conn.execute(
+            "INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6)",
+            rusqlite::params![id, session, kind, seq as i64, ts, data],
+        )
+        .unwrap();
+    }
+    conn.close().unwrap();
+
+    // SAFETY: see opencode_extractor_parses_db.
+    unsafe {
+        std::env::set_var("XDG_DATA_HOME", &data_dir);
+        std::env::set_var("AGENT_TOKENS_HOME", tmp.path());
+    }
+
+    use agent_tokens::extractors::OpenCode;
+    let opencode = OpenCode;
+
+    // Lifetime totals: one row per conversation, from the session table.
+    let mut lifetime = opencode.extract(None);
+    lifetime.sort_by(|a, b| a.session_id.cmp(&b.session_id));
+    assert_eq!(lifetime.len(), 2);
+    assert_eq!(lifetime[0].counts.input, 400);
+    assert_eq!(lifetime[0].counts.cache_read, 900);
+    assert_eq!(lifetime[0].cost, Some(1.5));
+    assert_eq!(lifetime[1].cwd.as_deref(), Some("/tmp/game"));
+
+    // The window the CLI asks for during a game: summed from the replies.
+    let mut window = opencode.extract(Some(0));
+    window.sort_by(|a, b| a.session_id.cmp(&b.session_id));
+    assert_eq!(window.len(), 2, "both conversations of the game");
+    let a = &window[0];
+    assert_eq!(a.counts.input, 250);
+    assert_eq!(a.counts.output, 40);
+    assert_eq!(a.counts.reasoning, 6);
+    assert_eq!(a.counts.cache_read, 600);
+    assert_eq!(a.cost, Some(0.5));
+    assert_eq!(a.cwd.as_deref(), Some("/tmp/game"));
+    let model: serde_json::Value = serde_json::from_str(a.model.as_deref().unwrap()).unwrap();
+    assert_eq!(model["id"], "gemini-4-hydrogen");
+    assert_eq!(model["providerID"], "github-copilot");
+    assert_eq!(window[1].counts.input, 50);
+
+    // A cutoff leaves the earlier conversation out.
+    let late = opencode.extract(Some(4000));
+    assert_eq!(late.len(), 1);
+    assert_eq!(late[0].session_id, "ses-b");
+
+    let mut stats = opencode.stats(Some(0));
+    stats.sort_by(|a, b| a.session_id.cmp(&b.session_id));
+    assert_eq!(stats.len(), 2);
+    assert_eq!(stats[0].user_messages, 1);
+    assert_eq!(
+        stats[0].assistant_messages, 3,
+        "idle markers are not replies"
+    );
+    assert_eq!(stats[0].tool_calls, 2);
+    assert_eq!(stats[0].tools.get("write"), Some(&1));
+    assert_eq!(stats[0].tools.get("shell"), Some(&1));
+    assert_eq!(stats[0].cwd.as_deref(), Some("/tmp/game"));
+    assert_eq!(
+        stats[1].assistant_messages, 1,
+        "shell output is not a reply"
+    );
+    assert_eq!(stats[1].tool_calls, 1);
+
+    unsafe {
+        std::env::remove_var("XDG_DATA_HOME");
+        std::env::remove_var("AGENT_TOKENS_HOME");
+    }
+}
+
 #[test]
 fn detect_does_not_panic() {
     use agent_tokens::extractors::{

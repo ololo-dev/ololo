@@ -6,6 +6,101 @@ use std::collections::HashMap;
 
 pub struct OpenCode;
 
+/// opencode 2.x renamed its tables and moved the message metadata around; the
+/// token columns of the session table stayed the same.
+///
+/// | | before 2.x | 2.x |
+/// |---|---|---|
+/// | sessions | `session` | `session_v2` |
+/// | messages | `message`, role in `data.role` | `session_message`, role in the `type` column |
+/// | model of a reply | `data.providerID` / `data.modelID` | `data.model.{providerID,id}` |
+/// | tool calls | rows of `part` | `data.content[]` of the reply |
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Layout {
+    Legacy,
+    V2,
+}
+
+impl Layout {
+    fn detect(conn: &rusqlite::Connection) -> Self {
+        let has_v2 = conn
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_v2'",
+                [],
+                |_| Ok(()),
+            )
+            .is_ok();
+        if has_v2 { Layout::V2 } else { Layout::Legacy }
+    }
+
+    fn session_table(self) -> &'static str {
+        match self {
+            Layout::Legacy => "session",
+            Layout::V2 => "session_v2",
+        }
+    }
+
+    /// `session_id, time_created, role, data` of every message from `?1` on.
+    /// The role is NULL where the layout keeps it inside `data`.
+    fn messages_sql(self) -> &'static str {
+        match self {
+            Layout::Legacy => {
+                "SELECT session_id, time_created, NULL, data FROM message \
+                 WHERE time_created >= ?1 ORDER BY time_created"
+            }
+            Layout::V2 => {
+                "SELECT session_id, time_created, type, data FROM session_message \
+                 WHERE time_created >= ?1 ORDER BY time_created"
+            }
+        }
+    }
+}
+
+/// One message row: (session id, created at, role, parsed `data`).
+type Message = (String, i64, String, serde_json::Value);
+
+fn messages(conn: &rusqlite::Connection, layout: Layout, since: i64) -> Vec<Message> {
+    let mut stmt = match conn.prepare(layout.messages_sql()) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!("opencode message query failed: {e}");
+            return vec![];
+        }
+    };
+    let Ok(rows) = stmt.query_map(rusqlite::params![since], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, i64>(1)?,
+            r.get::<_, Option<String>>(2)?,
+            r.get::<_, String>(3)?,
+        ))
+    }) else {
+        return vec![];
+    };
+    rows.flatten()
+        .filter_map(|(session_id, ts, role, data_json)| {
+            let data = serde_json::from_str::<serde_json::Value>(&data_json).ok()?;
+            let role = role
+                .or_else(|| data.get("role")?.as_str().map(str::to_string))
+                .unwrap_or_default();
+            Some((session_id, ts, role, data))
+        })
+        .collect()
+}
+
+/// (provider, model) of an assistant message, in either layout.
+fn message_model(data: &serde_json::Value) -> (String, String) {
+    let text = |v: Option<&serde_json::Value>| v.and_then(|x| x.as_str()).map(str::to_string);
+    let model = data.get("model");
+    let provider = text(model.and_then(|m| m.get("providerID")))
+        .or_else(|| text(data.get("providerID")))
+        .unwrap_or_else(|| "—".to_string());
+    let id = text(model.and_then(|m| m.get("id")))
+        .or_else(|| text(data.get("modelID")))
+        .unwrap_or_else(|| "—".to_string());
+    (provider, id)
+}
+
 impl TokenExtractor for OpenCode {
     fn id(&self) -> AgentId {
         AgentId::OpenCode
@@ -25,16 +120,21 @@ impl TokenExtractor for OpenCode {
             }
         };
 
+        let layout = Layout::detect(&conn);
+
         if let Some(cutoff) = since {
             // Per-window mode: query individual messages within the time window,
             // sum their per-turn token counts per session.
-            return extract_opencode_window(&conn, cutoff, &db_path);
+            return extract_opencode_window(&conn, layout, cutoff, &db_path);
         }
 
         // Session-lifetime mode: read pre-aggregated totals from session table
-        let sql = "SELECT id, model, tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write, cost, directory, time_created, time_updated FROM session";
+        let sql = format!(
+            "SELECT id, model, tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write, cost, directory, time_created, time_updated FROM {}",
+            layout.session_table()
+        );
 
-        let mut stmt = match conn.prepare(sql) {
+        let mut stmt = match conn.prepare(&sql) {
             Ok(s) => s,
             Err(e) => {
                 tracing::warn!("opencode db query failed: {e}");
@@ -80,51 +180,68 @@ impl TokenExtractor for OpenCode {
             }
         };
 
+        let layout = Layout::detect(&conn);
         let mut sessions: HashMap<String, SessionStats> = HashMap::new();
         let mut session_cwd: HashMap<String, Option<String>> = HashMap::new();
-        if let Ok(mut stmt) = conn.prepare("SELECT id, directory FROM session")
-            && let Ok(rows) = stmt.query_map([], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
-            })
-        {
+        if let Ok(mut stmt) = conn.prepare(&format!(
+            "SELECT id, directory FROM {}",
+            layout.session_table()
+        )) && let Ok(rows) = stmt.query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
+        }) {
             for r in rows.flatten() {
                 session_cwd.insert(r.0, r.1);
             }
         }
+        let fresh = |session_id: &str| {
+            let mut s = SessionStats::new(AgentId::OpenCode, session_id.to_string());
+            s.cwd = session_cwd.get(session_id).cloned().flatten();
+            s.source_file = Some(db_path.clone());
+            s
+        };
+        let empty = serde_json::Value::Null;
 
-        // Message roles
-        if let Ok(mut stmt) = conn
-            .prepare("SELECT session_id, time_created, data FROM message WHERE time_created >= ?1")
-            && let Ok(rows) = stmt.query_map(rusqlite::params![since.unwrap_or(0)], |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, i64>(1)?,
-                    r.get::<_, String>(2)?,
-                ))
-            })
-        {
-            for (session_id, ts, data_json) in rows.flatten() {
-                let Ok(data) = serde_json::from_str::<serde_json::Value>(&data_json) else {
+        for (session_id, ts, role, data) in messages(&conn, layout, since.unwrap_or(0)) {
+            // 2.x also stores idle markers, notices and shell output here.
+            if role != "user" && role != "assistant" {
+                continue;
+            }
+            let stats = sessions
+                .entry(session_id.clone())
+                .or_insert_with(|| fresh(&session_id));
+            if role == "user" {
+                stats.user_messages += 1;
+            } else {
+                stats.assistant_messages += 1;
+            }
+            stats.touch_ts(Some(ts));
+            // 2.x keeps the tool calls of a reply in its content:
+            // {"type":"tool","name":..,"state":{"input":..}}
+            for part in data
+                .get("content")
+                .and_then(|c| c.as_array())
+                .into_iter()
+                .flatten()
+            {
+                if part.get("type").and_then(|t| t.as_str()) != Some("tool") {
+                    continue;
+                }
+                let Some(tool) = part.get("name").and_then(|t| t.as_str()) else {
                     continue;
                 };
-                let stats = sessions.entry(session_id.clone()).or_insert_with(|| {
-                    let mut s = SessionStats::new(AgentId::OpenCode, session_id.clone());
-                    s.cwd = session_cwd.get(&session_id).cloned().flatten();
-                    s.source_file = Some(db_path.clone());
-                    s
-                });
-                stats.touch_ts(Some(ts));
-                match data.get("role").and_then(|r| r.as_str()) {
-                    Some("user") => stats.user_messages += 1,
-                    Some("assistant") => stats.assistant_messages += 1,
-                    _ => {}
-                }
+                let args = part
+                    .get("state")
+                    .and_then(|s| s.get("input"))
+                    .unwrap_or(&empty);
+                stats.record_tool(tool, args);
             }
         }
 
-        // Tool calls live in the part table: data JSON {"type":"tool","tool":name,"state":{"input":...}}
-        if let Ok(mut stmt) =
-            conn.prepare("SELECT session_id, time_created, data FROM part WHERE time_created >= ?1")
+        // Before 2.x tool calls live in the part table: data JSON
+        // {"type":"tool","tool":name,"state":{"input":...}}
+        if layout == Layout::Legacy
+            && let Ok(mut stmt) = conn
+                .prepare("SELECT session_id, time_created, data FROM part WHERE time_created >= ?1")
             && let Ok(rows) = stmt.query_map(rusqlite::params![since.unwrap_or(0)], |r| {
                 Ok((
                     r.get::<_, String>(0)?,
@@ -143,14 +260,10 @@ impl TokenExtractor for OpenCode {
                 let Some(tool) = data.get("tool").and_then(|t| t.as_str()) else {
                     continue;
                 };
-                let stats = sessions.entry(session_id.clone()).or_insert_with(|| {
-                    let mut s = SessionStats::new(AgentId::OpenCode, session_id.clone());
-                    s.cwd = session_cwd.get(&session_id).cloned().flatten();
-                    s.source_file = Some(db_path.clone());
-                    s
-                });
+                let stats = sessions
+                    .entry(session_id.clone())
+                    .or_insert_with(|| fresh(&session_id));
                 stats.touch_ts(Some(ts));
-                let empty = serde_json::Value::Null;
                 let args = data
                     .get("state")
                     .and_then(|s| s.get("input"))
@@ -170,111 +283,75 @@ type SessionMeta = (Option<String>, Option<String>, Option<i64>, Option<i64>);
 /// Each message row has a `data` JSON column with a `tokens` object and `cost` field.
 fn extract_opencode_window(
     conn: &rusqlite::Connection,
+    layout: Layout,
     since: i64,
     db_path: &std::path::Path,
 ) -> Vec<SessionCounts> {
     // Get session metadata for all sessions
     let mut session_meta: HashMap<String, SessionMeta> = HashMap::new();
-    if let Ok(mut stmt) =
-        conn.prepare("SELECT id, model, directory, time_created, time_updated FROM session")
-        && let Ok(rows) = stmt.query_map([], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, Option<String>>(1)?,
-                r.get::<_, Option<String>>(2)?,
-                r.get::<_, Option<i64>>(3)?,
-                r.get::<_, Option<i64>>(4)?,
-            ))
-        })
-    {
+    if let Ok(mut stmt) = conn.prepare(&format!(
+        "SELECT id, model, directory, time_created, time_updated FROM {}",
+        layout.session_table()
+    )) && let Ok(rows) = stmt.query_map([], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, Option<String>>(1)?,
+            r.get::<_, Option<String>>(2)?,
+            r.get::<_, Option<i64>>(3)?,
+            r.get::<_, Option<i64>>(4)?,
+        ))
+    }) {
         for r in rows.flatten() {
             session_meta.insert(r.0, (r.1, r.2, r.3, r.4));
         }
     }
 
-    // Query messages within the time window, sum tokens per session
-    let sql = "SELECT session_id, time_created, data FROM message WHERE time_created >= ?1 ORDER BY time_created";
-    let mut stmt = match conn.prepare(sql) {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::warn!("opencode message query failed: {e}");
-            return vec![];
-        }
-    };
-
-    let rows = stmt
-        .query_map(rusqlite::params![since], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, i64>(1)?,
-                row.get::<_, String>(2)?,
-            ))
-        })
-        .ok();
-
     let mut agg: HashMap<(String, String, String), WindowAgg> = HashMap::new();
 
-    if let Some(iter) = rows {
-        for r in iter.flatten() {
-            let (session_id, time_created, data_json) = r;
-            let Ok(data) = serde_json::from_str::<serde_json::Value>(&data_json) else {
-                continue;
-            };
+    for (session_id, time_created, role, data) in messages(conn, layout, since) {
+        // Only assistant messages have tokens
+        if role != "assistant" {
+            continue;
+        }
 
-            // Only assistant messages have tokens
-            let role = data.get("role").and_then(|r| r.as_str()).unwrap_or("");
-            if role != "assistant" {
-                continue;
-            }
+        let tokens = match data.get("tokens") {
+            Some(t) => t,
+            None => continue,
+        };
 
-            let tokens = match data.get("tokens") {
-                Some(t) => t,
-                None => continue,
-            };
+        let msg_cost = data.get("cost").and_then(|c| c.as_f64()).unwrap_or(0.0);
 
-            let msg_cost = data.get("cost").and_then(|c| c.as_f64()).unwrap_or(0.0);
+        // Aggregate by (session, provider, model) so model switches
+        // within a session produce separate rows.
+        // ponytail: per-turn extraction avoids the cumulative-total problem
+        // of the session table.
+        let (provider, model_id) = message_model(&data);
+        let key = (session_id.clone(), provider, model_id);
 
-            // Aggregate by (session_id, providerID, modelID) so model
-            // switches within a session produce separate rows.
-            // ponytail: per-turn extraction avoids the cumulative-total problem
-            // of the session table; key is (session, provider, model).
-            let provider = data
-                .get("providerID")
-                .and_then(|p| p.as_str())
-                .unwrap_or("—")
-                .to_string();
-            let model_id = data
-                .get("modelID")
-                .and_then(|m| m.as_str())
-                .unwrap_or("—")
-                .to_string();
-            let key = (session_id.clone(), provider, model_id);
-
-            let a = agg.entry(key).or_default();
-            a.input += tokens.get("input").and_then(|v| v.as_u64()).unwrap_or(0);
-            a.output += tokens.get("output").and_then(|v| v.as_u64()).unwrap_or(0);
-            a.reasoning += tokens
-                .get("reasoning")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-            a.cache_read += tokens
-                .get("cache")
-                .and_then(|c| c.get("read"))
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-            a.cache_write += tokens
-                .get("cache")
-                .and_then(|c| c.get("write"))
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-            a.cost += msg_cost;
-            a.msg_count += 1;
-            if a.first_msg_ts.is_none() || Some(time_created) < a.first_msg_ts {
-                a.first_msg_ts = Some(time_created);
-            }
-            if a.last_msg_ts.is_none() || Some(time_created) > a.last_msg_ts {
-                a.last_msg_ts = Some(time_created);
-            }
+        let a = agg.entry(key).or_default();
+        a.input += tokens.get("input").and_then(|v| v.as_u64()).unwrap_or(0);
+        a.output += tokens.get("output").and_then(|v| v.as_u64()).unwrap_or(0);
+        a.reasoning += tokens
+            .get("reasoning")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        a.cache_read += tokens
+            .get("cache")
+            .and_then(|c| c.get("read"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        a.cache_write += tokens
+            .get("cache")
+            .and_then(|c| c.get("write"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        a.cost += msg_cost;
+        a.msg_count += 1;
+        if a.first_msg_ts.is_none() || Some(time_created) < a.first_msg_ts {
+            a.first_msg_ts = Some(time_created);
+        }
+        if a.last_msg_ts.is_none() || Some(time_created) > a.last_msg_ts {
+            a.last_msg_ts = Some(time_created);
         }
     }
 

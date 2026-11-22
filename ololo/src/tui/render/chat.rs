@@ -47,7 +47,9 @@ fn transcript_layout(app: &TuiApp, inner_w: usize, inner_h: usize) -> Transcript
             lines.push(Line::default());
         }
         let start = lines.len();
-        lines.extend(msg_lines(m, inner_w, selected == Some(i)));
+        let pasted = !app.pasted.is_empty()
+            && crate::tui::app::chat_msg_key(m).is_some_and(|k| app.pasted.contains(&k));
+        lines.extend(msg_lines(m, inner_w, selected == Some(i), pasted));
         ranges.push((start, lines.len()));
     }
 
@@ -298,7 +300,9 @@ const GUTTER_W: usize = 2;
 /// message ends and the next begins is visible at a glance. Task headers
 /// are dividers, not bubbles, and stay bar-free. A `selected` bubble's
 /// first line renders reversed — the cursor a ⏎ would send to the agent.
-fn msg_lines(m: &ChatMsg<'_>, inner_w: usize, selected: bool) -> Vec<Line<'static>> {
+/// A bubble the agent already has (`pasted`: sent from F3, the chat or the
+/// probe details) closes with a `✓ pasted to the agent` line.
+fn msg_lines(m: &ChatMsg<'_>, inner_w: usize, selected: bool, pasted: bool) -> Vec<Line<'static>> {
     let body_w = inner_w.saturating_sub(GUTTER_W).max(1);
     let (speaker, raw) = match m {
         ChatMsg::TaskHeader {
@@ -347,6 +351,15 @@ fn msg_lines(m: &ChatMsg<'_>, inner_w: usize, selected: bool) -> Vec<Line<'stati
         }
     };
     let bar = Style::default().fg(speaker);
+    let mut raw = raw;
+    if pasted {
+        raw.push(Line::from(Span::styled(
+            " ✓ pasted to the agent",
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::DIM),
+        )));
+    }
     let lines = raw
         .into_iter()
         .map(|line| {

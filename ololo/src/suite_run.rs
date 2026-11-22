@@ -230,6 +230,17 @@ async fn run_loop(
         let timeout = Duration::from_secs(u64::from(cfg.timeout_secs.max(1)));
         let run = run_suite(&command, &workdir, timeout).await;
         let report = finish(&snapshot, &workdir, &job, &cfg, &command, coverage_run, run).await;
+        if let (Some(sink), Some(result)) = (sink.as_ref(), report.result.as_ref()) {
+            let _ = sink.send(
+                Origin::Network,
+                TuiEvent::TestsRan {
+                    probe_seq: report.probe_seq,
+                    command: report.command.clone(),
+                    result: Box::new(result.clone()),
+                    log: report.log.clone(),
+                },
+            );
+        }
         narrate(
             &sink,
             if report.status == TestRunStatus::Ok {

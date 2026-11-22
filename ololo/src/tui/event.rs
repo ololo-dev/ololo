@@ -309,6 +309,20 @@ pub enum TuiEvent {
         /// The file's markdown contents.
         text: String,
     },
+    /// The code-health analysis of a check's commit finished — kept for
+    /// the F3 menu, which hands the level and its reasons to the agent.
+    HealthScored {
+        probe_seq: u32,
+        result: Box<ololo_health::HealthResult>,
+    },
+    /// The project's tests ran after a check; their numbers are part of
+    /// the health score.
+    TestsRan {
+        probe_seq: u32,
+        command: String,
+        result: Box<ololo_health::suite::SuiteResult>,
+        log: Option<String>,
+    },
     /// A judge asked for an artifact: the participant (or their agent)
     /// writes it under `path`; the app watches and commits it when it lands.
     CountdownDone,

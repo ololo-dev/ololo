@@ -15,7 +15,10 @@ fn rows(has_pty: bool) -> Vec<(&'static str, &'static str)> {
         ("F2", "show last failed probe"),
     ];
     if has_pty {
-        rows.push(("F3", "paste to the agent — pick when several are open"));
+        rows.push((
+            "F3",
+            "paste menu: brief, requests, checks, health, verdicts (←/→ tabs)",
+        ));
     }
     rows.push(("F4", "show/hide the sidebar"));
     rows.push(("F5", "switch sidebar view: chat ⇄ probes"));

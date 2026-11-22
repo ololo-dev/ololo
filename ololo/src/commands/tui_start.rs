@@ -127,8 +127,12 @@ fn spawn_sync_tasks(
     let (handle, mem_task) = crate::memory_sync::spawn(Arc::clone(snap), frame_tx.clone());
     let (suite, _suite_task) =
         crate::suite_run::spawn(Arc::clone(snap), frame_tx.clone(), Some(Arc::clone(&sink)));
-    let (health, _health_task) =
-        crate::health_run::spawn(Arc::clone(snap), frame_tx.clone(), Some(suite.clone()));
+    let (health, _health_task) = crate::health_run::spawn(
+        Arc::clone(snap),
+        frame_tx.clone(),
+        Some(suite.clone()),
+        Some(Arc::clone(&sink)),
+    );
     let flag_task = crate::done_flag::spawn(Arc::clone(snap), frame_tx, Some(sink));
     (
         player_ws::SnapshotChannel {

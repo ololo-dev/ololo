@@ -17,8 +17,14 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use uuid::Uuid;
 
+mod health;
 mod keymap;
+mod paste;
 mod run_loop;
+pub use health::{HealthNote, TestsNote};
+pub(crate) use paste::chat_msg_key;
+pub use paste::{PasteItem, PasteKind, PastePicker, PasteTab};
+use paste::{check_key, request_paste_key};
 pub(crate) use run_loop::pty_inner_rect;
 pub use run_loop::{TuiRunOutcome, run, run_headless};
 
@@ -132,82 +138,6 @@ pub enum ChatMsg<'a> {
     /// Synthetic marker (member joined, session status, …) — a quiet
     /// system line.
     System { text: String },
-}
-
-/// What F3 offers to paste.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PasteKind {
-    Request,
-    Brief,
-    FailedCheck,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PasteSource {
-    Probe(Uuid),
-    /// The brief carried by this probe's task.
-    Brief(Uuid),
-}
-
-#[derive(Debug, Clone)]
-pub struct PasteItem {
-    pub kind: PasteKind,
-    pub label: String,
-    /// Artifact requests: when they close.
-    pub deadline: Option<std::time::Instant>,
-    pub source: PasteSource,
-    /// What the item hands over, as [`TuiApp::pasted`] remembers it.
-    pub key: String,
-    /// The agent already has it: pasted before, from F3, a chat bubble or
-    /// a probe's details.
-    pub pasted: bool,
-}
-
-/// What a paste hands over, whichever way it went — F3, a chat bubble, a
-/// probe's details — so the same thing is recognised as already pasted:
-/// a task by its brief, an artifact request by its judge and ask, a check
-/// by its probe.
-fn brief_key(brief: &str) -> String {
-    format!("brief\n{}", brief.trim())
-}
-
-fn request_paste_key(judge: &str, instruction: &str) -> String {
-    format!("request\n{judge}\n{}", instruction.trim())
-}
-
-fn check_key(probe_id: Uuid) -> String {
-    format!("check\n{probe_id}")
-}
-
-/// A chat bubble's paste key, when it is one of the things F3 offers.
-fn chat_msg_key(m: &ChatMsg<'_>) -> Option<String> {
-    match m {
-        ChatMsg::Brief { text } => Some(brief_key(text)),
-        ChatMsg::Check { probe, .. } => Some(check_key(probe.probe_id)),
-        ChatMsg::Request {
-            judge, instruction, ..
-        } => Some(request_paste_key(judge, instruction)),
-        _ => None,
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct PastePicker {
-    pub items: Vec<PasteItem>,
-    pub cursor: usize,
-}
-
-fn first_line(text: &str) -> String {
-    text.lines()
-        .map(str::trim)
-        .find(|l| !l.is_empty())
-        .unwrap_or("")
-        .to_string()
-}
-
-/// Sorts requests without a deadline after every one that has one.
-fn far_future() -> std::time::Instant {
-    std::time::Instant::now() + std::time::Duration::from_secs(10 * 365 * 24 * 3600)
 }
 
 /// A selectable row in the probes sidebar: a task header or a probe entry.
@@ -373,8 +303,12 @@ pub struct TuiApp {
     pub request_deadlines: HashMap<String, std::time::Instant>,
     /// Request dispatches whose deadline is already recorded.
     request_probes_seen: Vec<Uuid>,
-    /// F3 with more than one thing to hand the agent: pick which.
+    /// The F3 menu, while it is open: what to hand the agent.
     pub paste_picker: Option<PastePicker>,
+    /// The newest code-health analysis of the workspace, for the F3 menu.
+    pub health: Option<HealthNote>,
+    /// The newest run of the project's tests, folded into the health score.
+    pub tests: Option<TestsNote>,
     /// What was handed to the agent this session, by [`PasteItem::key`]:
     /// F3 marks it, and pastes it at once only when it is new.
     pub pasted: std::collections::HashSet<String>,
@@ -450,6 +384,8 @@ impl TuiApp {
             request_deadlines: HashMap::new(),
             request_probes_seen: Vec::new(),
             paste_picker: None,
+            health: None,
+            tests: None,
             pasted: std::collections::HashSet::new(),
             pty_paste_pending: None,
             permission_popup: None,
@@ -539,6 +475,25 @@ impl TuiApp {
                 judge_name,
             } => {
                 self.settle_judge_run(task_id, &judge_name, JudgeRunState::Failed);
+            }
+            TuiEvent::HealthScored { probe_seq, result } => {
+                self.health = Some(HealthNote {
+                    probe_seq,
+                    result: *result,
+                });
+            }
+            TuiEvent::TestsRan {
+                probe_seq,
+                command,
+                result,
+                log,
+            } => {
+                self.tests = Some(TestsNote {
+                    probe_seq,
+                    command,
+                    result: *result,
+                    log,
+                });
             }
             TuiEvent::CompletionFlagPublished { path, text } => {
                 self.on_completion_flag_published(path, text);
@@ -1232,7 +1187,11 @@ impl TuiApp {
                 return;
             }
             KeyCode::F(3) => {
-                self.paste_last_failed();
+                if self.paste_picker.is_some() {
+                    self.close_paste_menu();
+                } else {
+                    self.open_paste_menu();
+                }
                 return;
             }
             KeyCode::F(4) => {
@@ -1524,31 +1483,6 @@ impl TuiApp {
         }
     }
 
-    /// F3: hand the agent what is open. One new thing — an artifact
-    /// request, the task brief, a failed check — is pasted at once, as
-    /// before. Several, or one the agent already has, open the picker, where
-    /// what was pasted before is marked and the cursor starts on the first
-    /// thing that was not: F3 never re-sends a brief behind the player's back.
-    fn paste_last_failed(&mut self) {
-        if !self.has_pty {
-            return;
-        }
-        let items = self.paste_items();
-        match items.as_slice() {
-            [] => {}
-            [only] if !only.pasted => {
-                let item = only.clone();
-                self.paste_item(&item);
-            }
-            _ => {
-                let cursor = items.iter().position(|i| !i.pasted).unwrap_or(0);
-                self.stash_focus_for_modal();
-                self.show_help = false;
-                self.paste_picker = Some(PastePicker { items, cursor });
-            }
-        }
-    }
-
     /// Record an artifact request's deadline from its dispatch — once per
     /// probe, so a later result frame for the same dispatch does not push
     /// the countdown back.
@@ -1574,135 +1508,6 @@ impl TuiApp {
         self.request_deadlines
             .get(&request_key(req.judge, req.instruction))
             .copied()
-    }
-
-    /// Everything F3 could paste, most urgent first: open artifact requests
-    /// (soonest deadline first), then the current task's brief, then the
-    /// last failed check.
-    pub fn paste_items(&self) -> Vec<PasteItem> {
-        let mut requests: Vec<PasteItem> = Vec::new();
-        let mut seen: Vec<String> = Vec::new();
-        for p in self.probes.iter().rev() {
-            let Some(req) = parse_artifact_request(&p.command) else {
-                continue;
-            };
-            let key = request_key(req.judge, req.instruction);
-            if seen.contains(&key) {
-                continue;
-            }
-            seen.push(key);
-            if self.request_delivered(&[p], &req.path) {
-                continue;
-            }
-            let deadline = self.request_deadline(&req);
-            if time_left(deadline).is_some_and(|l| l.is_zero()) {
-                continue;
-            }
-            let instruction = request_instruction(&p.test_description, req.instruction);
-            let key = request_paste_key(req.judge, &instruction);
-            requests.push(PasteItem {
-                kind: PasteKind::Request,
-                label: format!("{} asks: {}", req.judge, first_line(&instruction)),
-                deadline,
-                source: PasteSource::Probe(p.probe_id),
-                pasted: self.pasted.contains(&key),
-                key,
-            });
-        }
-        requests.sort_by_key(|i| i.deadline.unwrap_or_else(far_future));
-        let mut items = requests;
-        if let Some(p) = self.probes.iter().rev().find(|p| {
-            Some(p.task_ordinal) == self.max_task_ordinal && !p.task_description.is_empty()
-        }) {
-            let key = brief_key(&p.task_description);
-            items.push(PasteItem {
-                kind: PasteKind::Brief,
-                label: format!("Task #{}: {} — the brief", p.task_ordinal, p.task_title),
-                deadline: None,
-                source: PasteSource::Brief(p.probe_id),
-                pasted: self.pasted.contains(&key),
-                key,
-            });
-        }
-        if let Some(p) = self
-            .last_failed_probe()
-            .filter(|p| parse_artifact_request(&p.command).is_none())
-        {
-            let what = if p.test_label.is_empty() {
-                first_line(&p.command)
-            } else {
-                p.test_label.clone()
-            };
-            let key = check_key(p.probe_id);
-            items.push(PasteItem {
-                kind: PasteKind::FailedCheck,
-                label: format!("Failed check: {what}"),
-                deadline: None,
-                source: PasteSource::Probe(p.probe_id),
-                pasted: self.pasted.contains(&key),
-                key,
-            });
-        }
-        items
-    }
-
-    /// Queue an item's text for the agent PTY and hand focus over.
-    fn paste_item(&mut self, item: &PasteItem) {
-        let text = match &item.source {
-            PasteSource::Probe(id) => self
-                .probe_by_id(*id)
-                .map(|p| probe_paste_text_with(p, time_left(item.deadline))),
-            PasteSource::Brief(id) => self.probe_by_id(*id).map(|p| {
-                format!(
-                    "Task #{}: {}\nTask brief:\n{}\n",
-                    p.task_ordinal, p.task_title, p.task_description
-                )
-            }),
-        };
-        if let Some(text) = text {
-            self.pasted.insert(item.key.clone());
-            self.pty_paste_pending = Some(text);
-            self.focus_return = None; // explicit hand-over wins
-            self.set_input_focus(InputFocus::Pty);
-        }
-    }
-
-    /// Keys while the F3 picker is open: move, choose (⏎ or its number),
-    /// close. The list is re-read on choose, so a request that closed while
-    /// the picker was up is not pasted as if it were open.
-    fn picker_key(&mut self, code: crossterm::event::KeyCode) {
-        use crossterm::event::KeyCode;
-        let Some(picker) = self.paste_picker.as_mut() else {
-            return;
-        };
-        let n = picker.items.len();
-        let chosen = match code {
-            KeyCode::Esc | KeyCode::Char('q') => {
-                self.paste_picker = None;
-                self.restore_stashed_focus();
-                return;
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                picker.cursor = (picker.cursor + n - 1) % n.max(1);
-                return;
-            }
-            KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => {
-                picker.cursor = (picker.cursor + 1) % n.max(1);
-                return;
-            }
-            KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Char('p') => picker.cursor,
-            KeyCode::Char(c) if c.is_ascii_digit() && c != '0' => {
-                let i = (c as u8 - b'1') as usize;
-                if i >= n {
-                    return;
-                }
-                i
-            }
-            _ => return,
-        };
-        let item = picker.items[chosen].clone();
-        self.paste_picker = None;
-        self.paste_item(&item);
     }
 
     /// F4: show/hide the probes sidebar. The PTY inner rect depends on it,

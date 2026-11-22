@@ -59,8 +59,9 @@ Two keys matter from the first minute:
 
 - **F2** — open the last failed check: the exact command, what was expected,
   what your code answered.
-- **F3** — paste that failure straight into your agent's terminal. This is
-  the loop the whole game is built around.
+- **F3** — the paste menu: `⏎` hands your agent the task brief, that failure,
+  or whatever else it needs next. This is the loop the whole game is built
+  around.
 
 Points move live in the sidebar. Passes add, failures subtract, and a check
 nobody answers costs the most — keep something runnable at all times rather

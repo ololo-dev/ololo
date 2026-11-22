@@ -53,13 +53,15 @@ impl HealthRunnerHandle {
 
 /// Spawn the runner. Reports go out on `frame_tx`; once a probe's report
 /// is out, its code goes on to `suite` (the project's tests), when given.
+/// `sink` hears every score, so the TUI can hand it to the agent.
 pub fn spawn(
     snapshot: Arc<Mutex<SnapshotRepo>>,
     frame_tx: UnboundedSender<PlayerAgentClientFrame>,
     suite: Option<crate::suite_run::SuiteRunnerHandle>,
+    sink: Option<Arc<dyn crate::tui::EventSink>>,
 ) -> (HealthRunnerHandle, tokio::task::JoinHandle<()>) {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<HealthJob>();
-    let task = tokio::spawn(run_loop(snapshot, frame_tx, rx, suite));
+    let task = tokio::spawn(run_loop(snapshot, frame_tx, rx, suite, sink));
     (HealthRunnerHandle { tx }, task)
 }
 
@@ -68,6 +70,7 @@ async fn run_loop(
     frame_tx: UnboundedSender<PlayerAgentClientFrame>,
     mut rx: UnboundedReceiver<HealthJob>,
     suite: Option<crate::suite_run::SuiteRunnerHandle>,
+    sink: Option<Arc<dyn crate::tui::EventSink>>,
 ) {
     while let Some(first) = rx.recv().await {
         // Newest probe wins; every displaced one still gets a report.
@@ -99,6 +102,15 @@ async fn run_loop(
         let report = tokio::task::spawn_blocking(move || run_job(&snap, job))
             .await
             .unwrap_or_else(|e| panic_report(e.to_string()));
+        if let (Some(sink), Some(result)) = (sink.as_ref(), report.result.as_ref()) {
+            let _ = sink.send(
+                crate::tui::event::Origin::Network,
+                crate::tui::event::TuiEvent::HealthScored {
+                    probe_seq: report.probe_seq,
+                    result: Box::new(result.clone()),
+                },
+            );
+        }
         if frame_tx
             .send(PlayerAgentClientFrame::HealthReport(Box::new(report)))
             .is_err()
@@ -341,7 +353,7 @@ mod tests {
         // The working tree moves on; the score is of the commit.
         std::fs::remove_file(wt.path().join("src/b.js")).unwrap();
         let (frame_tx, mut frame_rx) = tokio::sync::mpsc::unbounded_channel();
-        let (runner, _task) = spawn(Arc::clone(&repo), frame_tx, None);
+        let (runner, _task) = spawn(Arc::clone(&repo), frame_tx, None, None);
         runner.submit(job(Ok(commit), 7));
         let report = next_report(&mut frame_rx).await.expect("a report");
         assert_eq!(report.status, HealthReportStatus::Ok, "{report:?}");
@@ -365,7 +377,7 @@ mod tests {
     async fn a_missing_commit_is_reported_as_failed_never_skipped_silently() {
         let (_home, _wt, repo, _commit) = repo_with_commit(CODE);
         let (frame_tx, mut frame_rx) = tokio::sync::mpsc::unbounded_channel();
-        let (runner, _task) = spawn(repo, frame_tx, None);
+        let (runner, _task) = spawn(repo, frame_tx, None, None);
         runner.submit(job(Err("disk full".into()), 1));
         let report = next_report(&mut frame_rx).await.expect("a report");
         assert_eq!(report.status, HealthReportStatus::Failed);
@@ -382,7 +394,7 @@ mod tests {
         tx.send(job(Ok(commit), 1)).unwrap();
         tx.send(job(Ok(commit), 2)).unwrap();
         tx.send(job(Ok(commit), 3)).unwrap();
-        let _task = tokio::spawn(run_loop(repo, frame_tx, rx, None));
+        let _task = tokio::spawn(run_loop(repo, frame_tx, rx, None, None));
         let first = next_report(&mut frame_rx).await.unwrap();
         let second = next_report(&mut frame_rx).await.unwrap();
         let third = next_report(&mut frame_rx).await.unwrap();
@@ -401,7 +413,7 @@ mod tests {
     async fn a_zero_budget_is_clamped_to_one_second() {
         let (_home, _wt, repo, commit) = repo_with_commit(CODE);
         let (frame_tx, mut frame_rx) = tokio::sync::mpsc::unbounded_channel();
-        let (runner, _task) = spawn(repo, frame_tx, None);
+        let (runner, _task) = spawn(repo, frame_tx, None, None);
         let mut j = job(Ok(commit), 1);
         j.config.timeout_secs = 0; // clamped to 1s — still ample for two files
         runner.submit(j);

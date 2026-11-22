@@ -815,11 +815,10 @@ fn f3_pastes_last_failed_probe_and_focuses_agent() {
         expected: Some("Paris".to_string()),
         actual: Some("London".to_string()),
     });
-    // Two things are open — the task brief and the failed check — so F3
-    // asks which; the failed check is the second row.
+    // The menu: the task brief, the failed check, the task's check results.
     press(&mut app, crossterm::event::KeyCode::F(3));
     let picker = app.paste_picker.as_ref().expect("picker opens");
-    assert_eq!(picker.items.len(), 2);
+    assert_eq!(picker.items.len(), 3);
     assert_eq!(
         picker.items[1].kind,
         crate::tui::app::PasteKind::FailedCheck
@@ -2069,9 +2068,16 @@ fn f3_skips_an_expired_request_and_esc_closes_the_picker() {
     let mut app = fresh_app();
     app.has_pty = true;
     arrive_request(&mut app, 0, 0);
-    // Only the brief is left: pasted straight away.
+    // The expired ask is not on the menu; the brief leads it.
     press(&mut app, crossterm::event::KeyCode::F(3));
-    assert!(app.paste_picker.is_none());
+    let picker = app.paste_picker.as_ref().expect("the menu opens");
+    assert!(
+        picker
+            .items
+            .iter()
+            .all(|i| i.kind != crate::tui::app::PasteKind::Request)
+    );
+    press(&mut app, crossterm::event::KeyCode::Enter);
     let text = app.pty_paste_pending.take().expect("brief pasted");
     assert!(text.contains("Task brief:"), "{text}");
 
@@ -2088,33 +2094,249 @@ fn f3_skips_an_expired_request_and_esc_closes_the_picker() {
 // ── F3 marks what the agent already has ──────────────────────────────
 
 #[test]
-fn f3_pastes_a_new_brief_at_once_and_marks_it_the_second_time() {
+fn f3_sends_nothing_until_chosen_and_marks_the_brief_the_second_time() {
     let mut app = fresh_app();
     app.has_pty = true;
     let pid = arrive(&mut app, Uuid::new_v4(), 0, "Ledger");
     grade(&mut app, pid, arena_core::protocol::ProbeOutcome::Pass);
-    // Only the brief is open, and the agent does not have it: pasted.
+    // The menu opens on the brief; nothing goes to the agent yet.
     press(&mut app, crossterm::event::KeyCode::F(3));
-    assert!(app.paste_picker.is_none());
+    let picker = app.paste_picker.as_ref().expect("the menu opens");
+    assert_eq!(picker.items[0].kind, crate::tui::app::PasteKind::Brief);
+    assert_eq!(picker.cursor, 0);
+    assert!(app.pty_paste_pending.is_none(), "F3 alone sends nothing");
+    press(&mut app, crossterm::event::KeyCode::Enter);
     let text = app.pty_paste_pending.take().expect("brief pasted");
     assert!(text.contains("Task brief:"), "{text}");
 
-    // Again: the agent has it — the picker says so instead of re-sending.
+    // Again: the agent has it — the menu says so and moves on.
     app.set_input_focus(InputFocus::Tui);
     press(&mut app, crossterm::event::KeyCode::F(3));
     let picker = app
         .paste_picker
         .as_ref()
-        .expect("the picker shows what was pasted");
-    assert_eq!(picker.items.len(), 1);
+        .expect("the menu shows what was pasted");
     assert!(picker.items[0].pasted, "the brief is marked");
-    assert!(
-        app.pty_paste_pending.is_none(),
-        "nothing re-sent behind the back"
-    );
+    assert_eq!(picker.cursor, 1, "the cursor skips what the agent has");
     // Choosing it still pastes it, on purpose.
-    press(&mut app, crossterm::event::KeyCode::Enter);
-    assert!(app.pty_paste_pending.take().is_some());
+    press(&mut app, crossterm::event::KeyCode::Char('1'));
+    let text = app.pty_paste_pending.take().expect("pasted again");
+    assert!(text.contains("Task brief:"), "{text}");
+}
+
+#[test]
+fn f3_again_closes_the_menu() {
+    let mut app = fresh_app();
+    app.has_pty = true;
+    app.input_focus = InputFocus::Pty;
+    arrive(&mut app, Uuid::new_v4(), 0, "Ledger");
+    press(&mut app, crossterm::event::KeyCode::F(3));
+    assert!(app.paste_picker.is_some());
+    press(&mut app, crossterm::event::KeyCode::F(3));
+    assert!(app.paste_picker.is_none());
+    assert_eq!(app.input_focus, InputFocus::Pty, "focus goes back");
+}
+
+// ── What the F3 menu offers ──────────────────────────────────────────
+
+fn menu_item(app: &TuiApp, kind: crate::tui::app::PasteKind) -> Option<crate::tui::app::PasteItem> {
+    app.paste_items().into_iter().find(|i| i.kind == kind)
+}
+
+/// Open the menu, choose the row of `kind`, return what was pasted.
+fn paste_of(app: &mut TuiApp, kind: crate::tui::app::PasteKind) -> String {
+    app.paste_picker = None;
+    app.set_input_focus(InputFocus::Tui);
+    press(app, crossterm::event::KeyCode::F(3));
+    let row = app
+        .paste_picker
+        .as_ref()
+        .expect("the menu opens")
+        .items
+        .iter()
+        .position(|i| i.kind == kind)
+        .expect("the row is on the menu");
+    app.paste_picker.as_mut().unwrap().cursor = row;
+    press(app, crossterm::event::KeyCode::Enter);
+    app.pty_paste_pending.take().expect("paste queued")
+}
+
+fn arrive_check(app: &mut TuiApp, task: Uuid, ordinal: i32, test: i32, label: &str) -> Uuid {
+    let probe_id = Uuid::new_v4();
+    app.on_event(TuiEvent::ProbeArrived(ProbeInfo {
+        probe_id,
+        rendered_command: format!("npm run {label}"),
+        deadline_secs: 30,
+        task_id: Some(task),
+        task_ordinal: ordinal,
+        task_title: "Race".to_string(),
+        task_description: format!("Brief of task {ordinal}"),
+        test_ordinal: test,
+        test_total: 3,
+        test_label: label.to_string(),
+        test_description: format!("{label} must work"),
+        expected_answer: None,
+        answer_template: String::new(),
+        validation_kind: ValidationKind::Minijinja,
+    }));
+    probe_id
+}
+
+#[test]
+fn the_menu_hands_over_every_check_of_the_task_with_its_result() {
+    use crate::tui::app::PasteKind;
+    use arena_core::protocol::ProbeOutcome;
+    let mut app = fresh_app();
+    app.has_pty = true;
+    let tid = Uuid::new_v4();
+    // The first run of `lap` fails, its re-run passes: one check, passed.
+    let lap = arrive_check(&mut app, tid, 2, 1, "lap");
+    grade(&mut app, lap, ProbeOutcome::Error);
+    let lap = arrive_check(&mut app, tid, 2, 1, "lap");
+    grade(&mut app, lap, ProbeOutcome::Pass);
+    let race = arrive_check(&mut app, tid, 2, 2, "race");
+    app.on_event(TuiEvent::ProbeGraded {
+        next_probe_in_secs: None,
+        probe_id: race,
+        outcome: ProbeOutcome::Error,
+        point_delta: -5,
+        expected: Some("3 laps".to_string()),
+        actual: None,
+    });
+    arrive_check(&mut app, tid, 2, 3, "coverage");
+
+    let item = menu_item(&app, PasteKind::Checks).expect("check results are on the menu");
+    assert_eq!(item.label, "Check results: 1 passed, 1 failed, 1 waiting");
+    assert!(!item.hint.is_empty(), "every row says what it hands over");
+    let text = paste_of(&mut app, PasteKind::Checks);
+    assert!(text.contains("Task #2: Race"), "{text}");
+    assert!(text.contains("- pass: lap"), "{text}");
+    assert!(text.contains("- FAIL: race"), "{text}");
+    assert!(text.contains("What it verifies: race must work"), "{text}");
+    assert!(text.contains("Expected: 3 laps"), "{text}");
+    assert!(text.contains("- waiting: coverage"), "{text}");
+    assert!(menu_item(&app, PasteKind::Checks).unwrap().pasted);
+
+    // A new result is news: the row is offered as new again.
+    let cov = app.probes.back().unwrap().probe_id;
+    grade(&mut app, cov, ProbeOutcome::Pass);
+    assert!(!menu_item(&app, PasteKind::Checks).unwrap().pasted);
+}
+
+fn health_result(score: f64) -> ololo_health::HealthResult {
+    ololo_health::HealthResult {
+        schema: ololo_health::HEALTH_SCHEMA,
+        jscpd_version: ololo_health::JSCPD_CORE_VERSION.to_string(),
+        score: Some(score),
+        grade: Some('C'),
+        level: ololo_health::Level::Amber,
+        health: serde_json::json!({
+            "dimensions": [
+                {"id": "duplication", "weight": 1.0, "score": 40.0},
+                {"id": "complexity", "weight": 1.0, "score": 90.0},
+            ]
+        }),
+        metrics: ololo_health::Metrics {
+            files: 12,
+            code_lines: 3400,
+            duplication_pct: Some(13.2),
+            clones: 9,
+            complexity_pct: Some(4.0),
+            ..Default::default()
+        },
+        duration_ms: 10,
+    }
+}
+
+#[test]
+fn the_menu_hands_over_the_health_level_with_its_reasons() {
+    use crate::tui::app::PasteKind;
+    let mut app = fresh_app();
+    app.has_pty = true;
+    arrive(&mut app, Uuid::new_v4(), 0, "Ledger");
+    assert!(
+        menu_item(&app, PasteKind::Health).is_none(),
+        "nothing measured yet: nothing to hand over"
+    );
+    app.on_event(TuiEvent::HealthScored {
+        probe_seq: 4,
+        result: Box::new(health_result(60.0)),
+    });
+    let item = menu_item(&app, PasteKind::Health).expect("health is on the menu");
+    // √(40 × 90) = 60: amber.
+    assert_eq!(item.label, "Code health: 60.0 C · amber");
+    assert!(item.hint.contains("duplication 13.2%"), "{}", item.hint);
+    let text = paste_of(&mut app, PasteKind::Health);
+    assert!(text.contains("measured after check #4"), "{text}");
+    assert!(text.contains("Level: amber — score 60.0 of 100"), "{text}");
+    assert!(text.contains("Green starts at 70, amber at 55"), "{text}");
+    assert!(text.contains("9 clone pairs"), "{text}");
+    assert!(text.contains("Size: 12 code files, 3400 lines."), "{text}");
+    assert!(text.contains("Tests: not measured yet"), "{text}");
+    assert!(
+        text.contains("What would raise it most: remove the copy-paste"),
+        "the weakest dimension is named: {text}"
+    );
+
+    // The tests ran: their numbers are part of the score and the report.
+    app.on_event(TuiEvent::TestsRan {
+        probe_seq: 4,
+        command: "npm test".to_string(),
+        result: Box::new(ololo_health::suite::SuiteResult {
+            exit_code: Some(0),
+            counts: Some(ololo_health::suite::TestCounts {
+                passed: 52,
+                failed: 0,
+                skipped: 0,
+            }),
+            coverage_pct: Some(81.0),
+            ..Default::default()
+        }),
+        log: Some(".ololo/tests/0004-tests.log".to_string()),
+    });
+    let item = menu_item(&app, PasteKind::Health).unwrap();
+    assert!(!item.pasted, "a new measurement is news");
+    assert!(item.hint.contains("tests 52 passed"), "{}", item.hint);
+    let text = paste_of(&mut app, PasteKind::Health);
+    assert!(text.contains("tests — 52 passed: 100.0"), "{text}");
+    assert!(text.contains("coverage — 81.0%"), "{text}");
+    assert!(text.contains("Tests ran with: npm test"), "{text}");
+}
+
+#[test]
+fn the_menu_hands_over_verdicts_and_earlier_briefs() {
+    use crate::tui::app::PasteKind;
+    use arena_core::protocol::ProbeOutcome;
+    let mut app = fresh_app();
+    app.has_pty = true;
+    let first = Uuid::new_v4();
+    let p = arrive_check(&mut app, first, 1, 1, "lap");
+    grade(&mut app, p, ProbeOutcome::Pass);
+    assert!(menu_item(&app, PasteKind::Verdicts).is_none());
+    assert!(menu_item(&app, PasteKind::EarlierBrief).is_none());
+    for (judge, pts) in [("Code Quality", 30), ("UX Review", -5)] {
+        app.on_event(TuiEvent::JudgeScored {
+            task_id: Some(first),
+            judge_name: judge.to_string(),
+            point_delta: pts,
+            feedback: format!("{judge} says so"),
+        });
+    }
+    let p = arrive_check(&mut app, Uuid::new_v4(), 2, 1, "race");
+    grade(&mut app, p, ProbeOutcome::Pass);
+
+    let item = menu_item(&app, PasteKind::Verdicts).expect("verdicts are on the menu");
+    assert_eq!(item.label, "Judges' verdicts on task #1: 2 (+25 pts)");
+    let text = paste_of(&mut app, PasteKind::Verdicts);
+    assert!(text.contains("Code Quality (+30 pts)"), "{text}");
+    assert!(text.contains("UX Review says so"), "{text}");
+
+    let earlier = menu_item(&app, PasteKind::EarlierBrief).expect("the first task's brief");
+    assert!(earlier.label.starts_with("Task #1:"), "{}", earlier.label);
+    let text = paste_of(&mut app, PasteKind::EarlierBrief);
+    assert!(text.contains("Brief of task 1"), "{text}");
+    let current = paste_of(&mut app, PasteKind::Brief);
+    assert!(current.contains("Brief of task 2"), "{current}");
 }
 
 #[test]
@@ -2125,6 +2347,7 @@ fn f3_starts_the_picker_on_what_the_agent_does_not_have() {
     let first = arrive(&mut app, tid, 0, "Ledger");
     grade(&mut app, first, arena_core::protocol::ProbeOutcome::Pass);
     press(&mut app, crossterm::event::KeyCode::F(3));
+    press(&mut app, crossterm::event::KeyCode::Enter);
     app.pty_paste_pending.take().expect("brief pasted");
     app.set_input_focus(InputFocus::Tui);
 
@@ -2132,7 +2355,7 @@ fn f3_starts_the_picker_on_what_the_agent_does_not_have() {
     let failed = arrive(&mut app, tid, 0, "Ledger");
     grade(&mut app, failed, arena_core::protocol::ProbeOutcome::Error);
     press(&mut app, crossterm::event::KeyCode::F(3));
-    let picker = app.paste_picker.as_ref().expect("two things: picker");
+    let picker = app.paste_picker.as_ref().expect("the menu opens");
     let kinds: Vec<(crate::tui::app::PasteKind, bool)> =
         picker.items.iter().map(|i| (i.kind, i.pasted)).collect();
     assert_eq!(
@@ -2140,6 +2363,7 @@ fn f3_starts_the_picker_on_what_the_agent_does_not_have() {
         vec![
             (crate::tui::app::PasteKind::Brief, true),
             (crate::tui::app::PasteKind::FailedCheck, false),
+            (crate::tui::app::PasteKind::Checks, false),
         ]
     );
     assert_eq!(picker.cursor, 1, "the cursor starts on the new thing");
@@ -2182,7 +2406,8 @@ fn the_picker_marks_pasted_items() {
     let pid = arrive(&mut app, Uuid::new_v4(), 0, "Ledger");
     grade(&mut app, pid, arena_core::protocol::ProbeOutcome::Pass);
     press(&mut app, crossterm::event::KeyCode::F(3));
-    app.pty_paste_pending.take();
+    press(&mut app, crossterm::event::KeyCode::Enter);
+    app.pty_paste_pending.take().expect("brief pasted");
     app.set_input_focus(InputFocus::Tui);
     press(&mut app, crossterm::event::KeyCode::F(3));
     let backend = ratatui::backend::TestBackend::new(100, 24);
@@ -2201,6 +2426,218 @@ fn the_picker_marks_pasted_items() {
         .join("\n");
     assert!(flat.contains("✓ pasted"), "{flat}");
     assert!(flat.contains("the agent has it"), "{flat}");
+    assert!(
+        flat.contains("what the current task asks for, in full"),
+        "every row explains what it hands over: {flat}"
+    );
+    assert!(flat.contains("Check results: 1 passed, 0 failed"), "{flat}");
+}
+
+fn screen_text(app: &TuiApp, draw: impl FnOnce(&mut ratatui::Frame, &TuiApp)) -> String {
+    let backend = ratatui::backend::TestBackend::new(110, 40);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    terminal.draw(|f| draw(f, app)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    (0..40u16)
+        .map(|y| {
+            (0..110u16)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn the_chat_marks_the_bubbles_the_agent_has() {
+    let mut app = fresh_app();
+    app.has_pty = true;
+    let pid = arrive(&mut app, Uuid::new_v4(), 0, "Ledger");
+    grade(&mut app, pid, arena_core::protocol::ProbeOutcome::Pass);
+    let chat = |app: &TuiApp| {
+        screen_text(app, |f, app| {
+            crate::tui::render::chat::render_chat(f, f.area(), app)
+        })
+    };
+    assert!(!chat(&app).contains("✓ pasted to the agent"));
+    press(&mut app, crossterm::event::KeyCode::F(3));
+    press(&mut app, crossterm::event::KeyCode::Enter);
+    let text = chat(&app);
+    assert_eq!(
+        text.matches("✓ pasted to the agent").count(),
+        1,
+        "the brief is marked, the check is not: {text}"
+    );
+}
+
+/// A session two tasks in: verdicts on the first, a pass and a failure on
+/// the second, one open and one expired request, health measured.
+fn busy_app() -> TuiApp {
+    use arena_core::protocol::ProbeOutcome;
+    let mut app = fresh_app();
+    app.has_pty = true;
+    let first = Uuid::new_v4();
+    let p = arrive_check(&mut app, first, 1, 1, "lap");
+    grade(&mut app, p, ProbeOutcome::Pass);
+    for (judge, pts) in [("Code Quality", 30), ("UX Review", -5)] {
+        app.on_event(TuiEvent::JudgeScored {
+            task_id: Some(first),
+            judge_name: judge.to_string(),
+            point_delta: pts,
+            feedback: format!("{judge} says so"),
+        });
+    }
+    let second = Uuid::new_v4();
+    let p = arrive_check(&mut app, second, 2, 1, "lap");
+    grade(&mut app, p, ProbeOutcome::Pass);
+    let p = arrive_check(&mut app, second, 2, 2, "race");
+    grade(&mut app, p, ProbeOutcome::Error);
+    arrive_request(&mut app, 2, 250);
+    app.on_event(TuiEvent::HealthScored {
+        probe_seq: 4,
+        result: Box::new(health_result(60.0)),
+    });
+    app
+}
+
+#[test]
+fn the_menu_tabs_hold_each_kind_in_full() {
+    use crate::tui::app::{PasteKind, PasteTab};
+    let app = busy_app();
+    let kinds =
+        |tab| -> Vec<PasteKind> { app.paste_items_of(tab).iter().map(|i| i.kind).collect() };
+    assert_eq!(
+        kinds(PasteTab::All),
+        app.paste_items().iter().map(|i| i.kind).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        kinds(PasteTab::Tasks),
+        vec![PasteKind::Brief, PasteKind::EarlierBrief]
+    );
+    // The task's verdicts together, then one by one, newest first.
+    let judges = app.paste_items_of(PasteTab::Judges);
+    assert_eq!(
+        judges.iter().map(|i| i.kind).collect::<Vec<_>>(),
+        vec![PasteKind::Verdicts, PasteKind::Verdict, PasteKind::Verdict]
+    );
+    assert_eq!(judges[1].label, "UX Review on task #1: -5 pts");
+    assert_eq!(judges[1].hint, "UX Review says so");
+    assert_eq!(kinds(PasteTab::Requests), vec![PasteKind::Request]);
+    // The failure, the whole picture, then each check — failing first.
+    let probes = app.paste_items_of(PasteTab::Probes);
+    assert_eq!(
+        probes.iter().map(|i| i.kind).collect::<Vec<_>>(),
+        vec![
+            PasteKind::FailedCheck,
+            PasteKind::Checks,
+            PasteKind::Check,
+            PasteKind::Check
+        ]
+    );
+    assert_eq!(probes[2].label, "FAIL: race");
+    assert_eq!(probes[3].label, "pass: lap");
+    assert_eq!(kinds(PasteTab::Health), vec![PasteKind::Health]);
+}
+
+#[test]
+fn the_requests_tab_keeps_the_closed_requests() {
+    use crate::tui::app::{PasteKind, PasteTab};
+    let mut app = fresh_app();
+    app.has_pty = true;
+    arrive_request(&mut app, 0, 0);
+    assert!(
+        app.paste_items()
+            .iter()
+            .all(|i| i.kind != PasteKind::Request),
+        "an expired ask is not on the short list"
+    );
+    let requests = app.paste_items_of(PasteTab::Requests);
+    assert_eq!(requests.len(), 1);
+    assert!(
+        requests[0].label.starts_with("[expired] ux-review asked:"),
+        "{}",
+        requests[0].label
+    );
+    assert!(
+        requests[0].deadline.is_none(),
+        "no countdown on a closed ask"
+    );
+}
+
+#[test]
+fn arrows_switch_the_menu_tabs_past_the_empty_ones() {
+    use crate::tui::app::{PasteKind, PasteTab};
+    use crossterm::event::KeyCode;
+    let mut app = fresh_app();
+    app.has_pty = true;
+    let p = arrive_check(&mut app, Uuid::new_v4(), 0, 1, "lap");
+    grade(&mut app, p, arena_core::protocol::ProbeOutcome::Error);
+    press(&mut app, KeyCode::F(3));
+    let tab = |app: &TuiApp| app.paste_picker.as_ref().unwrap().tab;
+    assert_eq!(tab(&app), PasteTab::All);
+    press(&mut app, KeyCode::Right);
+    assert_eq!(tab(&app), PasteTab::Tasks);
+    // No verdicts and no requests yet: Judges and Requests are skipped.
+    press(&mut app, KeyCode::Tab);
+    assert_eq!(tab(&app), PasteTab::Probes);
+    // Health has nothing either: round to All, and back again.
+    press(&mut app, KeyCode::Right);
+    assert_eq!(tab(&app), PasteTab::All);
+    press(&mut app, KeyCode::Left);
+    assert_eq!(tab(&app), PasteTab::Probes);
+    // Rows are numbered within the tab: 3 is the check itself.
+    press(&mut app, KeyCode::Char('3'));
+    assert!(app.paste_picker.is_none());
+    let text = app.pty_paste_pending.take().expect("the check is pasted");
+    assert!(text.contains("Probe result"), "{text}");
+    assert!(
+        app.paste_items_of(PasteTab::Probes)
+            .iter()
+            .filter(|i| matches!(i.kind, PasteKind::FailedCheck | PasteKind::Check))
+            .all(|i| i.pasted),
+        "the same check is marked wherever it is listed"
+    );
+}
+
+#[test]
+fn the_menu_shows_its_tabs_with_their_counts() {
+    let mut app = busy_app();
+    press(&mut app, crossterm::event::KeyCode::F(3));
+    let text = screen_text(&app, |f, app| {
+        crate::tui::render::paste_picker::render_paste_picker(f, app)
+    });
+    assert!(
+        text.contains("All 7   Tasks 2   Judges 3   Requests 1   Probes 4   Health 1"),
+        "{text}"
+    );
+    assert!(text.contains("←/→ tabs"), "{text}");
+}
+
+#[test]
+fn the_menu_scrolls_to_keep_the_cursor_in_view() {
+    let mut app = fresh_app();
+    app.has_pty = true;
+    // Five tasks: the current brief, its check results and four earlier briefs.
+    for ordinal in 0..5 {
+        let p = arrive_check(&mut app, Uuid::new_v4(), ordinal, 1, "lap");
+        grade(&mut app, p, arena_core::protocol::ProbeOutcome::Pass);
+    }
+    press(&mut app, crossterm::event::KeyCode::F(3));
+    press(&mut app, crossterm::event::KeyCode::End);
+    let backend = ratatui::backend::TestBackend::new(100, 10);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    terminal
+        .draw(|f| crate::tui::render::paste_picker::render_paste_picker(f, &app))
+        .unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let flat: String = (0..10u16)
+        .flat_map(|y| (0..100u16).map(move |x| (x, y)))
+        .map(|(x, y)| buffer[(x, y)].symbol().to_string())
+        .collect();
+    assert!(flat.contains("Task #0: Race — the brief"), "{flat}");
+    assert!(!flat.contains("Task #4: Race — the brief"), "{flat}");
 }
 
 /// The ask as the server dispatches it when the judge named its files.

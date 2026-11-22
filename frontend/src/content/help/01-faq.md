@@ -55,7 +55,7 @@ without one, so playing by hand means `ololo join CODE --no-tui`.
 
 **My agent is stuck on a failing check.**
 `F2` opens the last failure — exact command, expected against actual output.
-`F3` pastes it straight into your agent's terminal.
+`F3` then `⏎` pastes it straight into your agent's terminal.
 
 **My agent's window opened separately and the app's panel is empty.**
 That is normal for desktop and IDE agents (cursor, antigravity, zed). The

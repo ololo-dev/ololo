@@ -124,6 +124,16 @@ pub enum Commands {
     /// Read and drive a running session (the TUI publishes a local service)
     Session(SessionArgs),
 
+    /// Measure a folder's code health the way a session does: duplication,
+    /// complexity and dead code as one score
+    Health {
+        /// The folder to measure (default: the current one).
+        dir: Option<PathBuf>,
+        /// Print the whole measurement as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Update ololo to the latest release
     Update {
         /// Only check whether a newer release exists; don't install it.
@@ -209,6 +219,27 @@ mod tests {
 
         let cli3 = Cli::try_parse_from(["ololo", "whoami"]).unwrap();
         assert!(matches!(cli3.command, Commands::Whoami));
+    }
+
+    #[test]
+    fn health_takes_an_optional_folder_and_json() {
+        use clap::Parser;
+        let cli = Cli::try_parse_from(["ololo", "health"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Health {
+                dir: None,
+                json: false
+            }
+        ));
+        let cli = Cli::try_parse_from(["ololo", "health", "src", "--json"]).unwrap();
+        match cli.command {
+            Commands::Health { dir, json } => {
+                assert_eq!(dir, Some(PathBuf::from("src")));
+                assert!(json);
+            }
+            _ => panic!("health expected"),
+        }
     }
 
     #[test]

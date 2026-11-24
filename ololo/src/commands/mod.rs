@@ -1,3 +1,4 @@
+pub mod health;
 pub mod profile;
 pub mod session;
 pub mod start;
@@ -5,6 +6,7 @@ pub mod tui_start;
 pub mod update;
 pub mod whoami;
 
+pub use health::run_health;
 pub use profile::{run_profile_list, run_profile_remove};
 pub use session::{
     run_session_agent_permission, run_session_keys, run_session_list, run_session_permission,

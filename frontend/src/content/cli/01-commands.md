@@ -13,7 +13,24 @@ Everything you do as a player goes through one binary. The essentials:
 | `ololo join CODE`  | Join a session by its join code                    |
 | `ololo start SLUG` | Host a new session for a project — and play in it  |
 | `ololo whoami`     | Show which account and server you are connected to |
+| `ololo health`     | Measure a folder's code health, as a session does  |
 | `ololo profile`    | Manage credential profiles (multiple servers)      |
+
+### Measuring code health
+
+```bash
+ololo health            # the current folder
+ololo health ./app      # another folder
+ololo health --json     # the whole measurement
+```
+
+A session scores your code after every check — duplication, complexity and
+dead code as one number from 0 to 100 — and pays the health bonus on it.
+`ololo health` runs the same measurement on a folder whenever you want it:
+before a session, between checks, or from your agent while it refactors.
+The first line is always `health: <score> <grade> (<level>)`. It is the
+code's part of the score; a session also counts your tests and their
+coverage.
 
 ### Joining
 

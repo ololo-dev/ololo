@@ -230,6 +230,7 @@ async fn main() {
                 }
             }
         }
+        Commands::Health { dir, json } => commands::run_health(dir, json).await,
         Commands::Update { check } => commands::run_update(check).await,
         Commands::Profile(args) => match args.command {
             ProfileCommands::List => commands::run_profile_list(&cli.profile),
